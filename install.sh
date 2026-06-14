@@ -23,24 +23,13 @@ if ! pgrep -q Music 2>/dev/null && ! pgrep -q Spotify 2>/dev/null; then
   info "未检测到 Music / Spotify 运行，媒体控制将跳过未运行的应用"
 fi
 
-# --- 2. 编译 ---
-section "编译 (release 模式，约 1-2 分钟)"
-
 cd "$(dirname "$0")"
-make build
-ok "编译完成"
 
-# --- 3. 部署 ---
-section "部署文件"
+# --- 2. 安装 ---
+section "安装 (模型初始化 + release 构建 + 部署 + 守护进程)"
 
-make deploy
-ok "已部署到 ~/.local"
-
-# --- 4. 初始化 ---
-section "初始化配置与守护"
-
-make init launchd
-ok "配置、Hook、launchd 已初始化"
+make install
+ok "模型、配置、Hook、launchd 已就绪"
 
 # --- 完成 ---
 echo ""

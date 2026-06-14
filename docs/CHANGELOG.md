@@ -12,6 +12,10 @@
 - 新请求会立即取消正在合成/播放的旧播报，避免长文本占住队列导致后续消息卡住
 - 新增 `tts` / `playback` / `mediaControl` 配置块，可调语言、流式间隔、重试、输出采样率、打断策略和 iDict 地址
 - Daemon 启动顺序优化：先监听 socket，再后台加载/预热 TTS 与 ASR，冷启动时 hook 不再误判服务未启动
+- Makefile 清理：删除旧 `model` phony、修正 `run`/`sign` 职责、增加 `restart`，并让 `launchd` 重启更幂等
+- 新增 `make models`：通过 ModelScope 从 `mlx-community` 下载默认 TTS / ASR MLX 模型，安装流程自动执行，已有模型会跳过
+- Makefile 重构为流程编排层，部署细节下沉到 `scripts/runtime.sh`；新增 `make update` 作为日常更新入口
+- 部署流程新增参考音频初始化：内置默认 `ref_*.wav`，`make deploy` 自动补齐 `~/.config/ivox/voices/` 中缺失的默认音色
 - Release 构建切换为 `-Osize`，规避 `MLXAudioTTS` 在 Swift `-O` 下触发的编译器崩溃
 - 测试更新到新的 `models` 配置结构
 

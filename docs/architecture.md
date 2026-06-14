@@ -43,13 +43,18 @@
 ### `make` — 构建 + 部署
 
 ```
-make            = 全流程（日常用这条）
-make init       = 配置 + hook（第 1 层，幂等）
+make / install = 首次安装：检查 + 配置 + 模型 + 构建 + 部署 + 启动
+make update    = 日常更新：构建 + 参考音频 + 部署 + 重启
+make restart   = make update 的兼容别名
+make init       = 配置 + hook，幂等
+make models     = 从 ModelScope mlx-community 下载默认 MLX 模型（已存在则跳过）
+make voices     = 初始化默认参考音频（只补缺失，不覆盖用户文件）
 make build      = 编译 release（使用 -Osize，规避 MLXAudioTTS 的 -O 编译器崩溃）
-make deploy     = 编译 + 部署 runtime 文件（第 2 层）
-make launchd    = 注册自启 + 启动 daemon（第 3 层）
+make deploy     = 构建 + 初始化参考音频 + 部署 runtime 文件
+make launchd    = 写入 launchd plist + 启动 daemon
 make uninstall  = 停服务 + 删文件
 make run        = 前台调试
+make test       = 运行测试
 make version    = 发版（make version V=vX.Y.Z）
 make clean      = 删除 .build
 ```
@@ -102,7 +107,24 @@ ivox voice list
 | `iVoxKit/` | `Sources/iVoxKit/` | 共享库：Config、TextCleaner、AudioPipeline |
 | `scripts/` | `scripts/install-hooks.py` | 安装 hook 到 Claude / Codex / Pi |
 
-`SetupCommand`、`ModelCommand`、`HookInstaller` 已移除，逻辑迁入 Makefile + `scripts/`。
+`SetupCommand`、`ModelCommand`、`HookInstaller` 已移除。Makefile 只保留流程编排，配置、参考音频、二进制部署和 launchd 操作集中在 `scripts/runtime.sh`，模型下载在 `scripts/download-models.py`。
+
+## 模型下载
+
+默认模型来源固定为 ModelScope 的 [mlx-community](https://www.modelscope.cn/organization/mlx-community)：
+
+```
+mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit → ~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit
+mlx-community/Qwen3-ASR-1.7B-4bit          → ~/.config/ivox/model/Qwen3-ASR-1.7B-4bit
+```
+
+`make models` 使用项目私有的 ModelScope Python 环境：
+
+```
+~/.local/share/ivox/modelscope-venv/
+```
+
+下载逻辑在 `scripts/download-models.py` 中。目标目录已有 `config.json` 和权重文件时直接跳过，避免重复下载。
 
 ## 数据流
 

@@ -1,99 +1,69 @@
-.PHONY: all build deploy init model launchd uninstall sign run clean
+.PHONY: all install update check init models voices assets build deploy launchd restart uninstall run sign test version clean help
 
-RUNTIME    := $(HOME)/.local/share/ivox/runtime
-BIN        := $(RUNTIME)/iVox
-LAUNCHER   := $(HOME)/.local/bin/ivox
-LABEL      := com.user.ivox
-PLIST      := $(HOME)/Library/LaunchAgents/com.user.ivox.plist
-CONFIG     := $(HOME)/.config/ivox/config.json
-HOOK_SH    := $(HOME)/.config/ivox/hook-speak.sh
-IVOX_TS    := $(HOME)/.config/ivox/ivox.ts
-LOG        := $(HOME)/.config/ivox/daemon.log
+SWIFT_RELEASE_FLAGS := -c release -Xswiftc -Osize
+MODEL_DIR := $(HOME)/.config/ivox/model
+MODELSCOPE_VENV := $(HOME)/.local/share/ivox/modelscope-venv
+MODELSCOPE_PY := $(MODELSCOPE_VENV)/bin/python
+RUNTIME := scripts/runtime.sh
 
-# 代码签名 (macOS 要求可执行文件有效签名)
-SIGN_HASH  := 4A287668E97BC130AA6D19F4D64799394CAACBAD
+all: install
 
-# ─── 全流程 ──────────────────────────────────────────
-all: init deploy launchd
+install:
+	@$(MAKE) check
+	@$(MAKE) init
+	@$(MAKE) models
+	@$(MAKE) deploy
+	@$(MAKE) launchd
 	@echo "✓  iVox 已就绪"
 
-# ─── 第 1 层：无依赖，可并行 ────────────────────────
+update:
+	@$(MAKE) deploy
+	@$(MAKE) launchd
+	@echo "✓  iVox 已更新"
+
+check:
+	@$(RUNTIME) check-env
+
 init:
-	@mkdir -p $(HOME)/.config/ivox
-	# config.json
-	@if [ ! -f $(CONFIG) ]; then \
-		cp Sources/iVox/Resources/config.example.json $(CONFIG); \
-		sed -i '' 's|"~|"$(HOME)|g' $(CONFIG); \
-		echo "✓  已生成配置: $(CONFIG)"; \
-	else \
-		echo "[i] 配置已存在: $(CONFIG)"; \
-	fi
-	# hook 脚本
-	@cp Sources/iVox/Resources/hook-speak.sh $(HOOK_SH)
-	@chmod 755 $(HOOK_SH)
-	@echo "✓  hook: $(HOOK_SH)"
-	# Pi extension
-	@cp Sources/iVox/Resources/ivox.ts $(IVOX_TS)
-	@echo "✓  Pi extension: $(IVOX_TS)"
-	# ── Hook 安装（已存在则跳过）──
-	@python3 scripts/install-hooks.py "$(HOOK_SH)" "$(IVOX_TS)" 
+	@$(RUNTIME) init
 
-# ─── 第 2 层：依赖 build ──────────────────────────
+$(MODELSCOPE_PY):
+	@mkdir -p $(HOME)/.local/share/ivox
+	python3 -m venv $(MODELSCOPE_VENV)
+	$(MODELSCOPE_PY) -m pip install -U pip modelscope
+
+models: $(MODELSCOPE_PY)
+	$(MODELSCOPE_PY) scripts/download-models.py --model-root "$(MODEL_DIR)"
+
+voices:
+	@$(RUNTIME) voices
+
+assets: voices
+
 build:
-	swift build -c release -Xswiftc -Osize
+	swift build $(SWIFT_RELEASE_FLAGS)
 
-deploy: build
-	@mkdir -p $(RUNTIME) $(HOME)/.local/bin
-	cp .build/release/iVox $(BIN)
-	chmod 755 $(BIN)
-	@printf '#!/bin/bash\nexec "%s" "$$@"\n' "$(BIN)" > $(LAUNCHER)
-	chmod 755 $(LAUNCHER)
-	codesign --force --sign $(SIGN_HASH) $(BIN) 2>/dev/null && echo "✓  签名完成" || echo "⚠️  签名失败"
+deploy: build voices
+	@$(RUNTIME) deploy-bin
 
-# ─── 第 3 层：注册 + 启动 daemon ──────────────────
 launchd:
-	@{ echo '<?xml version="1.0" encoding="UTF-8"?>'; \
-	   echo '<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">'; \
-	   echo '<plist version="1.0"><dict>'; \
-	   echo '  <key>Label</key><string>$(LABEL)</string>'; \
-	   echo '  <key>ProgramArguments</key><array>'; \
-	   echo '    <string>$(LAUNCHER)</string>'; \
-	   echo '    <string>serve</string>'; \
-	   echo '  </array>'; \
-	   echo '  <key>WorkingDirectory</key><string>$(RUNTIME)</string>'; \
-	   echo '  <key>RunAtLoad</key><true/>'; \
-	   echo '  <key>KeepAlive</key><true/>'; \
-	   echo '  <key>StandardOutPath</key><string>$(LOG)</string>'; \
-	   echo '  <key>StandardErrorPath</key><string>$(LOG)</string>'; \
-	   echo '  <key>EnvironmentVariables</key><dict>'; \
-	   echo '    <key>HOME</key><string>$(HOME)</string>'; \
-	   echo '  </dict>'; \
-	   echo '</dict></plist>'; } > $(PLIST)
-	-launchctl bootout gui/$(shell id -u)/$(LABEL) 2>/dev/null
-	launchctl bootstrap gui/$(shell id -u) $(PLIST)
-	@sleep 1
-	launchctl kickstart -k gui/$(shell id -u)/$(LABEL)
-	@echo "✓  守护进程已启动"
+	@$(RUNTIME) launchd
 
-# ─── 辅助命令 ──────────────────────────────────────
-install: all
+restart: update
 
 uninstall:
-	-launchctl bootout gui/$(shell id -u)/$(LABEL) 2>/dev/null
-	@rm -f $(PLIST)
-	@rm -rf $(RUNTIME)
-	@rm -f $(LAUNCHER)
-	@echo "✓  已卸载（保留 ~/.config/ivox/）"
+	@$(RUNTIME) uninstall
 
-run: deploy
+run: build
 	@echo "●  前台启动（Ctrl-C 停止）"
 	.build/release/iVox serve
 
 sign:
-	codesign --force --sign $(SIGN_HASH) .build/release/iVox && echo "✓  签名完成" || echo "⚠️  签名失败"
+	@$(RUNTIME) sign
 
-# ─── 版本 ──────────────────────────────────────────
-# make version V=v1.2.0
+test:
+	swift test
+
 version:
 	@if [ -z "$(V)" ]; then \
 		echo "用法: make version V=v1.x.x"; exit 1; \
@@ -104,7 +74,7 @@ version:
 	git commit -m "chore: 版本号 $(V)"
 	-git tag -d "$(V)" 2>/dev/null; true
 	git tag "$(V)"
-	@echo "✓ 版本 $(V) 已就绪，运行 git push origin main --tags 发布"
+	@echo "✓ 版本 $(V) 已就绪，运行 git push origin master --tags 发布"
 
 clean:
 	rm -rf .build
@@ -112,12 +82,18 @@ clean:
 help:
 	@echo "iVox 构建系统"
 	@echo ""
-	@echo "  make            = 全流程（init → build → deploy → launchd）"
-	@echo "  make init       = 配置、hook（第 1 层）"
-	@echo "  make build      = 编译（第 2 层）"
-	@echo "  make deploy     = 编译 + 部署文件（第 2 层）"
-	@echo "  make launchd    = 注册自启 + 启动 daemon（第 3 层）"
-	@echo "  make uninstall  = 停服务 + 删文件"
-	@echo "  make run        = 前台调试"
-	@echo "  make version    = 发版（make version V=v1.2.0）"
-	@echo "  make clean      = 删除 .build"
+	@echo "  make / make install = 首次安装（检查 → 配置 → 模型 → 构建 → 部署 → 启动）"
+	@echo "  make update         = 更新代码后的部署（构建 → 参考音频 → 部署 → 重启）"
+	@echo "  make restart        = make update 的兼容别名"
+	@echo ""
+	@echo "  make models         = 从 ModelScope 下载默认 MLX 模型（已存在则跳过）"
+	@echo "  make voices         = 初始化默认参考音频（已存在则跳过）"
+	@echo "  make build          = 编译 release"
+	@echo "  make deploy         = 构建 + 参考音频 + 部署二进制"
+	@echo "  make launchd        = 写入 launchd plist 并启动 daemon"
+	@echo ""
+	@echo "  make run            = 编译 + 前台调试"
+	@echo "  make test           = 运行测试"
+	@echo "  make version        = 发版（make version V=v1.2.0）"
+	@echo "  make uninstall      = 停服务 + 删 runtime"
+	@echo "  make clean          = 删除 .build"

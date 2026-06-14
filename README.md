@@ -27,16 +27,23 @@
 
 ---
 
-## 前置依赖
+## 模型
 
-iVox 使用 [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) 在本机做 TTS / ASR 推理。首次运行前请把模型放到默认目录，或在配置里改成自己的路径：
+iVox 使用 [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) 在本机做 TTS / ASR 推理。安装时会通过 ModelScope 从 [mlx-community](https://www.modelscope.cn/organization/mlx-community) 下载默认模型：
 
 ```bash
 ~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit
 ~/.config/ivox/model/Qwen3-ASR-1.7B-4bit
 ```
 
-建议使用 Apple Silicon；模型加载和推理会走 MLX / Metal。
+模型 ID：
+
+```text
+mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit
+mlx-community/Qwen3-ASR-1.7B-4bit
+```
+
+已有完整模型时会自动跳过下载。建议使用 Apple Silicon；模型加载和推理会走 MLX / Metal。
 
 ## 安装
 
@@ -87,6 +94,7 @@ ivox voice remove my     # 删除音色
 | dayi | 大易 | 沉稳可靠，Pi 默认 |
 
 > 音色由本地 TTS 模型根据 `refAudio` + `refText` 生成；不配置参考音频时使用模型默认声音。
+> `make deploy` 会把内置默认参考音频初始化到 `~/.config/ivox/voices/`，已有文件不会被覆盖。
 
 音色匹配规则：`显式指定 --voice` > `sourceVoices 映射` > `defaultVoice`
 
@@ -112,9 +120,15 @@ iVox 会在播报前做两层清洗：
 ## 开发
 
 ```bash
+make install              # 首次安装：配置 + 模型 + 构建 + 部署 + 启动
+make update               # 日常更新：构建 + 参考音频 + 部署 + 重启
+make models               # 从 ModelScope 下载默认 MLX 模型
+make voices               # 初始化默认参考音频
 make build                # 编译 release
-make deploy               # 部署 runtime 文件
+make deploy               # 构建 + 初始化参考音频 + 部署 runtime 文件
+make restart              # make update 的兼容别名
 make run                  # 编译 + 前台启动（看日志）
+make test                 # 运行测试
 make clean                # 清理 .build
 ```
 
