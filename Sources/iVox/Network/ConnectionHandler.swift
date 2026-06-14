@@ -24,7 +24,7 @@ actor ConnectionHandler {
         Log.info("连接收包: bytes=\(data.count)")
         guard let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
               !text.isEmpty else { return }
-        if text == "__IVOX_STOP__" || text == "__IAURA_STOP__" {
+        if text == "__IVOX_STOP__" {
             Log.info("收到停止指令，守护进程退出")
             exit(0)
         }

@@ -2,6 +2,7 @@ import Foundation
 @preconcurrency import MLX
 import MLXAudioCore
 import MLXAudioSTT
+import iVoxKit
 
 actor ASREngine {
     private var model: Qwen3ASRModel?

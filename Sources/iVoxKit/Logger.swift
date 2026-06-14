@@ -3,23 +3,23 @@ import os.log
 
 private let maxLogSize: UInt64 = 5 * 1024 * 1024
 
-enum Log {
+public enum Log {
     private static let subsystem = "com.user.ivox"
     private static let log = OSLog(subsystem: subsystem, category: "daemon")
     private static let fileQueue = DispatchQueue(label: "com.user.ivox.filelog")
     private static let filePath = NSString(string: "~/.config/ivox/daemon.log").expandingTildeInPath
 
-    static func info(_ message: String) {
+    public static func info(_ message: String) {
         os_log("%{public}s", log: log, type: .info, message)
         writeFile("INFO", message)
     }
 
-    static func error(_ message: String) {
+    public static func error(_ message: String) {
         os_log("%{public}s", log: log, type: .error, message)
         writeFile("ERROR", message)
     }
 
-    static func debug(_ message: String) {
+    public static func debug(_ message: String) {
         os_log("%{public}s", log: log, type: .debug, message)
         writeFile("DEBUG", message)
     }

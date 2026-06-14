@@ -1,7 +1,7 @@
 #!/bin/bash
 # iVox Hook — Claude Code / Codex Stop Hook
 # 协议：stdout 必须保持干净；exit 0 = 继续，非 0 = 停止
-[[ "${IVOX_SKIP:-${IAURA_SKIP:-}}" == "1" ]] && exit 0
+[[ "${IVOX_SKIP:-}" == "1" ]] && exit 0
 # 保存原始 stdout，Codex Stop hook 要求返回 JSON
 exec 3>&1
 exec 1>/dev/null

@@ -163,6 +163,7 @@ final class SpeechInputService: @unchecked Sendable {
 
         Log.info("语音输入: ASR 请求 \(audioURL.lastPathComponent) \(wavData.count) bytes")
         Task {
+            defer { Self.cleanupRecordings(recordDir: self.recordDir) }
             do {
                 let text = try await asrEngine.transcribe(audioData: wavData, language: config.language)
                 guard !text.isEmpty else {
@@ -174,6 +175,25 @@ final class SpeechInputService: @unchecked Sendable {
             } catch {
                 Log.error("语音输入: ASR 失败 \(error)")
             }
+        }
+    }
+
+    // MARK: - Cleanup
+
+    private static let maxRecordings = 2
+
+    private static func cleanupRecordings(recordDir: URL) {
+        let fm = FileManager.default
+        guard let files = try? fm.contentsOfDirectory(at: recordDir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        let wavs = files.filter { $0.pathExtension == "wav" }
+            .compactMap { url -> (URL, Date)? in
+                guard let date = try? url.resourceValues(forKeys: [.contentModificationDateKey]).contentModificationDate else { return nil }
+                return (url, date)
+            }
+            .sorted { $0.1 > $1.1 }
+        if wavs.count <= maxRecordings { return }
+        for (url, _) in wavs.dropFirst(maxRecordings) {
+            try? fm.removeItem(at: url)
         }
     }
 

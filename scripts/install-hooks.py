@@ -49,10 +49,10 @@ if os.path.isfile(pi_path):
     with open(pi_path) as f:
         d = json.load(f)
     exts = d.get("extensions", [])
-    if any(kw in e.lower() for e in exts for kw in ["iaura", "ivox", "ivoice"]):
+    if any("ivox" in e.lower() for e in exts):
         print("[i] Pi extension 已存在")
     else:
-        exts = [e for e in exts if not any(x in e.lower() for x in ["ispeak", "ivoice", "ivox", "iaura"])]
+        exts = [e for e in exts if not any(x in e.lower() for x in ["ispeak", "ivoice", "ivox"])]
         exts.append(IVOX_TS)
         d["extensions"] = exts
         with open(pi_path, "w") as f:
