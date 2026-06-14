@@ -1,0 +1,41 @@
+{
+  "api": {
+    "baseURL": "http://127.0.0.1:8150/v1",
+    "ttsModel": "Qwen3-TTS-12Hz-1.7B-Base-8bit"
+  },
+  "defaultVoice": "mizai",
+  "sourceVoices": {
+    "claude": "taozi",
+    "codex": "wanwan",
+    "pi": "dayi"
+  },
+  "speechInput": {
+    "enabled": true,
+    "language": "zh",
+    "autoEnter": true,
+    "maxRecordingSeconds": 30,
+    "model": "Qwen3-ASR-1.7B-4bit"
+  },
+  "voices": [
+    {
+      "id": "mizai",
+      "name": "米仔",
+      "description": "默认音色"
+    },
+    {
+      "id": "taozi",
+      "name": "甜妹桃子",
+      "description": "Claude 音色"
+    },
+    {
+      "id": "wanwan",
+      "name": "湾湾小何",
+      "description": "Codex 音色"
+    },
+    {
+      "id": "dayi",
+      "name": "大易",
+      "description": "Pi 音色"
+    }
+  ]
+}
