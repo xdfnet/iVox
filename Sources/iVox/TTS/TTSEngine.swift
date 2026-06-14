@@ -1,272 +1,152 @@
-import Darwin
 import Foundation
+@preconcurrency import MLX
+import MLXAudioCore
+import MLXAudioTTS
 import iVoxKit
 
 actor TTSEngine {
-    private let config: Config
-    private let maxRetries = 2
-    private let chunkSamples = 5760
-    private let sampleRate = 24_000
+    enum LoadState: Sendable {
+        case notStarted
+        case loading
+        case ready
+        case failed(String)
+    }
+
+    private var model: (any SpeechGenerationModel)?
+    private var config: Config
+    private let ttsConfig: TTSConfig
+    private var loadState: LoadState = .notStarted
 
     init(config: Config) {
         self.config = config
+        self.ttsConfig = config.resolvedTTS
     }
 
-    var isLoaded: Bool { true }
+    var isLoaded: Bool { model != nil }
+    var state: LoadState { loadState }
+
+    func loadModel() async throws {
+        if model != nil { return }
+        loadState = .loading
+        let modelPath = expandPath(config.models?.ttsPath ?? "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit")
+        Log.info("加载 TTS 模型: \(modelPath)")
+        do {
+            model = try await TTS.loadModel(modelRepo: modelPath)
+            loadState = .ready
+            Log.info("TTS 模型加载完成")
+        } catch {
+            loadState = .failed(String(describing: error))
+            throw error
+        }
+    }
+
+    func warmup(voiceID: String) async {
+        do {
+            Log.info("TTS 预热 [\(voiceID)]...")
+            let stream = synthesizeStream(text: "你好，模型预热完成。", voiceID: voiceID)
+            for try await _ in stream { }
+            Log.info("TTS 预热完成 [\(voiceID)]")
+        } catch {
+            Log.info("TTS 预热跳过 [\(voiceID)]: \(error)")
+        }
+    }
 
     func synthesizeStream(text: String, voiceID: String) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
-            Task {
+            let task = Task {
                 await synthesizeWithRetry(text: text, voiceID: voiceID, continuation: continuation)
+            }
+            continuation.onTermination = { @Sendable _ in
+                task.cancel()
             }
         }
     }
 
     private func synthesizeWithRetry(
-        text: String,
-        voiceID: String,
+        text: String, voiceID: String,
         continuation: AsyncThrowingStream<Data, Error>.Continuation
     ) async {
-        for attempt in 0...maxRetries {
+        for attempt in 0...ttsConfig.maxRetries {
             do {
+                try Task.checkCancellation()
                 try await synthesizeOnce(text: text, voiceID: voiceID, continuation: continuation)
                 return
+            } catch is CancellationError {
+                Log.info("TTS 合成已取消")
+                continuation.finish(throwing: CancellationError())
+                return
             } catch {
-                let isLast = attempt == maxRetries
-                Log.error("TTS 合成失败 (attempt \(attempt + 1)/\(maxRetries + 1)): \(error)")
+                let isLast = attempt == ttsConfig.maxRetries
+                Log.error("TTS 合成失败 (attempt \(attempt+1)/\(ttsConfig.maxRetries+1)): \(error)")
                 if isLast {
                     continuation.finish(throwing: error)
                     return
                 }
-                try? await Task.sleep(nanoseconds: 300_000_000)
+                try? await Task.sleep(nanoseconds: UInt64(ttsConfig.retryDelayMs) * 1_000_000)
             }
         }
     }
 
     private func synthesizeOnce(
-        text: String,
-        voiceID: String,
+        text: String, voiceID: String,
         continuation: AsyncThrowingStream<Data, Error>.Continuation
     ) async throws {
-        let endpoint = try Endpoint(config.api.baseURL)
-        let fd = try connect(host: endpoint.host, port: endpoint.port)
-        defer { close(fd) }
+        guard let model else { throw TTSError.notLoaded }
 
-        let request: [String: Any] = [
-            "op": "tts",
-            "text": text,
-            "voice": voiceID,
-            "streaming_interval": 0.24,
-        ]
-        let json = try JSONSerialization.data(withJSONObject: request)
-        try writeAll(makeLengthPrefixed(json), to: fd)
+        let voice = config.voice(id: voiceID)
+        let refText = voice?.refText
+        let refAudio = try loadRefAudio(voice?.refAudio, sampleRate: model.sampleRate)
+        Log.info("TTS 请求: voice=\(voiceID) text_chars=\(text.count)")
 
-        Log.info("TTS TCP 请求: voice=\(voiceID) text_chars=\(text.count) endpoint=\(endpoint.host):\(endpoint.port)")
+        let stream = model.generateStream(
+            text: text,
+            voice: nil,
+            refAudio: refAudio,
+            refText: refText,
+            language: ttsConfig.language,
+            generationParameters: model.defaultGenerationParameters,
+            streamingInterval: ttsConfig.streamingInterval
+        )
 
-        let prebufferSamples = prebufferSamples(forTextLength: text.count)
-        var sampleBuffer: [Float] = []
-        sampleBuffer.reserveCapacity(prebufferSamples + chunkSamples)
-        var totalSamples = 0
         var chunkIdx = 0
-        var startedStreaming = false
-        let requestStartedAt = Date()
-
-        while true {
-            let frame = try readFrame(from: fd)
-            switch frame.type {
-            case .audio:
-                let samples = extractFloatSamples(frame.payload)
-                totalSamples += samples.count
-                sampleBuffer.append(contentsOf: samples)
-
-                if !startedStreaming, sampleBuffer.count >= prebufferSamples {
-                    startedStreaming = true
-                    Log.info("TTS 预缓冲完成: samples=\(sampleBuffer.count) latency=\(String(format: "%.2f", -requestStartedAt.timeIntervalSinceNow))s")
+        for try await event in stream {
+            try Task.checkCancellation()
+            if case .audio(let chunk) = event {
+                let samples: [Float] = chunk.asArray(Float.self)
+                let pcm = audioToPCM(
+                    samples,
+                    inputSampleRate: model.sampleRate,
+                    outputSampleRate: ttsConfig.outputSampleRate
+                )
+                if chunkIdx == 0 {
+                    Log.info("TTS 流式开始: samples=\(samples.count) pcm_bytes=\(pcm.count)")
                 }
-                if startedStreaming {
-                    chunkIdx += yieldReadyChunks(from: &sampleBuffer, continuation: continuation, firstChunkIndex: chunkIdx)
-                }
-
-            case .text:
-                continue
-
-            case .error:
-                let message = String(data: frame.payload, encoding: .utf8) ?? "TTS server error"
-                throw TTSError.serverError(message)
-
-            case .end:
-                if totalSamples == 0 { throw TTSError.noAudioData }
-                while !sampleBuffer.isEmpty {
-                    let end = min(chunkSamples, sampleBuffer.count)
-                    let chunk = Array(sampleBuffer.prefix(end))
-                    sampleBuffer.removeFirst(end)
-                    let pcm = audioToPCM(chunk)
-                    if chunkIdx == 0 {
-                        Log.info("TTS 首块: samples=\(chunk.count) pcm_bytes=\(pcm.count)")
-                    }
-                    continuation.yield(pcm)
-                    chunkIdx += 1
-                }
-                Log.info("TTS 完成: total_samples=\(totalSamples) chunks=\(chunkIdx)")
-                continuation.finish()
-                return
+                continuation.yield(pcm)
+                chunkIdx += 1
             }
         }
+        try Task.checkCancellation()
+        Log.info("TTS 流式完成: chunks=\(chunkIdx)")
+        continuation.finish()
     }
 
-    private func yieldReadyChunks(
-        from sampleBuffer: inout [Float],
-        continuation: AsyncThrowingStream<Data, Error>.Continuation,
-        firstChunkIndex: Int
-    ) -> Int {
-        var emitted = 0
-        while sampleBuffer.count >= chunkSamples {
-            let chunk = Array(sampleBuffer.prefix(chunkSamples))
-            sampleBuffer.removeFirst(chunkSamples)
-            let pcm = audioToPCM(chunk)
-            if firstChunkIndex + emitted == 0 {
-                Log.info("TTS 首块: samples=\(chunk.count) pcm_bytes=\(pcm.count)")
-            }
-            continuation.yield(pcm)
-            emitted += 1
+    private func loadRefAudio(_ path: String?, sampleRate: Int) throws -> MLXArray? {
+        guard let path, !path.isEmpty else { return nil }
+        let expanded = expandPath(path)
+        let url = URL(fileURLWithPath: expanded)
+        guard FileManager.default.fileExists(atPath: expanded) else {
+            Log.info("参考音频不存在，跳过: \(expanded)")
+            return nil
         }
-        return emitted
+        let (_, refAudio) = try loadAudioArray(from: url, sampleRate: sampleRate)
+        return refAudio
     }
 
-    private func prebufferSamples(forTextLength count: Int) -> Int {
-        let seconds: Double
-        switch count {
-        case 0...80: seconds = 0.8
-        case 81...220: seconds = 2.0
-        default: seconds = 6.0
-        }
-        return Int(Double(sampleRate) * seconds)
+    private func expandPath(_ path: String) -> String {
+        NSString(string: path).expandingTildeInPath
     }
 }
 
-private struct Endpoint {
-    var host: String
-    var port: Int
-
-    init(_ value: String) throws {
-        if let url = URL(string: value), let host = url.host {
-            self.host = host
-            self.port = url.port ?? 8150
-            return
-        }
-        let trimmed = value
-            .replacingOccurrences(of: "tcp://", with: "")
-            .replacingOccurrences(of: "http://", with: "")
-            .replacingOccurrences(of: "/v1", with: "")
-        let parts = trimmed.split(separator: ":", maxSplits: 1).map(String.init)
-        self.host = parts.first ?? "127.0.0.1"
-        self.port = parts.dropFirst().first.flatMap(Int.init) ?? 8150
-    }
-}
-
-private struct Frame {
-    var type: FrameType
-    var payload: Data
-}
-
-private enum FrameType: UInt8 {
-    case audio = 1
-    case text = 2
-    case error = 3
-    case end = 4
-}
-
-private enum TTSError: Error {
-    case invalidEndpoint
-    case noAudioData
-    case serverError(String)
-}
-
-private func connect(host: String, port: Int) throws -> Int32 {
-    let fd = socket(AF_INET, SOCK_STREAM, 0)
-    guard fd >= 0 else { throw POSIXError(.ENOTSOCK) }
-
-    var addr = sockaddr_in()
-    addr.sin_family = sa_family_t(AF_INET)
-    addr.sin_port = UInt16(port).bigEndian
-    guard inet_pton(AF_INET, host, &addr.sin_addr) == 1 else {
-        close(fd)
-        throw TTSError.invalidEndpoint
-    }
-
-    let ok = withUnsafePointer(to: &addr) {
-        $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-            Darwin.connect(fd, $0, socklen_t(MemoryLayout<sockaddr_in>.size))
-        }
-    }
-    guard ok == 0 else {
-        close(fd)
-        throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .ECONNREFUSED)
-    }
-    return fd
-}
-
-private func makeLengthPrefixed(_ data: Data) -> Data {
-    var out = Data()
-    appendUInt32BE(UInt32(data.count), to: &out)
-    out.append(data)
-    return out
-}
-
-private func readFrame(from fd: Int32) throws -> Frame {
-    let header = try readExactly(5, from: fd)
-    guard let type = FrameType(rawValue: header[0]) else { throw TTSError.serverError("Invalid frame type") }
-    let length = Int(readUInt32BE(header, at: 1))
-    let payload = length > 0 ? try readExactly(length, from: fd) : Data()
-    return Frame(type: type, payload: payload)
-}
-
-private func readExactly(_ count: Int, from fd: Int32) throws -> Data {
-    var data = Data(count: count)
-    var offset = 0
-    try data.withUnsafeMutableBytes { raw in
-        guard let base = raw.baseAddress else { throw POSIXError(.EIO) }
-        while offset < count {
-            let n = Darwin.read(fd, base.advanced(by: offset), count - offset)
-            if n < 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-            if n == 0 { throw POSIXError(.ECONNRESET) }
-            offset += n
-        }
-    }
-    return data
-}
-
-private func writeAll(_ data: Data, to fd: Int32) throws {
-    try data.withUnsafeBytes { raw in
-        guard let base = raw.baseAddress else { return }
-        var offset = 0
-        while offset < data.count {
-            let n = Darwin.write(fd, base.advanced(by: offset), data.count - offset)
-            if n < 0 { throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO) }
-            offset += n
-        }
-    }
-}
-
-private func extractFloatSamples(_ data: Data) -> [Float] {
-    let count = data.count / 4
-    guard count > 0 else { return [] }
-    return data.withUnsafeBytes { ptr in
-        guard let base = ptr.baseAddress?.assumingMemoryBound(to: Float.self) else { return [] }
-        return Array(UnsafeBufferPointer(start: base, count: count))
-    }
-}
-
-private func appendUInt32BE(_ value: UInt32, to data: inout Data) {
-    data.append(UInt8((value >> 24) & 0xff))
-    data.append(UInt8((value >> 16) & 0xff))
-    data.append(UInt8((value >> 8) & 0xff))
-    data.append(UInt8(value & 0xff))
-}
-
-private func readUInt32BE(_ data: Data, at offset: Int) -> UInt32 {
-    (UInt32(data[offset]) << 24) |
-    (UInt32(data[offset + 1]) << 16) |
-    (UInt32(data[offset + 2]) << 8) |
-    UInt32(data[offset + 3])
+enum TTSError: Error {
+    case notLoaded
 }

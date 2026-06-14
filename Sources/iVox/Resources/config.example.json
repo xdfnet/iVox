@@ -1,7 +1,25 @@
 {
-  "api": {
-    "baseURL": "http://127.0.0.1:8150/v1",
-    "ttsModel": "Qwen3-TTS-12Hz-1.7B-Base-8bit"
+  "models": {
+    "asrPath": "~/.config/ivox/model/Qwen3-ASR-1.7B-4bit",
+    "ttsPath": "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+  },
+  "tts": {
+    "language": "Chinese",
+    "streamingInterval": 0.08,
+    "maxRetries": 2,
+    "retryDelayMs": 500,
+    "outputSampleRate": 48000
+  },
+  "playback": {
+    "interruptCurrent": true,
+    "idleReviveSeconds": 600,
+    "drainBaseTimeoutSeconds": 10
+  },
+  "mediaControl": {
+    "enabled": true,
+    "baseURL": "http://127.0.0.1:8888",
+    "pausePath": "/api/pause",
+    "resumePath": "/api/play"
   },
   "defaultVoice": "mizai",
   "sourceVoices": {
@@ -13,28 +31,35 @@
     "enabled": true,
     "language": "zh",
     "autoEnter": true,
-    "maxRecordingSeconds": 30,
-    "model": "Qwen3-ASR-1.7B-4bit"
+    "maxRecordingSeconds": 30
   },
   "voices": [
     {
       "id": "mizai",
       "name": "米仔",
+      "refAudio": "~/.config/ivox/voices/ref_mizai.wav",
+      "refText": "大家好，我是米仔。我的声音温暖自然，适合日常播报和语音助手场景。无论是读书、讲故事，还是播报天气新闻，我都能轻松应对。",
       "description": "默认音色"
     },
     {
       "id": "taozi",
       "name": "甜妹桃子",
+      "refAudio": "~/.config/ivox/voices/ref_taozi.wav",
+      "refText": "嗨，我是甜妹桃子。我有着活泼甜美的声线，听起来元气满满。如果你需要一位热情开朗的声音陪伴，选我就对了。",
       "description": "Claude 音色"
     },
     {
       "id": "wanwan",
       "name": "湾湾小何",
+      "refAudio": "~/.config/ivox/voices/ref_wanwan.wav",
+      "refText": "你好，我是湾湾小何。我的声音温柔知性。",
       "description": "Codex 音色"
     },
     {
       "id": "dayi",
       "name": "大易",
+      "refAudio": "~/.config/ivox/voices/ref_dayi.wav",
+      "refText": "大家好，我是大易。我有着沉稳可靠的男声，听起来踏实有力量。需要播报重要通知或者讲述深度内容，交给我就好。",
       "description": "Pi 音色"
     }
   ]

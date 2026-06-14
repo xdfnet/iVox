@@ -17,7 +17,7 @@
 ┌───────────────────────────────────────────────────────────┐
 │                   iVox Daemon (launchd)                   │
 │                                                            │
-│  SocketServer → ConnectionHandler                          │
+│  SocketServer → ConnectionHandler       后台加载 TTS/ASR    │
 │      解析 {source:claude,voice:wanwan}                      │
 │      + TextCleaner 清洗 Markdown                           │
 │                         │                                  │
@@ -31,13 +31,9 @@
 │              ▼                     ▼                       │
 │        TTSEngine              AudioPlayer                  │
 │     synthesizeStream()      scheduleBuffer()               │
-│     iLLM API 流式调用         流式播放                       │
-│     (HTTP chunked)          (AVAudioEngine)                 │
+│     本地 MLX 流式推理          流式播放                       │
+│     (mlx-audio-swift)       (AVAudioEngine)                 │
 └───────────────────────────────────────────────────────────┘
-                            │
-                            ▼
-              iLLM 服务 (http://127.0.0.1:8150/v1)
-              └── /audio/speech → Qwen3-TTS MLX 推理
 ```
 
 ## 命令体系
@@ -49,7 +45,7 @@
 ```
 make            = 全流程（日常用这条）
 make init       = 配置 + hook（第 1 层，幂等）
-make build      = 编译（第 2 层）
+make build      = 编译 release（使用 -Osize，规避 MLXAudioTTS 的 -O 编译器崩溃）
 make deploy     = 编译 + 部署 runtime 文件（第 2 层）
 make launchd    = 注册自启 + 启动 daemon（第 3 层）
 make uninstall  = 停服务 + 删文件
@@ -101,7 +97,7 @@ ivox voice list
 | `Daemon/` | `Sources/iVox/Daemon/Daemon.swift` | 守护进程：监听 Socket → TTS → 播放 |
 | `Network/` | `Sources/iVox/Network/` | Unix Socket 服务器 + ConnectionHandler |
 | `Audio/` | `Sources/iVox/Audio/` | AudioPlayer + PlaybackQueue + MediaController |
-| `TTS/` | `Sources/iVox/TTS/TTSEngine.swift` | iLLM API 流式调用，内置重试 2 次 |
+| `TTS/` | `Sources/iVox/TTS/TTSEngine.swift` | 本地 MLX 流式推理，支持配置化重试 |
 | `Utilities/` | `Sources/iVox/Utilities/Logger.swift` | OSLog + 文件日志，5MB 轮转 |
 | `iVoxKit/` | `Sources/iVoxKit/` | 共享库：Config、TextCleaner、AudioPipeline |
 | `scripts/` | `scripts/install-hooks.py` | 安装 hook 到 Claude / Codex / Pi |
@@ -119,14 +115,16 @@ ivox voice list
    - 显式 {voice:xxx} 可覆盖
    - cleanText() 清洗 Markdown 和行内噪音
 4. PlaybackQueue.enqueue(job)
-   - 新请求入队 → 丢弃所有 pending 旧任务
+   - 新请求入队 → 丢弃 pending 旧任务，并取消正在合成/播放的旧任务
    - MediaController 调 iDict /api/pause — 暂停音乐
 5. TTSEngine.synthesizeStream() → AsyncThrowingStream<Data>
-   - POST http://127.0.0.1:8150/v1/audio/speech (stream=true)
-   - URLSession.bytes(for:) 流式读取 HTTP chunked 响应
-   - 解析 WAV 头 → 提取 float32 样本
-   - audioToPCM: 24k→48k 上采样 + float32→int16
-   - 失败自动重试 2 次，间隔 500ms
+   - Daemon 先启动 socket，再后台加载/预热模型
+   - TTS 未就绪时 PlaybackQueue 等待模型 ready，不阻塞 socket
+   - `mlx-audio-swift` 加载本地 Qwen3-TTS 模型
+   - 按音色读取 `refAudio` + `refText`
+   - `generateStream()` 流式产出 float32 样本
+   - `audioToPCM`: 按模型采样率重采样到 48k + float32→int16
+   - 语言、流式间隔、重试次数、重试间隔、输出采样率由 `tts` 配置控制
 6. AudioPlayer.write(pcm) → scheduleBuffer 流式播放
 7. player.drain() — 轮询等待 buffer 播完
 8. MediaController 调 iDict /api/play — 恢复音乐
@@ -159,12 +157,12 @@ ConnectionHandler.extractVoicePrefix():
   else                       → defaultVoice
 ```
 
-> 音色由 iLLM 服务端通过参考音频实现声音克隆，iVox 只传递 voice ID。
+> 音色由本地 TTS 模型通过 `refAudio` + `refText` 实现声音克隆；不配置参考音频时使用模型默认声音。
 
 ## 媒体控制
 
-`MediaController` 通过调用 [iDict](https://github.com/xdfnet/iDict) 的 `/api/pause` 和 `/api/play` 来实现播报时暂停音乐、播完恢复。  
-需要 iDict 运行在 `127.0.0.1:8888`（iDict 默认端口），**不再需要辅助功能权限或代码签名**。
+`MediaController` 通过调用 [iDict](https://github.com/xdfnet/iDict) 的 `/api/pause` 和 `/api/play` 来实现播报时暂停音乐、播完恢复。
+地址和路径由 `mediaControl` 配置控制；未运行 iDict 时可把 `mediaControl.enabled` 设为 `false`。**不再需要辅助功能权限或代码签名**。
 
 ## 日志
 
@@ -177,13 +175,15 @@ ConnectionHandler.extractVoicePrefix():
 ```
 ~/.local/bin/ivox                          # CLI 入口
 ~/.local/share/ivox/runtime/iVox          # 二进制
-~/.config/ivox/config.json                 # 配置（指向 iLLM API）
+~/.config/ivox/config.json                 # 配置（模型路径、音色、语音输入）
+~/.config/ivox/model/                      # 本地 TTS / ASR 模型
+~/.config/ivox/voices/                     # 可选参考音频
 ~/.config/ivox/hook-speak.sh               # Hook 脚本
 ~/.config/ivox/ivox.ts                    # Pi 扩展
 ~/Library/LaunchAgents/com.user.ivox.plist  # launchd 守护
 ```
 
-不再需要本地 TTS 模型和参考音频文件，全部由 iLLM 服务管理。
+TTS / ASR 在本机加载模型推理，不需要额外启动 iLLM 服务。
 
 ## Hook 集成
 

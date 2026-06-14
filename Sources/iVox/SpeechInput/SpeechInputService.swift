@@ -5,8 +5,11 @@ import iVoxKit
 
 final class SpeechInputService: @unchecked Sendable {
     private let config: SpeechInputConfig
+    private let mediaControl: MediaControlConfig
     private let recordDir: URL
     private var thread: Thread?
+    private let session = URLSession(configuration: .ephemeral)
+    private let asrEngine: ASREngine
 
     private enum State {
         case idle
@@ -15,8 +18,10 @@ final class SpeechInputService: @unchecked Sendable {
     private var state: State = .idle
     private let stateQueue = DispatchQueue(label: "com.user.ivox.speechinput.state")
 
-    init(config: SpeechInputConfig) {
+    init(config: SpeechInputConfig, mediaControl: MediaControlConfig, asrEngine: ASREngine) {
         self.config = config
+        self.mediaControl = mediaControl
+        self.asrEngine = asrEngine
         self.recordDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/ivox/recordings")
     }
@@ -95,7 +100,8 @@ final class SpeechInputService: @unchecked Sendable {
             switch state {
             case .idle:
                 if isDown {
-                    Log.debug("语音输入: ⌘ 按下 → 开始录音")
+                    sendMediaRequest(mediaControl.pausePath)
+                    Log.debug("语音输入: ⌘ 按下 → 暂停音乐 → 开始录音")
                     if let (recorder, url) = startRecording() {
                         state = .recording(recorder: recorder, audioURL: url)
                     }
@@ -104,6 +110,7 @@ final class SpeechInputService: @unchecked Sendable {
                 if !isDown {
                     Log.debug("语音输入: ⌘ 松开 → 结束录音")
                     state = .idle
+                    sendMediaRequest(mediaControl.resumePath)
                     DispatchQueue.global().async {
                         self.finishRecording(recorder: recorder, audioURL: audioURL)
                     }
@@ -150,25 +157,23 @@ final class SpeechInputService: @unchecked Sendable {
             return
         }
 
-        do {
-            let wavData = try Data(contentsOf: audioURL)
-            Log.info("语音输入: ASR 请求 \(audioURL.lastPathComponent) \(wavData.count) bytes")
+        let wavData: Data
+        do { wavData = try Data(contentsOf: audioURL) }
+        catch { return }
 
-            let text = try ASRClient.transcribe(
-                audio: wavData,
-                language: config.language,
-                baseURL: config.baseURL ?? "tcp://127.0.0.1:8150",
-                model: config.model
-            )
-
-            guard !text.isEmpty else {
-                Log.info("语音输入: 识别结果为空")
-                return
+        Log.info("语音输入: ASR 请求 \(audioURL.lastPathComponent) \(wavData.count) bytes")
+        Task {
+            do {
+                let text = try await asrEngine.transcribe(audioData: wavData, language: config.language)
+                guard !text.isEmpty else {
+                    Log.info("语音输入: 识别结果为空")
+                    return
+                }
+                Log.info("语音输入: 识别结果 [\(text.prefix(60))]")
+                pasteText(text)
+            } catch {
+                Log.error("语音输入: ASR 失败 \(error)")
             }
-            Log.info("语音输入: 识别结果 [\(text.prefix(60))]")
-            pasteText(text)
-        } catch {
-            Log.error("语音输入: ASR 失败 \(error)")
         }
     }
 
@@ -194,6 +199,21 @@ final class SpeechInputService: @unchecked Sendable {
             enterDown?.post(tap: .cgAnnotatedSessionEventTap)
             enterUp?.post(tap: .cgAnnotatedSessionEventTap)
         }
+    }
+
+    // MARK: - Media
+
+    private func sendMediaRequest(_ path: String) {
+        guard mediaControl.enabled else { return }
+        guard let url = URL(string: mediaControl.baseURL + path) else { return }
+        var req = URLRequest(url: url)
+        req.httpMethod = "GET"
+        req.timeoutInterval = 1
+        session.dataTask(with: req) { _, _, error in
+            if let error {
+                Log.debug("语音输入: 媒体请求 \(path) 失败: \(error.localizedDescription)")
+            }
+        }.resume()
     }
 
     // MARK: - Permissions

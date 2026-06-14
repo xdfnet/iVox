@@ -3,6 +3,7 @@
 import AVFoundation
 import AppKit
 import Foundation
+import iVoxKit
 
 final class AudioPlayer: @unchecked Sendable {
     private let engine = AVAudioEngine()
@@ -13,8 +14,10 @@ final class AudioPlayer: @unchecked Sendable {
     private var started = false
     private var lastActivity = Date()
     private var needsEngineRevive = false
+    private let config: PlaybackConfig
 
-    init() {
+    init(config: PlaybackConfig) {
+        self.config = config
         format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 48000, channels: 1, interleaved: false)!
 
         var ok = true
@@ -66,16 +69,17 @@ final class AudioPlayer: @unchecked Sendable {
             if needsEngineRevive {
                 Log.info("音频配置已变更，播报前重启引擎")
                 reviveEngine()
-            } else if Date().timeIntervalSince(lastActivity) > 600 {
+            } else if Date().timeIntervalSince(lastActivity) > config.idleReviveSeconds {
                 // 长时间空闲后引擎可能静默挂掉（isRunning=true 但不工作），播报前复活，避免写入首段音频时重启。
-                Log.info("空闲超过 10 分钟，播报前主动复活引擎")
+                Log.info("空闲超过 \(Int(config.idleReviveSeconds)) 秒，播报前主动复活引擎")
                 reviveEngine()
             }
         }
     }
 
     func drain(chunks: Int) async {
-        let maxWait = max(10, Int(Double(chunks) * 0.08) + 10)
+        let baseTimeout = Int(config.drainBaseTimeoutSeconds.rounded(.up))
+        let maxWait = max(baseTimeout, Int(Double(chunks) * 0.08) + baseTimeout)
         let polls = maxWait * 20
         var drained = false
         for _ in 0..<polls {
@@ -89,6 +93,17 @@ final class AudioPlayer: @unchecked Sendable {
                 pendingCount = 0
                 reviveEngine()
             }
+        }
+    }
+
+    func cancelPendingPlayback() {
+        serialQueue.sync {
+            pendingCount = 0
+            node.stop()
+            if engine.isRunning {
+                node.play()
+            }
+            lastActivity = Date()
         }
     }
 

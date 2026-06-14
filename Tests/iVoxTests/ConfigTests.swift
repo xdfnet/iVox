@@ -5,7 +5,7 @@ final class ConfigTests: XCTestCase {
 
     func testValidationFailsOnMissingDefaultVoice() {
         let config = Config(
-            api: APIConfig(baseURL: "http://127.0.0.1:8150/v1"),
+            models: nil,
             defaultVoice: "missing",
             sourceVoices: [:],
             voices: [VoiceInfo(id: "voice", description: nil)],
@@ -16,7 +16,7 @@ final class ConfigTests: XCTestCase {
 
     func testValidationFailsOnMissingSourceVoice() {
         let config = Config(
-            api: APIConfig(baseURL: "http://127.0.0.1:8150/v1"),
+            models: nil,
             defaultVoice: "voice",
             sourceVoices: ["codex": "missing"],
             voices: [VoiceInfo(id: "voice", description: nil)],
@@ -27,7 +27,10 @@ final class ConfigTests: XCTestCase {
 
     func testValidationPassesOnValidConfig() {
         let config = Config(
-            api: APIConfig(baseURL: "http://127.0.0.1:8150/v1"),
+            models: ModelConfig(
+                asrPath: "~/.config/ivox/model/Qwen3-ASR-1.7B-4bit",
+                ttsPath: "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+            ),
             defaultVoice: "v1",
             sourceVoices: ["c": "v1"],
             voices: [VoiceInfo(id: "v1", description: nil)],

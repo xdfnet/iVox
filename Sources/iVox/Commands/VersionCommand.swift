@@ -11,6 +11,6 @@ struct VersionCommand: ParsableCommand {
     func run() throws {
         print("iVox v\(iVoxVersion)")
         print("macOS 本地语音播报守护进程")
-        print("纯 Swift · iLLM TTS · AVAudioEngine")
+        print("纯 Swift · MLX 本地 TTS/ASR · AVAudioEngine")
     }
 }

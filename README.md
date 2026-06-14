@@ -4,7 +4,7 @@
   <img src="https://img.shields.io/badge/Swift-6.0-FA7343?logo=swift&logoColor=white" alt="Swift 6.0">
   <img src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Apple_Silicon-M1%2B-A2AAAD?logo=apple&logoColor=white" alt="Apple Silicon">
-  <img src="https://img.shields.io/badge/TTS-iLLM_API-7B68EE?logo=mlflow&logoColor=white" alt="iLLM API TTS">
+  <img src="https://img.shields.io/badge/TTS%2FASR-MLX_Local-7B68EE?logo=mlflow&logoColor=white" alt="MLX Local TTS/ASR">
   <img src="https://img.shields.io/badge/license-MIT-green?logo=opensourceinitiative&logoColor=white" alt="MIT">
 </p>
 
@@ -29,15 +29,14 @@
 
 ## 前置依赖
 
-iVox 本身不做 TTS / ASR 推理，需要搭配 [iLLM](https://github.com/xdfnet/iLLM) 服务提供语音合成与识别能力：
+iVox 使用 [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) 在本机做 TTS / ASR 推理。首次运行前请把模型放到默认目录，或在配置里改成自己的路径：
 
 ```bash
-# 安装 iLLM（提供 TTS API）
-git clone https://github.com/xdfnet/iLLM && cd iLLM
-make install
+~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit
+~/.config/ivox/model/Qwen3-ASR-1.7B-4bit
 ```
 
-确保 iLLM 服务运行在 `tcp://127.0.0.1:8150`（默认端口）。
+建议使用 Apple Silicon；模型加载和推理会走 MLX / Metal。
 
 ## 安装
 
@@ -76,7 +75,7 @@ ivox say                 # 语音输入状态
 
 ```bash
 ivox voice list          # 列出所有音色
-ivox voice add -i my -n "我的音色" --description "自定义音色"
+ivox voice add -i my -n "我的音色" --ref-audio ~/voice.wav --ref-text "参考音频内容" --description "自定义音色"
 ivox voice remove my     # 删除音色
 ```
 
@@ -87,7 +86,7 @@ ivox voice remove my     # 删除音色
 | wanwan | 湾湾小何 | 温柔知性，Codex 默认 |
 | dayi | 大易 | 沉稳可靠，Pi 默认 |
 
-> 音色由 iLLM 服务端管理，需在 iLLM 的 `config.json` 中配置对应 voice 的参考音频。
+> 音色由本地 TTS 模型根据 `refAudio` + `refText` 生成；不配置参考音频时使用模型默认声音。
 
 音色匹配规则：`显式指定 --voice` > `sourceVoices 映射` > `defaultVoice`
 
@@ -125,24 +124,74 @@ make clean                # 清理 .build
 
 ```json
 {
-  "api": {
-    "baseURL": "tcp://127.0.0.1:8150",
-    "ttsModel": "Qwen3-TTS-12Hz-1.7B-Base-8bit"
+  "models": {
+    "asrPath": "~/.config/ivox/model/Qwen3-ASR-1.7B-4bit",
+    "ttsPath": "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+  },
+  "tts": {
+    "language": "Chinese",
+    "streamingInterval": 0.08,
+    "maxRetries": 2,
+    "retryDelayMs": 500,
+    "outputSampleRate": 48000
+  },
+  "playback": {
+    "interruptCurrent": true,
+    "idleReviveSeconds": 600,
+    "drainBaseTimeoutSeconds": 10
+  },
+  "mediaControl": {
+    "enabled": true,
+    "baseURL": "http://127.0.0.1:8888",
+    "pausePath": "/api/pause",
+    "resumePath": "/api/play"
   },
   "speechInput": {
     "enabled": true,
     "language": "zh",
     "autoEnter": true,
-    "maxRecordingSeconds": 30,
-    "model": "Qwen3-ASR-1.7B-4bit"
+    "maxRecordingSeconds": 30
   },
   "defaultVoice": "mizai",
   "sourceVoices": { "claude": "taozi", "codex": "wanwan", "pi": "dayi" },
   "voices": [
-    { "id": "mizai", "name": "米仔", "description": "默认音色" }
+    {
+      "id": "mizai",
+      "name": "米仔",
+      "refAudio": "~/.config/ivox/voices/ref_mizai.wav",
+      "refText": "大家好，我是米仔。",
+      "description": "默认音色"
+    }
   ]
 }
 ```
+
+JSON 本身不支持注释，字段说明放在这里：
+
+| 字段 | 说明 |
+|------|------|
+| `models.asrPath` | 本地 ASR 模型目录 |
+| `models.ttsPath` | 本地 TTS 模型目录 |
+| `tts.language` | TTS 生成语言，中文默认 `Chinese` |
+| `tts.streamingInterval` | 流式音频输出间隔，越小首包越快，默认 `0.08` |
+| `tts.maxRetries` | TTS 合成失败后的重试次数 |
+| `tts.retryDelayMs` | TTS 重试间隔，单位毫秒 |
+| `tts.outputSampleRate` | 播放器输出采样率，默认 `48000` |
+| `playback.interruptCurrent` | 新消息是否立即打断旧播报，默认 `true` |
+| `playback.idleReviveSeconds` | 音频引擎空闲多久后播报前主动复活 |
+| `playback.drainBaseTimeoutSeconds` | 等待音频缓冲播完的基础超时时间 |
+| `mediaControl.enabled` | 是否调用 iDict 暂停/恢复音乐；没运行 iDict 可设为 `false` |
+| `mediaControl.baseURL` | iDict 服务地址 |
+| `mediaControl.pausePath` | 暂停音乐 API 路径 |
+| `mediaControl.resumePath` | 恢复音乐 API 路径 |
+| `speechInput.enabled` | 是否启用按住右侧 ⌘ 的语音输入 |
+| `speechInput.language` | ASR 识别语言 |
+| `speechInput.autoEnter` | 粘贴识别结果后是否自动回车 |
+| `speechInput.maxRecordingSeconds` | 单次最长录音秒数 |
+| `defaultVoice` | 默认音色 ID |
+| `sourceVoices` | 不同来源到音色 ID 的映射 |
+| `voices[].refAudio` | 音色参考音频路径 |
+| `voices[].refText` | 参考音频对应文本 |
 
 部署文件全部在 `~` 下，删掉项目目录不影响运行。
 
@@ -150,8 +199,8 @@ make clean                # 清理 .build
 
 - macOS 14 Sonoma+
 - Apple Silicon (M1+)
-- Swift 6 / Xcode 15+
-- [iLLM](https://github.com/xdfnet/iLLM) — TTS 语音合成 + ASR 语音识别服务
+- Swift 6 / Xcode 16+
+- [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) — 本地 TTS / ASR 推理
 - [iDict](https://github.com/xdfnet/iDict) — 媒体控制（保持运行即可，无需额外配置）
 
 ## 许可

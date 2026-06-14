@@ -36,11 +36,17 @@ struct VoiceAdd: ParsableCommand {
         abstract: "添加音色配置"
     )
 
-    @Option(name: .shortAndLong, help: "音色 ID（对应 iLLM 服务端 voice 参数）")
+    @Option(name: .shortAndLong, help: "音色 ID")
     var id: String
 
     @Option(name: .shortAndLong, help: "音色名称")
     var name: String?
+
+    @Option(help: "参考音频路径")
+    var refAudio: String?
+
+    @Option(help: "参考音频对应文本")
+    var refText: String?
 
     @Option(name: .shortAndLong, help: "音色描述")
     var description: String?
@@ -57,6 +63,8 @@ struct VoiceAdd: ParsableCommand {
         let voice = VoiceInfo(
             id: id,
             name: name ?? id,
+            refAudio: refAudio,
+            refText: refText,
             description: description
         )
         config.voices.append(voice)
@@ -94,4 +102,3 @@ struct VoiceRemove: ParsableCommand {
         print("[✓] 已删除音色: \(voice.name ?? id) (\(id))")
     }
 }
-

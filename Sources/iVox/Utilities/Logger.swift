@@ -1,7 +1,7 @@
 import Foundation
 import os.log
 
-private let maxLogSize: UInt64 = 1 * 1024 * 1024  // 1MB
+private let maxLogSize: UInt64 = 5 * 1024 * 1024
 
 enum Log {
     private static let subsystem = "com.user.ivox"
@@ -38,7 +38,7 @@ enum Log {
             }
             guard let handle = FileHandle(forWritingAtPath: filePath) else { return }
             defer { try? handle.close() }
-            try? handle.seekToEnd()
+            _ = try? handle.seekToEnd()
             try? handle.write(contentsOf: data)
         }
     }

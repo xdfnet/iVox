@@ -10,7 +10,7 @@ struct StopCommand: ParsableCommand {
     func run() throws {
         let socketPath = NSString(string: "~/.config/ivox/ivox.sock").expandingTildeInPath
         do {
-            try SocketClient.send("__IAURA_STOP__", to: socketPath)
+            try SocketClient.send("__IVOX_STOP__", to: socketPath)
             print("[✓] 已发送停止指令")
         } catch {
             throw CleanExit.message("无法连接守护进程: \(error)")

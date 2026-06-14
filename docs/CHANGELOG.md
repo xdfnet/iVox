@@ -2,23 +2,26 @@
 
 ## v2.0.0 — 2026-06-14
 
-### 架构变更：本地 MLX 推理 → iLLM API
+### 架构变更：iLLM API → 本地 MLX 推理
 
-- 移除 MLX 本地模型推理（`mlx-audio-swift` 依赖）
-- 改为调用 [iLLM](https://github.com/xdfnet/iLLM) TTS API（`POST /v1/audio/speech`）
-- 支持 HTTP chunked transfer encoding 流式响应
-- 配置 `model.path` → `api.baseURL` + `api.ttsModel`
-- 音色不再需要本地参考音频文件，由 iLLM 服务端统一管理
+- 新增 `mlx-audio-swift`，TTS / ASR 改为进程内本地模型推理
+- 配置 `api.baseURL` / `api.ttsModel` → `models.ttsPath` / `models.asrPath`
+- 音色重新支持本地 `refAudio` + `refText` 参考音频配置
+- ASR 模型仅在语音输入启用时加载，减少禁用场景的启动成本
+- TTS PCM 转换改为按模型采样率重采样到播放器采样率，避免固定 24k 假设导致变速
+- 新请求会立即取消正在合成/播放的旧播报，避免长文本占住队列导致后续消息卡住
+- 新增 `tts` / `playback` / `mediaControl` 配置块，可调语言、流式间隔、重试、输出采样率、打断策略和 iDict 地址
+- Daemon 启动顺序优化：先监听 socket，再后台加载/预热 TTS 与 ASR，冷启动时 hook 不再误判服务未启动
+- Release 构建切换为 `-Osize`，规避 `MLXAudioTTS` 在 Swift `-O` 下触发的编译器崩溃
+- 测试更新到新的 `models` 配置结构
 
 ### 移除
-- MLX GPU 模型加载、预热逻辑
-- 模型下载步骤（`make model`）
-- 本地参考音频文件管理（`voice add` 不再需要 `--ref-audio`/`--ref-text`）
-- `default.metallib` Metal 着色器部署
+- iLLM TTS / ASR TCP/HTTP 客户端链路
+- `api.baseURL` / `api.ttsModel` 配置
 
 ### 文档
-- README：更新徽章、配置示例、安装流程、依赖说明
-- 架构文档：数据流图改为 iLLM API 调用链路，部署结构简化
+- README：更新徽章、模型目录、配置示例、依赖说明
+- 架构文档：数据流图改为本地 MLX 推理链路
 
 ## v1.3.1 — 2026-06-12
 

@@ -7,7 +7,7 @@ LABEL      := com.user.ivox
 PLIST      := $(HOME)/Library/LaunchAgents/com.user.ivox.plist
 CONFIG     := $(HOME)/.config/ivox/config.json
 HOOK_SH    := $(HOME)/.config/ivox/hook-speak.sh
-IAURA_TS   := $(HOME)/.config/ivox/ivox.ts
+IVOX_TS    := $(HOME)/.config/ivox/ivox.ts
 LOG        := $(HOME)/.config/ivox/daemon.log
 
 # 代码签名 (macOS 要求可执行文件有效签名)
@@ -33,14 +33,14 @@ init:
 	@chmod 755 $(HOOK_SH)
 	@echo "✓  hook: $(HOOK_SH)"
 	# Pi extension
-	@cp Sources/iVox/Resources/ivox.ts $(IAURA_TS)
-	@echo "✓  Pi extension: $(IAURA_TS)"
+	@cp Sources/iVox/Resources/ivox.ts $(IVOX_TS)
+	@echo "✓  Pi extension: $(IVOX_TS)"
 	# ── Hook 安装（已存在则跳过）──
-	@python3 scripts/install-hooks.py "$(HOOK_SH)" "$(IAURA_TS)" 
+	@python3 scripts/install-hooks.py "$(HOOK_SH)" "$(IVOX_TS)" 
 
 # ─── 第 2 层：依赖 build ──────────────────────────
 build:
-	swift build -c release
+	swift build -c release -Xswiftc -Osize
 
 deploy: build
 	@mkdir -p $(RUNTIME) $(HOME)/.local/bin

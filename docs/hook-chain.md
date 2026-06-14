@@ -30,7 +30,7 @@
                     │   └───────┬───────┘ │
                     │           ▼         │
                     │   ┌───────────────┐ │
-                    │   │ PlaybackQueue │ │  ← 丢弃旧任务
+                    │   │ PlaybackQueue │ │  ← 只保留最新
                     │   │   (actor)     │ │
                     │   └───────┬───────┘ │
                     │           ▼         │
@@ -70,9 +70,9 @@ Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发，Pi 通
 
 `~/.config/ivox/hook-speak.sh`
 
-接收两个参数：`--source <name>` 和文本内容。职责：
+接收来源参数（如 `codex` / `claude`），从 Stop Hook 的 stdin JSON 提取最后一条 assistant message。职责：
 
-- 从 stdin 或参数读取文本
+- 从 stdin 读取 Hook payload
 - 提取最后一条 assistant message
 - 调用 `ivox speak --source <source> <text>`
 - 后台运行 (`&`)，**不阻塞** AI 工具
@@ -146,17 +146,18 @@ AST 提取文本后，只做小范围 token 清理：
 `Sources/iVox/Audio/PlaybackQueue.swift`
 
 - `actor` 保证线程安全
-- **新任务入队时丢弃所有 pending 旧任务**（只说最新那句）
-- 串行处理，当前播放完才取下一条
-- 处理期间新入队任务不会丢失（play 后有二次 drain）
+- **新任务入队时丢弃 pending 旧任务**
+- `playback.interruptCurrent=true` 时，新任务会取消正在合成/播放的旧任务
+- 只说最新那句，避免长文本占住队列
 
 ### 7. MediaController
 
 `Sources/iVox/Audio/MediaController.swift`
 
-- 播放前调 iDict HTTP API `/api/pause` → 暂停音乐
-- 播放完调 `/api/play` → 恢复音乐
-- iDict 地址：`http://127.0.0.1:8888`
+- 播放前调 iDict HTTP API → 暂停音乐
+- 播放完调 iDict HTTP API → 恢复音乐
+- 地址、暂停路径、恢复路径由 `mediaControl` 配置控制
+- 不需要媒体控制时可设置 `mediaControl.enabled=false`
 - 不依赖辅助功能权限
 
 ### 8. TTSEngine
@@ -165,9 +166,9 @@ AST 提取文本后，只做小范围 token 清理：
 
 - 调用 MLX 本地模型：Qwen3-TTS-12Hz-1.7B-Base-8bit
 - **纯本地推理，不上传任何数据**
-- 流式生成 PCM chunk（约 80ms 一段）
-- 24k → 48k 上采样，float32 → int16 转换
-- 失败自动重试 2 次，间隔 500ms
+- 流式生成 PCM chunk，间隔由 `tts.streamingInterval` 控制
+- 按模型采样率重采样到 `tts.outputSampleRate`，再转为 int16 PCM
+- 重试次数和间隔由 `tts.maxRetries` / `tts.retryDelayMs` 控制
 
 Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义和标点控制。
 
@@ -178,7 +179,7 @@ Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义
 - 基于 `AVAudioEngine` + `AVAudioPlayerNode`
 - `scheduleBuffer` 流式写入，边生成边播
 - `drain()` 轮询等待所有 buffer 播完（超时自动重启引擎）
-- 空闲 10 分钟自动复活引擎
+- 空闲复活时间由 `playback.idleReviveSeconds` 控制
 - 监听休眠唤醒 / 耳机插拔 / 音频配置变更
 
 ### 10. 日志

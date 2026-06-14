@@ -41,4 +41,10 @@ final class AudioPipelineTests: XCTestCase {
         let pcm = audioToPCM([])
         XCTAssertEqual(pcm.count, 0)
     }
+
+    func testAudioToPCMCanKeepNativeSampleRate() {
+        let samples: [Float] = [0.0, 0.5, -0.5]
+        let pcm = audioToPCM(samples, inputSampleRate: 48_000, outputSampleRate: 48_000)
+        XCTAssertEqual(pcm.count, 6)
+    }
 }

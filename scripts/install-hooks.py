@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""安装 iAura hook 到 Claude/Codex/Pi，已存在则跳过。"""
+"""安装 iVox hook 到 Claude/Codex/Pi，已存在则跳过。"""
 import json, os, sys
 
 HOOK_SH = os.path.expanduser(sys.argv[1])
-IAURA_TS = os.path.expanduser(sys.argv[2])
+IVOX_TS = os.path.expanduser(sys.argv[2])
 
 # ── Claude ──
 claude_path = os.path.expanduser("~/.claude/settings.json")
@@ -53,7 +53,7 @@ if os.path.isfile(pi_path):
         print("[i] Pi extension 已存在")
     else:
         exts = [e for e in exts if not any(x in e.lower() for x in ["ispeak", "ivoice", "ivox", "iaura"])]
-        exts.append(IAURA_TS)
+        exts.append(IVOX_TS)
         d["extensions"] = exts
         with open(pi_path, "w") as f:
             json.dump(d, f, indent=2)
