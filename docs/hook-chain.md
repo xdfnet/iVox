@@ -5,19 +5,20 @@
 ## 总览
 
 ```
-┌─ Claude Code ────┐    ┌─ Codex ────────┐    ┌─ Pi ───────────────┐
-│ Stop event       │    │ Stop event     │    │ ivox.ts extension │
-│ settings.json    │    │ hooks.json     │    │                     │
-└─────┬────────────┘    └─────┬──────────┘    └─────┬───────────────┘
-      │                       │                      │
-      │    hook-speak.sh <source> <text>             │
-      └───────────────────────┼──────────────────────┘
-                              │
-                              ▼
-                    ┌─────────────────────┐
-                    │   ivox speak -s X  │
-                    │   Unix Socket 写入   │
-                    └─────────┬───────────┘
+┌─ Claude Code ────┐    ┌─ Codex ────────┐
+│ Stop event       │    │ Stop event     │
+│ settings.json    │    │ hooks.json     │
+└─────┬────────────┘    └─────┬──────────┘
+      │                       │
+      │    hook-speak.sh <source> <text>   │
+      │                       │
+      └──────────┬────────────┘
+                 │
+                 ▼
+       ┌─────────────────────┐
+       │   ivox speak -s X  │
+       │   Unix Socket 写入   │
+       └─────────┬───────────┘
                               │
                               ▼
                     ┌─────────────────────┐
@@ -62,9 +63,8 @@
 |------|----------|----------|
 | Claude Code | Stop Hook | `~/.claude/settings.json` |
 | Codex | Stop Hook | `~/.codex/hooks.json` |
-| Pi | Extension | `~/.pi/agent/settings.json` |
 
-Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发，Pi 通过 Extension 异步调用。
+Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发。
 
 ### 2. Hook 脚本
 

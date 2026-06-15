@@ -91,7 +91,7 @@ ivox voice remove my     # 删除音色
 | mizai | 米仔 | 温暖自然，默认音色 |
 | taozi | 甜妹桃子 | 活泼甜美，Claude 默认 |
 | wanwan | 湾湾小何 | 温柔知性，Codex 默认 |
-| dayi | 大易 | 沉稳可靠，Pi 默认 |
+| dayi | 大易 | 沉稳可靠 |
 
 > 音色由本地 TTS 模型根据 `refAudio` + `refText` 生成；不配置参考音频时使用模型默认声音。
 > `make deploy` 会把内置默认参考音频初始化到 `~/.config/ivox/voices/`，已有文件不会被覆盖。
@@ -100,11 +100,10 @@ ivox voice remove my     # 删除音色
 
 ### Hook 集成
 
-安装后自动接入三个 AI 工具：
+安装后自动接入两个 AI 工具：
 
 - **Claude Code** → `~/.claude/settings.json` — Stop Hook
 - **Codex** → `~/.codex/hooks.json` — Stop Hook（首次触发时授权即可）
-- **Pi** → `~/.pi/agent/settings.json` — Extension 注册
 
 Codex 用户注意：首次触发 Hook 时需要确认允许，之后自动生效。
 
@@ -166,8 +165,8 @@ make clean                # 清理 .build
     "autoEnter": true,
     "maxRecordingSeconds": 30
   },
+  "sourceVoices": { "claude": "taozi", "codex": "wanwan" },
   "defaultVoice": "mizai",
-  "sourceVoices": { "claude": "taozi", "codex": "wanwan", "pi": "dayi" },
   "voices": [
     {
       "id": "mizai",

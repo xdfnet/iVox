@@ -1,5 +1,13 @@
 # iVox 开发日志
 
+## v2.0.1 — 2026-06-15
+
+### 移除
+- Pi 集成支持：删除 ivox.ts 扩展、install-hooks.py 中 Pi 安装逻辑、runtime.sh 中 Pi 部署
+- dayi 音色保留，配置中 `sourceVoices` 去掉 `"pi": "dayi"`
+- `--source` 选项帮助文本更新为 `claude/codex`
+- 文档同步清理：README、architecture.md、hook-chain.md
+
 ## v2.0.0 — 2026-06-14
 
 ### 架构变更：iLLM API → 本地 MLX 推理

@@ -10,7 +10,6 @@ LABEL="com.user.ivox"
 PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 CONFIG="${HOME}/.config/ivox/config.json"
 HOOK_SH="${HOME}/.config/ivox/hook-speak.sh"
-IVOX_TS="${HOME}/.config/ivox/ivox.ts"
 LOG="${HOME}/.config/ivox/daemon.log"
 SOCKET="${HOME}/.config/ivox/ivox.sock"
 VOICE_DIR="${HOME}/.config/ivox/voices"
@@ -46,10 +45,8 @@ init_config() {
   chmod 755 "${HOOK_SH}"
   echo "✓  hook: ${HOOK_SH}"
 
-  cp "${ROOT}/Sources/iVox/Resources/ivox.ts" "${IVOX_TS}"
-  echo "✓  Pi extension: ${IVOX_TS}"
 
-  python3 "${ROOT}/scripts/install-hooks.py" "${HOOK_SH}" "${IVOX_TS}"
+  python3 "${ROOT}/scripts/install-hooks.py" "${HOOK_SH}"
 }
 
 install_voices() {

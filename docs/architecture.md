@@ -3,15 +3,15 @@
 ## 整体
 
 ```
-┌─ Claude Code ──┐    ┌─ Codex ────────┐    ┌─ Pi ──────────┐
-│ hook-speak.sh   │    │ hook-speak.sh  │    │ ivox.ts       │
-│ bash ... claude │    │ bash ... codex │    │ ivox speak    │
-└────┬────────────┘    └────┬───────────┘    └────┬───────────┘
-     │                      │                      │
-     └──────────────────────┼──────────────────────┘
-                            │ ivox speak --source <name> <text>
-                            ▼
-                   Unix Socket (~/.config/ivox/ivox.sock)
+┌─ Claude Code ──┐    ┌─ Codex ────────┐
+│ hook-speak.sh   │    │ hook-speak.sh  │
+│ bash ... claude │    │ bash ... codex │
+└────┬────────────┘    └────┬───────────┘
+     │                      │
+     └──────────┬───────────┘
+                │ ivox speak --source <name> <text>
+                ▼
+       Unix Socket (~/.config/ivox/ivox.sock)
                             │
                             ▼
 ┌───────────────────────────────────────────────────────────┐
@@ -105,7 +105,7 @@ ivox voice list
 | `TTS/` | `Sources/iVox/TTS/TTSEngine.swift` | 本地 MLX 流式推理，支持配置化重试 |
 | `Utilities/` | `Sources/iVox/Utilities/Logger.swift` | OSLog + 文件日志，5MB 轮转 |
 | `iVoxKit/` | `Sources/iVoxKit/` | 共享库：Config、TextCleaner、AudioPipeline |
-| `scripts/` | `scripts/install-hooks.py` | 安装 hook 到 Claude / Codex / Pi |
+| `scripts/` | `scripts/install-hooks.py` | 安装 hook 到 Claude / Codex |
 
 `SetupCommand`、`ModelCommand`、`HookInstaller` 已移除。Makefile 只保留流程编排，配置、参考音频、二进制部署和 launchd 操作集中在 `scripts/runtime.sh`，模型下载在 `scripts/download-models.py`。
 
@@ -201,7 +201,6 @@ ConnectionHandler.extractVoicePrefix():
 ~/.config/ivox/model/                      # 本地 TTS / ASR 模型
 ~/.config/ivox/voices/                     # 可选参考音频
 ~/.config/ivox/hook-speak.sh               # Hook 脚本
-~/.config/ivox/ivox.ts                    # Pi 扩展
 ~/Library/LaunchAgents/com.user.ivox.plist  # launchd 守护
 ```
 
@@ -213,6 +212,5 @@ TTS / ASR 在本机加载模型推理，不需要额外启动 iLLM 服务。
 |------|----------|------|
 | Claude Code | `~/.claude/settings.json` | Stop → hook-speak.sh claude |
 | Codex | `~/.codex/hooks.json` | Stop → hook-speak.sh codex（首次触发时授权即可） |
-| Pi | `~/.pi/agent/settings.json` | Extension → ivox.ts → ivox speak --source pi |
 
 由 `scripts/install-hooks.py` 统一安装，已存在则跳过。`make init` 幂等调用。
