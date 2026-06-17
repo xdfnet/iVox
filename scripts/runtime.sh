@@ -77,10 +77,8 @@ sign_bin() {
 }
 
 deploy_bin() {
-  mkdir -p "${RUNTIME}" "${HOME}/.local/bin"
-  cp "${ROOT}/.build/release/iVox" "${BIN}"
-  chmod 755 "${BIN}"
-  printf '#!/bin/bash\nexec "%s" "$@"\n' "${BIN}" > "${LAUNCHER}"
+  mkdir -p "${HOME}/.local/bin"
+  cp "${ROOT}/.build/release/iVox" "${LAUNCHER}"
   chmod 755 "${LAUNCHER}"
   sign_bin
 }
@@ -142,8 +140,8 @@ start_launchd() {
 uninstall_runtime() {
   launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || true
   rm -f "${PLIST}"
-  rm -rf "${RUNTIME}"
   rm -f "${LAUNCHER}"
+  rm -rf "${HOME}/.local/share/ivox/runtime"
   echo "✓  已卸载（保留 ~/.config/ivox/）"
 }
 
