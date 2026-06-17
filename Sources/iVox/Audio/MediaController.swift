@@ -25,13 +25,27 @@ struct MediaController {
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 2
-        do {
-            let (_, response) = try await URLSession.shared.data(for: request)
-            if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                Log.error("媒体控制返回非 200: \(http.statusCode)")
+
+        for attempt in 0...1 {
+            do {
+                let (_, response) = try await URLSession.shared.data(for: request)
+                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+                    Log.error("媒体控制返回非 200: \(http.statusCode)")
+                    if attempt == 0 {
+                        Log.info("媒体控制请求失败，500ms 后重试")
+                        try await Task.sleep(nanoseconds: 500_000_000)
+                        continue
+                    }
+                }
+                return
+            } catch {
+                Log.error("媒体控制请求失败: \(error.localizedDescription)")
+                if attempt == 0 {
+                    Log.info("媒体控制请求失败，500ms 后重试")
+                    try? await Task.sleep(nanoseconds: 500_000_000)
+                    continue
+                }
             }
-        } catch {
-            Log.error("媒体控制请求失败: \(error.localizedDescription)")
         }
     }
 }
