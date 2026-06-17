@@ -29,7 +29,7 @@
 
 ## 模型
 
-iVox 使用 [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) 在本机做 TTS / ASR 推理。安装时会通过 ModelScope 从 [mlx-community](https://www.modelscope.cn/organization/mlx-community) 下载默认模型：
+iVox 使用 [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) 在本机做 TTS / ASR 推理。安装时自动从 HuggingFace 下载量化好的 MLX 模型：
 
 ```bash
 ~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit
@@ -46,6 +46,14 @@ mlx-community/Qwen3-ASR-1.7B-4bit
 已有完整模型时会自动跳过下载。建议使用 Apple Silicon；模型加载和推理会走 MLX / Metal。
 
 ## 安装
+
+### 方式一：下载二进制（推荐，无需 Xcode）
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/master/scripts/install-binary.sh | bash
+```
+
+### 方式二：编译安装（需要 Xcode）
 
 ```bash
 git clone https://github.com/xdfnet/iVox && cd iVox

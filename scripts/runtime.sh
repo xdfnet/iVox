@@ -80,6 +80,12 @@ deploy_bin() {
   mkdir -p "${HOME}/.local/bin"
   cp "${ROOT}/.build/release/iVox" "${LAUNCHER}"
   chmod 755 "${LAUNCHER}"
+  # 复制 mlx Metal shader bundle（无 bundle 时二进制启动会报 metallib 找不到）
+  local mlx_bundle="${ROOT}/.build/out/Products/Release/mlx-swift_Cmlx.bundle"
+  if [[ -d "$mlx_bundle" ]]; then
+    rm -rf "${HOME}/.local/bin/mlx-swift_Cmlx.bundle"
+    cp -R "$mlx_bundle" "${HOME}/.local/bin/"
+  fi
   sign_bin
 }
 
