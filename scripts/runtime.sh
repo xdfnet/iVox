@@ -46,7 +46,7 @@ init_config() {
   echo "✓  hook: ${HOOK_SH}"
 
 
-  python3 "${ROOT}/scripts/install-hooks.py" "${HOOK_SH}"
+  "${ROOT}/scripts/install-hooks.sh" "${HOOK_SH}"
 }
 
 install_voices() {

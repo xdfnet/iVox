@@ -2,8 +2,6 @@
 
 SWIFT_RELEASE_FLAGS := -c release -Xswiftc -Osize
 MODEL_DIR := $(HOME)/.config/ivox/model
-MODELSCOPE_VENV := $(HOME)/.local/share/ivox/modelscope-venv
-MODELSCOPE_PY := $(MODELSCOPE_VENV)/bin/python
 RUNTIME := scripts/runtime.sh
 
 all: install
@@ -27,13 +25,8 @@ check:
 init:
 	@$(RUNTIME) init
 
-$(MODELSCOPE_PY):
-	@mkdir -p $(HOME)/.local/share/ivox
-	python3 -m venv $(MODELSCOPE_VENV)
-	$(MODELSCOPE_PY) -m pip install -U pip modelscope
-
-models: $(MODELSCOPE_PY)
-	$(MODELSCOPE_PY) scripts/download-models.py --model-root "$(MODEL_DIR)"
+models:
+	@scripts/download-models.sh "$(MODEL_DIR)"
 
 voices:
 	@$(RUNTIME) voices
