@@ -14,7 +14,7 @@ LOG="${HOME}/.config/ivox/daemon.log"
 SOCKET="${HOME}/.config/ivox/ivox.sock"
 VOICE_DIR="${HOME}/.config/ivox/voices"
 VOICE_SRC="${ROOT}/Sources/iVox/Resources/voices"
-SIGN_HASH="4A287668E97BC130AA6D19F4D64799394CAACBAD"
+SIGN_HASH="D4DF3B517F9E8EBF2606B8F29C646AB54A2F65CA"
 
 voice_files=(
   ref_mizai.wav
