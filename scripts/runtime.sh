@@ -101,6 +101,7 @@ write_launchd_plist() {
     <string>serve</string>
   </array>
   <key>WorkingDirectory</key><string>${HOME}/.local/bin</string>
+  <key>ProcessType</key><string>Background</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>${LOG}</string>
