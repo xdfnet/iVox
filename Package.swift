@@ -13,7 +13,8 @@ let package = Package(
     targets: [
         .target(
             name: "iVoxKit",
-            dependencies: []
+            dependencies: [],
+            swiftSettings: [.unsafeFlags(["-O"])], // 绕开 MLXAudioTTS 在 Swift 6 -O 下的编译器 crash
         ),
         .executableTarget(
             name: "iVox",
@@ -24,9 +25,8 @@ let package = Package(
                 .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
             ],
-            resources: [
-                .copy("Resources"),
-            ]
+            resources: [.copy("Resources")],
+            swiftSettings: [.unsafeFlags(["-O"])], // 绕开 MLXAudioTTS 在 Swift 6 -O 下的编译器 crash
         ),
         .testTarget(
             name: "iVoxTests",
