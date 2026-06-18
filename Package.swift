@@ -8,13 +8,15 @@ let package = Package(
     ],
     dependencies: [
         .package(url: "https://github.com/apple/swift-argument-parser.git", from: "1.5.0"),
+        .package(url: "https://github.com/apple/swift-markdown.git", branch: "main"),
         .package(url: "https://github.com/Blaizzy/mlx-audio-swift.git", branch: "main"),
     ],
     targets: [
         .target(
             name: "iVoxKit",
-            dependencies: [],
-            swiftSettings: [.unsafeFlags(["-O"])], // 绕开 MLXAudioTTS 在 Swift 6 -O 下的编译器 crash
+            dependencies: [
+                .product(name: "Markdown", package: "swift-markdown"),
+            ]
         ),
         .executableTarget(
             name: "iVox",
@@ -25,8 +27,7 @@ let package = Package(
                 .product(name: "MLXAudioSTT", package: "mlx-audio-swift"),
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
             ],
-            resources: [.copy("Resources")],
-            swiftSettings: [.unsafeFlags(["-O"])], // 绕开 MLXAudioTTS 在 Swift 6 -O 下的编译器 crash
+            resources: [.copy("Resources")]
         ),
         .testTarget(
             name: "iVoxTests",

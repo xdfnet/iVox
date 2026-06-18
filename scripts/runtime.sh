@@ -4,7 +4,6 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 
 RUNTIME="${HOME}/.local/share/ivox/runtime"
-BIN="${RUNTIME}/iVox"
 LAUNCHER="${HOME}/.local/bin/ivox"
 LABEL="com.user.ivox"
 PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
@@ -69,10 +68,10 @@ install_voices() {
 }
 
 sign_bin() {
-  if codesign --force --sign "${SIGN_HASH}" "${BIN}" 2>/dev/null; then
+  if codesign --force --sign "${SIGN_HASH}" "${LAUNCHER}" 2>/dev/null; then
     echo "✓  签名完成"
   else
-    echo "⚠️  签名失败"
+    echo "⚠️  签名失败: ${LAUNCHER}"
   fi
 }
 
