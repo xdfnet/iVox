@@ -1,8 +1,16 @@
 import Foundation
 import iVoxKit
 
+// @unchecked Sendable: 所有访问已通过 actor（PlaybackQueue）或主线程（SpeechInputService）串行化
+private final class MediaControllerState: @unchecked Sendable {
+    var lastFailureTime: Date?
+    init() {}
+}
+
 struct MediaController {
     private let config: MediaControlConfig
+    private let state = MediaControllerState()
+    private let cooldownInterval: TimeInterval = 5.0
 
     init(config: MediaControlConfig) {
         self.config = config
@@ -22,6 +30,12 @@ struct MediaController {
     private func send(_ path: String) async {
         guard config.enabled else { return }
         guard let url = URL(string: config.baseURL + path) else { return }
+
+        // 冷却期内跳过，避免连续重试轰炸
+        if let lastFail = state.lastFailureTime,
+           Date().timeIntervalSince(lastFail) < cooldownInterval {
+            return
+        }
         var request = URLRequest(url: url)
         request.httpMethod = "GET"
         request.timeoutInterval = 2
@@ -39,6 +53,7 @@ struct MediaController {
                 }
                 return
             } catch {
+                state.lastFailureTime = Date()
                 Log.error("媒体控制请求失败: \(error.localizedDescription)")
                 if attempt == 0 {
                     Log.info("媒体控制请求失败，500ms 后重试")

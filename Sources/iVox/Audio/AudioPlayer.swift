@@ -14,6 +14,8 @@ final class AudioPlayer: @unchecked Sendable {
     private var started = false
     private var lastActivity = Date()
     private var needsEngineRevive = false
+    private var lastReviveFailure: Date?
+    private let reviveCooldown: TimeInterval = 30
     private let config: PlaybackConfig
 
     init(config: PlaybackConfig) {
@@ -65,6 +67,15 @@ final class AudioPlayer: @unchecked Sendable {
 
     func prepareForPlayback() {
         serialQueue.sync {
+            // 引擎永久失败后定期重试
+            if !started, let lastFail = lastReviveFailure,
+               Date().timeIntervalSince(lastFail) > reviveCooldown {
+                Log.info("引擎上次异常退出已超过 \(Int(reviveCooldown))s 冷却期，尝试重初始化")
+                if reinitializeEngine() {
+                    started = true
+                    lastReviveFailure = nil
+                }
+            }
             reviveIfNeeded()
             if needsEngineRevive {
                 Log.info("音频配置已变更，播报前重启引擎")
@@ -127,6 +138,37 @@ final class AudioPlayer: @unchecked Sendable {
         }
     }
 
+    /// 全量重初始化：重新创建并启动 engine（attach/connect/start），用于永久失败后的冷却重试
+    private func reinitializeEngine() -> Bool {
+        node.stop()
+        engine.stop()
+        pendingCount = 0
+
+        // 断开所有旧连接
+        engine.disconnectNodeOutput(node)
+        engine.disconnectNodeInput(engine.mainMixerNode)
+
+        engine.attach(node)
+        engine.connect(node, to: engine.mainMixerNode, format: format)
+        engine.prepare()
+
+        for attempt in 1...3 {
+            do {
+                try engine.start()
+                node.play()
+                needsEngineRevive = false
+                Log.info("AudioEngine 重初始化成功 (第 \(attempt)/3 次)")
+                return true
+            } catch {
+                Log.error("AudioEngine 重初始化失败 (第 \(attempt)/3 次): \(error)")
+                if attempt < 3 {
+                    Thread.sleep(forTimeInterval: 1.0)
+                }
+            }
+        }
+        return false
+    }
+
     /// 重启引擎：stop → start → play，重试 3 次，间隔 1s
     private func reviveEngine() {
         node.stop()
@@ -147,8 +189,8 @@ final class AudioPlayer: @unchecked Sendable {
                 }
             }
         }
-        Log.error("AudioEngine 重启最终失败，后续所有播放将静默")
-        started = false
+        lastReviveFailure = Date()
+        Log.error("AudioEngine 重启最终失败，\(Int(reviveCooldown))s 冷却期后将重试")
     }
 
     // MARK: - 系统事件
