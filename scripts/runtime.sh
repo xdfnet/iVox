@@ -90,7 +90,7 @@ deploy_bin() {
 }
 
 write_launchd_plist() {
-  mkdir -p "${HOME}/Library/LaunchAgents" "${HOME}/.config/ivox"
+  mkdir -p "${HOME}/Library/LaunchAgents" "${HOME}/.config/ivox" "${RUNTIME}"
   cat > "${PLIST}" <<PLIST
 <?xml version="1.0" encoding="UTF-8"?>
 <!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
@@ -100,7 +100,7 @@ write_launchd_plist() {
     <string>${LAUNCHER}</string>
     <string>serve</string>
   </array>
-  <key>WorkingDirectory</key><string>${RUNTIME}</string>
+  <key>WorkingDirectory</key><string>${HOME}/.local/bin</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>${LOG}</string>
