@@ -132,7 +132,9 @@ final class SpeechInputService: @unchecked Sendable {
 
             Log.debug("语音输入: ⌘ 松开 → 结束录音")
             sendMediaRequest(mediaControl.resumePath)
-            finishRecording(recorder: recorder, audioURL: audioURL)
+            DispatchQueue.global().async {
+                self.finishRecording(recorder: recorder, audioURL: audioURL)
+            }
         }
     }
 
