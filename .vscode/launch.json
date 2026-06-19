@@ -1,0 +1,24 @@
+{
+    "configurations": [
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:iVox}",
+            "name": "Debug iVox",
+            "target": "iVox",
+            "configuration": "debug",
+            "preLaunchTask": "swift: Build Debug iVox"
+        },
+        {
+            "type": "swift",
+            "request": "launch",
+            "args": [],
+            "cwd": "${workspaceFolder:iVox}",
+            "name": "Release iVox",
+            "target": "iVox",
+            "configuration": "release",
+            "preLaunchTask": "swift: Build Release iVox"
+        }
+    ]
+}

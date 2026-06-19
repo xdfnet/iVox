@@ -1,7 +1,7 @@
 .PHONY: all install update check init models voices assets build deploy launchd restart uninstall run sign test version clean help
 
-# -Onone 而非 -Osize：mlx-swift 在 Swift 6 优化阶段会触发编译器内部崩溃（ICE）
-# 等待 mlx-swift 或编译器修复后可改回 -Osize 或 -O
+# -Onone（而非 -O/-Osize）：MLXAudioTTS 在 Swift 6 优化阶段会触发编译器内部崩溃（ICE）
+# 在 Package.swift 里对 iVox/iVoxKit 单独开 -O 来部分补偿性能损失
 SWIFT_RELEASE_FLAGS := -c release -Xswiftc -Onone
 MODEL_DIR := $(HOME)/.config/ivox/model
 RUNTIME := scripts/runtime.sh

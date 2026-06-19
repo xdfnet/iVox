@@ -70,6 +70,14 @@ if [[ ! -d "$BIN_DIR/mlx-swift_Cmlx.bundle" ]]; then
 fi
 ok "Metal shader $(du -h "$BIN_DIR/mlx-swift_Cmlx.bundle" | cut -f1)"
 
+# ── 3.5. ad-hoc 签名 ──
+section "ad-hoc 签名"
+if codesign --force --sign - "$BIN_DIR/ivox" 2>/dev/null; then
+  ok "ad-hoc 签名完成"
+else
+  info "ad-hoc 签名跳过（无 Xcode 命令行工具）"
+fi
+
 # ── 4. 配置 ──
 section "配置初始化"
 mkdir -p "$CONFIG_DIR" "$VOICE_DIR" "$RUNTIME_DIR"

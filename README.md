@@ -151,7 +151,7 @@ make clean                # 清理 .build
   },
   "tts": {
     "language": "Chinese",
-    "streamingInterval": 0.08,
+    "streamingInterval": 0.15,
     "maxRetries": 2,
     "retryDelayMs": 500,
     "outputSampleRate": 48000
@@ -194,7 +194,7 @@ JSON 本身不支持注释，字段说明放在这里：
 | `models.asrPath` | 本地 ASR 模型目录 |
 | `models.ttsPath` | 本地 TTS 模型目录 |
 | `tts.language` | TTS 生成语言，中文默认 `Chinese` |
-| `tts.streamingInterval` | 流式音频输出间隔，越小首包越快，默认 `0.08` |
+| `tts.streamingInterval` | 流式音频输出间隔，越大音频越连贯，默认 `0.15` |
 | `tts.maxRetries` | TTS 合成失败后的重试次数 |
 | `tts.retryDelayMs` | TTS 重试间隔，单位毫秒 |
 | `tts.outputSampleRate` | 播放器输出采样率，默认 `48000` |

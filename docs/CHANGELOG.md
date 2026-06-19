@@ -1,5 +1,17 @@
 # iVox 开发日志
 
+## v2.1.1 — 2026-06-19
+
+### 优化
+
+- **编译优化** — iVox/iVoxKit 单独开 `-O`，MLX 依赖继续用 `-Onone` 绕 ICE，推理编排代码显著提速
+- **进程优先级** — launchd `ProcessType` 从 `Background` 改为 `Standard`，避免调度优先级过低导致推理卡顿
+- **流式间隔调整** — `streamingInterval` 从 0.08s 增加到 0.15s，累积 2 帧再回调，减少音频片段开销
+
+### 修复
+
+- **二进制安装签名** — `install-binary.sh` 新增 ad-hoc 签名步骤，避免从 GitHub Release 下载的二进制在部分系统上无法运行
+
 ## v2.1.0 — 2026-06-18
 
 ### 改进

@@ -13,7 +13,6 @@ LOG="${HOME}/.config/ivox/daemon.log"
 SOCKET="${HOME}/.config/ivox/ivox.sock"
 VOICE_DIR="${HOME}/.config/ivox/voices"
 VOICE_SRC="${ROOT}/Sources/iVox/Resources/voices"
-SIGN_HASH="D4DF3B517F9E8EBF2606B8F29C646AB54A2F65CA"
 
 voice_files=(
   ref_mizai.wav
@@ -68,10 +67,10 @@ install_voices() {
 }
 
 sign_bin() {
-  if codesign --force --sign "${SIGN_HASH}" "${LAUNCHER}" 2>/dev/null; then
-    echo "✓  签名完成"
+  if codesign --force --sign - "${LAUNCHER}" 2>/dev/null; then
+    echo "✓  ad-hoc 签名完成"
   else
-    echo "⚠️  签名失败: ${LAUNCHER}"
+    echo "⚠️  ad-hoc 签名失败: ${LAUNCHER}"
   fi
 }
 
@@ -100,7 +99,7 @@ write_launchd_plist() {
     <string>serve</string>
   </array>
   <key>WorkingDirectory</key><string>${HOME}/.local/bin</string>
-  <key>ProcessType</key><string>Background</string>
+  <key>ProcessType</key><string>Standard</string>
   <key>RunAtLoad</key><true/>
   <key>KeepAlive</key><true/>
   <key>StandardOutPath</key><string>${LOG}</string>
