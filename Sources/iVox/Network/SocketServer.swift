@@ -5,12 +5,9 @@ import iVoxKit
 actor SocketServer {
     private var socketFD: Int32 = -1
     private var source: DispatchSourceRead?
-    private var handler: ConnectionHandler?
     private var socketPath: String?
 
     func start(path: String, handler: ConnectionHandler) throws {
-        self.handler = handler
-        self.socketPath = path
         unlink(path)
 
         socketFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
@@ -42,29 +39,31 @@ actor SocketServer {
         Log.info("Socket 监听: \(path)")
 
         let fd = socketFD
+        let capturedHandler = handler
+        self.socketPath = path
+
         source = DispatchSource.makeReadSource(fileDescriptor: fd, queue: .global())
         source?.setEventHandler { [weak self] in
-            Task { [weak self] in
-                await self?.accept()
-            }
+            self?.acceptAndHandle(fd: fd, handler: capturedHandler)
         }
         source?.setCancelHandler { Darwin.close(fd) }
         source?.activate()
     }
 
-    private func accept() async {
+    /// DispatchSource 直接调用（去掉中间 Task 层），handle 放到专用队列
+    private nonisolated func acceptAndHandle(fd: Int32, handler: ConnectionHandler) {
         var clientAddr = sockaddr_un()
         var len = socklen_t(MemoryLayout<sockaddr_un>.size)
         let clientFD = withUnsafeMutablePointer(to: &clientAddr) {
             $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
-                Darwin.accept(socketFD, $0, &len)
+                Darwin.accept(fd, $0, &len)
             }
         }
         if clientFD >= 0 {
             Log.info("Socket 接入: fd=\(clientFD)")
             // handle() 内含同步阻塞 read，放到专用队列避免占用 Swift 并发线程池
-            DispatchQueue.global().async { [handler] in
-                handler?.handle(fd: clientFD)
+            DispatchQueue.global().async {
+                handler.handle(fd: clientFD)
             }
         }
     }

@@ -8,8 +8,11 @@ final class SpeechInputService: @unchecked Sendable {
     private let mediaControl: MediaControlConfig
     private let recordDir: URL
     private var thread: Thread?
+    private var eventTap: CFMachPort?
+    private var runLoopSource: CFRunLoopSource?
     private let session = URLSession(configuration: .ephemeral)
     private let asrEngine: ASREngine
+    private var isWaitingForAccessibility = false
 
     private enum State {
         case idle
@@ -42,6 +45,15 @@ final class SpeechInputService: @unchecked Sendable {
     }
 
     func stop() {
+        isWaitingForAccessibility = false
+        if let runLoopSource {
+            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        }
+        if let eventTap {
+            CFMachPortInvalidate(eventTap)
+        }
+        eventTap = nil
+        runLoopSource = nil
         thread?.cancel()
         thread = nil
     }
@@ -57,8 +69,9 @@ final class SpeechInputService: @unchecked Sendable {
             return
         }
 
-        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), source, .commonModes)
+        eventTap = tap
+        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         Log.info("语音输入已启动 (⌘→说话→松开→粘贴)")
 
         CFRunLoopRun()
@@ -96,26 +109,30 @@ final class SpeechInputService: @unchecked Sendable {
     // MARK: - Key handling
 
     private func handleKey(isDown: Bool) {
-        stateQueue.sync {
-            switch state {
-            case .idle:
-                if isDown {
-                    sendMediaRequest(mediaControl.pausePath)
-                    Log.debug("语音输入: ⌘ 按下 → 暂停音乐 → 开始录音")
-                    if let (recorder, url) = startRecording() {
-                        state = .recording(recorder: recorder, audioURL: url)
-                    }
-                }
-            case .recording(let recorder, let audioURL):
-                if !isDown {
-                    Log.debug("语音输入: ⌘ 松开 → 结束录音")
-                    state = .idle
-                    sendMediaRequest(mediaControl.resumePath)
-                    DispatchQueue.global().async {
-                        self.finishRecording(recorder: recorder, audioURL: audioURL)
-                    }
-                }
+        if isDown {
+            // 按下 ⌘：检查状态，只有 idle 才能开始录音
+            let shouldStart: Bool = stateQueue.sync {
+                if case .idle = state { return true } else { return false }
             }
+            guard shouldStart else { return }
+
+            sendMediaRequest(mediaControl.pausePath)
+            Log.debug("语音输入: ⌘ 按下 → 暂停音乐 → 开始录音")
+
+            guard let (recorder, url) = startRecording() else { return }
+            stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
+        } else {
+            // 松开 ⌘：检查状态，只有 recording 才能结束
+            let job = stateQueue.sync { () -> (AVAudioRecorder, URL)? in
+                guard case .recording(let recorder, let audioURL) = state else { return nil }
+                state = .idle
+                return (recorder, audioURL)
+            }
+            guard let (recorder, audioURL) = job else { return }
+
+            Log.debug("语音输入: ⌘ 松开 → 结束录音")
+            sendMediaRequest(mediaControl.resumePath)
+            finishRecording(recorder: recorder, audioURL: audioURL)
         }
     }
 
@@ -206,7 +223,10 @@ final class SpeechInputService: @unchecked Sendable {
 
         let source = CGEventSource(stateID: .combinedSessionState)
         guard let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true),
-              let vUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false) else { return }
+              let vUp = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: false) else {
+            Log.error("语音输入: 模拟 ⌘V 事件创建失败")
+            return
+        }
         vDown.flags = .maskCommand
         vUp.flags = .maskCommand
         vDown.post(tap: .cgAnnotatedSessionEventTap)
@@ -214,10 +234,13 @@ final class SpeechInputService: @unchecked Sendable {
 
         if config.autoEnter {
             Thread.sleep(forTimeInterval: 0.05)
-            let enterDown = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true)
-            let enterUp = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false)
-            enterDown?.post(tap: .cgAnnotatedSessionEventTap)
-            enterUp?.post(tap: .cgAnnotatedSessionEventTap)
+            guard let enterDown = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true),
+                  let enterUp = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false) else {
+                Log.error("语音输入: 模拟回车事件创建失败")
+                return
+            }
+            enterDown.post(tap: .cgAnnotatedSessionEventTap)
+            enterUp.post(tap: .cgAnnotatedSessionEventTap)
         }
     }
 
@@ -253,15 +276,16 @@ final class SpeechInputService: @unchecked Sendable {
     }
 
     private func waitForAccessibility() {
-        DispatchQueue.global().async {
-            while !Thread.current.isCancelled {
+        isWaitingForAccessibility = true
+        DispatchQueue.global().async { [weak self] in
+            guard let self else { return }
+            while self.isWaitingForAccessibility {
                 Thread.sleep(forTimeInterval: 5)
                 let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
                 if AXIsProcessTrustedWithOptions(options) {
-                    DispatchQueue.main.async {
-                        Log.info("语音输入: 辅助功能已授权，重新启动")
-                        self.start()
-                    }
+                    Log.info("语音输入: 辅助功能已授权，重新启动")
+                    self.isWaitingForAccessibility = false
+                    self.start()
                     return
                 }
             }

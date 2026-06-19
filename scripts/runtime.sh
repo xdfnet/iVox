@@ -78,9 +78,10 @@ deploy_bin() {
   mkdir -p "${HOME}/.local/bin"
   cp "${ROOT}/.build/release/iVox" "${LAUNCHER}"
   chmod 755 "${LAUNCHER}"
-  # 复制 mlx Metal shader bundle（无 bundle 时二进制启动会报 metallib 找不到）
-  local mlx_bundle="${ROOT}/.build/out/Products/Release/mlx-swift_Cmlx.bundle"
-  if [[ -d "$mlx_bundle" ]]; then
+  # 动态查找 Metal shader bundle（位置随编译配置变化）
+  local mlx_bundle
+  mlx_bundle=$(find "${ROOT}/.build" -type d -name "mlx-swift_Cmlx.bundle" 2>/dev/null | head -1)
+  if [[ -n "$mlx_bundle" ]]; then
     rm -rf "${HOME}/.local/bin/mlx-swift_Cmlx.bundle"
     cp -R "$mlx_bundle" "${HOME}/.local/bin/"
   fi
@@ -115,6 +116,9 @@ start_launchd() {
   local domain="gui/$(id -u)"
   local output
 
+  # 清理可能残留的旧进程
+  pkill -x ivox 2>/dev/null || true
+
   write_launchd_plist
   launchctl bootout "${domain}" "${PLIST}" 2>/dev/null || \
     launchctl bootout "${domain}/${LABEL}" 2>/dev/null || true
@@ -131,12 +135,15 @@ start_launchd() {
   fi
 
   launchctl kickstart -k "${domain}/${LABEL}" 2>/dev/null || true
+  echo -n "等待守护进程就绪"
   for _ in {1..40}; do
-    [[ -S "${SOCKET}" ]] && break
+    [[ -S "${SOCKET}" ]] && { echo ""; break; }
+    echo -n "."
     sleep 0.25
   done
   if [[ ! -S "${SOCKET}" ]]; then
-    echo "✗  守护进程未就绪: ${SOCKET}"
+    echo ""
+    echo "✗  守护进程未就绪，请查看日志: ${LOG}"
     exit 1
   fi
   echo "✓  守护进程已启动"

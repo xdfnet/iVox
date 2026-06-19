@@ -10,6 +10,7 @@ actor Daemon {
     private let server = SocketServer()
     private let speechInput: SpeechInputService?
     private var shutdownContinuation: CheckedContinuation<Void, Never>?
+    private var isShuttingDown = false
 
     init(config: Config) {
         self.config = config
@@ -66,6 +67,8 @@ actor Daemon {
     }
 
     private func initiateShutdown() {
+        guard !isShuttingDown else { return }
+        isShuttingDown = true
         shutdownContinuation?.resume()
         shutdownContinuation = nil
     }
@@ -77,19 +80,16 @@ actor Daemon {
                 await engine.warmup(voiceID: config.defaultVoice)
             } catch {
                 Log.error("TTS 模型加载失败: \(error)")
-                return
             }
 
             if config.speechInput?.enabled ?? SpeechInputConfig.default.enabled {
-                do {
-                    try await asrEngine.load()
-                    speechInput?.start()
-                } catch {
-                    Log.error("ASR 模型加载失败: \(error)")
+                if !(await asrEngine.isLoaded) {
+                    do { try await asrEngine.load() }
+                    catch { Log.error("ASR 模型加载失败: \(error)") }
                 }
-            } else {
-                speechInput?.start()
             }
+
+            speechInput?.start()
         }
     }
 
