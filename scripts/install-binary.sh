@@ -32,15 +32,15 @@ case "$(uname -sm)" in
   *) echo "✗ 仅支持 macOS"; exit 1 ;;
 esac
 
-# ── 2. 下载二进制 ──
-section "下载 iVox 二进制"
+# ── 2. 下载安装包 ──
+section "下载 iVox"
 mkdir -p "$BIN_DIR"
 
 if [[ "$VERSION" == "latest" ]]; then
   ASSET_URL=$(curl -sfL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep "browser_download_url" | grep -v "\.bundle" | cut -d'"' -f4 | head -1)
+    | grep "browser_download_url" | grep "\.tar\.gz" | cut -d'"' -f4 | head -1)
 else
-  ASSET_URL="https://github.com/$REPO/releases/download/$VERSION/iVox"
+  ASSET_URL="https://github.com/$REPO/releases/download/$VERSION/ivox-${VERSION}.tar.gz"
 fi
 
 if [[ -z "$ASSET_URL" ]]; then
@@ -49,26 +49,11 @@ if [[ -z "$ASSET_URL" ]]; then
 fi
 
 echo "   来自: $ASSET_URL"
-curl -fL --progress-bar -o "$BIN_DIR/ivox" "$ASSET_URL"
+curl -fL --progress-bar -o /tmp/ivox-pkg.tar.gz "$ASSET_URL"
+tar xzf /tmp/ivox-pkg.tar.gz -C "$BIN_DIR"
 chmod 755 "$BIN_DIR/ivox"
-ok "二进制 $(du -h "$BIN_DIR/ivox" | cut -f1)"
-
-# ── 3. 下载 Metal bundle ──
-section "下载 Metal shader bundle"
-BUNDLE_URL="${ASSET_URL/iVox/mlx-swift_Cmlx.bundle.tar.gz}"
-rm -rf "$BIN_DIR/mlx-swift_Cmlx.bundle"
-if curl -sfL --progress-bar -o /tmp/ivox_bundle.tar.gz "$BUNDLE_URL" 2>/dev/null; then
-  tar xzf /tmp/ivox_bundle.tar.gz -C "$BIN_DIR" 2>/dev/null
-  rm -f /tmp/ivox_bundle.tar.gz
-fi
-# fallback: 从 repo 下载 bundle（如果 release 没有附带）
-if [[ ! -d "$BIN_DIR/mlx-swift_Cmlx.bundle" ]]; then
-  info "Release 未附带 Metal bundle，尝试从源构建..."
-  # 需要 git clone 编译
-  echo "✗ 请使用源码编译安装: git clone https://github.com/$REPO && cd iVox && make install"
-  exit 1
-fi
-ok "Metal shader $(du -h "$BIN_DIR/mlx-swift_Cmlx.bundle" | cut -f1)"
+rm -f /tmp/ivox-pkg.tar.gz
+ok "iVox $(du -h "$BIN_DIR/ivox" | cut -f1) + Metal shader"
 
 # ── 3.5. ad-hoc 签名 ──
 section "ad-hoc 签名"

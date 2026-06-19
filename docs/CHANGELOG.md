@@ -7,6 +7,7 @@
 - **编译优化** — iVox/iVoxKit 单独开 `-O`，MLX 依赖继续用 `-Onone` 绕 ICE，推理编排代码显著提速
 - **进程优先级** — launchd `ProcessType` 从 `Background` 改为 `Standard`，避免调度优先级过低导致推理卡顿
 - **流式间隔调整** — `streamingInterval` 从 0.08s 增加到 0.15s，累积 2 帧再回调，减少音频片段开销
+- **二进制安装简化** — 二进制和 Metal shader 合并为 `tar.gz` 单包，安装脚本只下载一个文件
 
 ### 修复
 
