@@ -12,7 +12,6 @@ final class SpeechInputService: @unchecked Sendable {
     private var runLoopSource: CFRunLoopSource?
     private let session = URLSession(configuration: .ephemeral)
     private let asrEngine: ASREngine
-    private var isWaitingForAccessibility = false
 
     private enum State {
         case idle
@@ -45,7 +44,6 @@ final class SpeechInputService: @unchecked Sendable {
     }
 
     func stop() {
-        isWaitingForAccessibility = false
         if let runLoopSource {
             CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         }
@@ -61,16 +59,26 @@ final class SpeechInputService: @unchecked Sendable {
     // MARK: - Event loop
 
     private func run() {
-        requestMicPermission()
+        // 检查两类权限
+        let hasMic = checkMicPermission()
+        let hasAccessibility: Bool
+        if let tap = createEventTap() {
+            eventTap = tap
+            hasAccessibility = true
+        } else {
+            hasAccessibility = checkAccessibilityPermission()
+        }
 
-        guard let tap = createEventTap() else {
-            Log.error("语音输入: 需要辅助功能权限")
-            waitForAccessibility()
+        // 缺权限则轮询等待，到手后自动重启
+        let needMic = !hasMic
+        let needAccessibility = !hasAccessibility
+        if needMic || needAccessibility {
+            if let tap = eventTap { CFMachPortInvalidate(tap); eventTap = nil }
+            waitForPermissions(needMic: needMic, needAccessibility: needAccessibility)
             return
         }
 
-        eventTap = tap
-        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap!, 0)
         CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         Log.info("语音输入已启动 (⌘→说话→松开→粘贴)")
 
@@ -263,34 +271,69 @@ final class SpeechInputService: @unchecked Sendable {
 
     // MARK: - Permissions
 
-    private func requestMicPermission() {
-        let status = AVCaptureDevice.authorizationStatus(for: .audio)
-        switch status {
-        case .notDetermined:
-            AVCaptureDevice.requestAccess(for: .audio) { granted in
-                Log.info("语音输入: 麦克风 \(granted ? "已授权" : "被拒绝")")
-            }
-        case .denied, .restricted:
-            Log.error("语音输入: 麦克风未授权")
-        default:
+    /// 检查麦克风权限，notDetermined 时阻塞等待用户选择
+    private func checkMicPermission() -> Bool {
+        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        case .authorized:
             Log.debug("语音输入: 麦克风已授权")
+            return true
+        case .restricted:
+            Log.error("语音输入: 麦克风受限，当前设备不支持")
+            return false
+        case .denied:
+            Log.error("语音输入: 麦克风未授权，请前往 系统设置 → 隐私与安全性 → 麦克风 启用")
+            return false
+        case .notDetermined:
+            let semaphore = DispatchSemaphore(value: 0)
+            final class _Box: @unchecked Sendable { var value = false }
+            let box = _Box()
+            AVCaptureDevice.requestAccess(for: .audio) { g in
+                box.value = g
+                semaphore.signal()
+            }
+            semaphore.wait()
+            let granted = box.value
+            if granted {
+                Log.info("语音输入: 麦克风已授权")
+                return true
+            }
+            Log.error("语音输入: 麦克风未授权，请前往 系统设置 → 隐私与安全性 → 麦克风 启用")
+            return false
+        @unknown default:
+            return false
         }
     }
 
-    private func waitForAccessibility() {
-        isWaitingForAccessibility = true
-        DispatchQueue.global().async { [weak self] in
-            guard let self else { return }
-            while self.isWaitingForAccessibility {
-                Thread.sleep(forTimeInterval: 5)
+    /// 检查辅助功能权限，notDetermined 时弹系统对话框
+    private func checkAccessibilityPermission() -> Bool {
+        let noPrompt = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): false] as CFDictionary
+        if AXIsProcessTrustedWithOptions(noPrompt) { return true }
+        // 弹一次系统对话框
+        let prompt = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
+        AXIsProcessTrustedWithOptions(prompt)
+        Log.error("语音输入: 缺少辅助功能权限，请前往 系统设置 → 隐私与安全性 → 辅助功能 启用 iVox")
+        return false
+    }
+
+    /// 轮询等待两类权限就绪，然后自动重启
+    private func waitForPermissions(needMic: Bool, needAccessibility: Bool) {
+        var needMic = needMic
+        var needAccessibility = needAccessibility
+        while needMic || needAccessibility {
+            Thread.sleep(forTimeInterval: 5)
+            if needMic, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
+                Log.info("语音输入: 麦克风已授权")
+                needMic = false
+            }
+            if needAccessibility {
                 let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
                 if AXIsProcessTrustedWithOptions(options) {
-                    Log.info("语音输入: 辅助功能已授权，重新启动")
-                    self.isWaitingForAccessibility = false
-                    self.start()
-                    return
+                    Log.info("语音输入: 辅助功能已授权")
+                    needAccessibility = false
                 }
             }
         }
+        Log.info("语音输入: 权限已就绪，重新启动")
+        start()
     }
 }
