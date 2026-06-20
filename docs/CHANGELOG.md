@@ -1,5 +1,22 @@
 # iVox 开发日志
 
+## v2.2.0 — 2026-06-20
+
+### 架构
+
+- **Task 取消架构** — PlaybackQueue 从 generation-counter 迁移到 Swift 结构化 Task 取消：`currentTask?.cancel()` + `defer` 清理 AudioPlayer，消除打断时的竞态条件
+- **AudioPlayer 职责收敛** — 移除 `activeGeneration` 和 generation 参数传递，AudioPlayer 只负责音频写入，不再参与取消逻辑
+- **TextCleaner 精简** — 102 行 → 53 行，去掉 block 拆分和硬编码 `。` 拼接，纯文本收集 + 块间空格分隔
+
+### 修复
+
+- **打断播放静音 bug** — `cancelPendingPlayback()` 在 enqueue 和 processNext 各调一次，第二次误清新 job 的音频缓冲区
+
+### 编译
+
+- **ICE 已修复** — Swift 6.4-dev (2026-06-15) 快照包含 LICM 修复，全局 `-Osize` 编译通过，Makefile 去掉 `-Onone`，Package.swift 去掉 per-target `unsafeFlags(["-O"])`
+- **二进制体积** — 68MB → 55MB（-19%）
+
 ## v2.1.1 — 2026-06-19
 
 ### 优化

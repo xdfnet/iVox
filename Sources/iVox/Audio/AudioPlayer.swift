@@ -88,15 +88,16 @@ final class AudioPlayer: @unchecked Sendable {
         }
     }
 
-    func drain(chunks: Int) async {
+    func drain(chunks: Int) async throws {
         let baseTimeout = Int(config.drainBaseTimeoutSeconds.rounded(.up))
         let maxWait = max(baseTimeout, Int(Double(chunks) * 0.08) + baseTimeout)
         let polls = maxWait * 20
         var drained = false
         for _ in 0..<polls {
+            try Task.checkCancellation()
             let done = serialQueue.sync { pendingCount == 0 }
             if done { drained = true; break }
-            try? await Task.sleep(nanoseconds: 50_000_000)
+            try await Task.sleep(nanoseconds: 50_000_000)
         }
         if !drained {
             Log.error("播放超时 (\(chunks) 块未完成)，AudioEngine 可能已挂，重启")

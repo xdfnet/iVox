@@ -17,7 +17,6 @@ let package = Package(
             dependencies: [
                 .product(name: "Markdown", package: "swift-markdown"),
             ],
-            swiftSettings: [.unsafeFlags(["-O"])], // MLX 依赖用 -Onone（Makefile），自有 target 开 -O 提速
         ),
         .executableTarget(
             name: "iVox",
@@ -29,7 +28,6 @@ let package = Package(
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
             ],
             resources: [.copy("Resources")],
-            swiftSettings: [.unsafeFlags(["-O"])], // MLX 依赖用 -Onone（Makefile），自有 target 开 -O 提速
         ),
         .testTarget(
             name: "iVoxTests",
