@@ -54,6 +54,6 @@ private struct TextCollector: MarkupWalker {
 
 private extension String {
     var removingEmoji: String {
-        unicodeScalars.filter { !$0.properties.isEmoji }.map(String.init).joined()
+        unicodeScalars.filter { s in s.value <= 127 || !s.properties.isEmoji }.map(String.init).joined()
     }
 }
