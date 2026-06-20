@@ -15,7 +15,7 @@ private struct TextCollector: MarkupWalker {
     private var lastWasSpace = true
 
     mutating func visitText(_ node: Text) {
-        let t = node.string.trimmingCharacters(in: .whitespacesAndNewlines)
+        let t = node.string.trimmingCharacters(in: .whitespacesAndNewlines).removingEmoji
         if t.isEmpty { return }
         appendSpace()
         output += t
@@ -34,10 +34,10 @@ private struct TextCollector: MarkupWalker {
     mutating func visitEmphasis(_ node: Emphasis)   { descendInto(node) }
     mutating func visitStrong(_ node: Strong)       { descendInto(node) }
 
-    mutating func visitInlineCode(_ node: InlineCode) { appendSpace(); output += node.code; appendSpace() }
+    mutating func visitInlineCode(_ node: InlineCode) { appendSpace(); output += node.code.removingEmoji; appendSpace() }
 
     mutating func visitCodeBlock(_ node: CodeBlock) {
-        let code = node.code.trimmingCharacters(in: .whitespacesAndNewlines)
+        let code = node.code.trimmingCharacters(in: .whitespacesAndNewlines).removingEmoji
         if !code.isEmpty { appendSpace(); output += code; appendSpace() }
     }
 
@@ -49,5 +49,11 @@ private struct TextCollector: MarkupWalker {
 
     private mutating func appendSpace() {
         if !lastWasSpace { output += " "; lastWasSpace = true }
+    }
+}
+
+private extension String {
+    var removingEmoji: String {
+        unicodeScalars.filter { !$0.properties.isEmoji }.map(String.init).joined()
     }
 }
