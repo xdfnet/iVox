@@ -1,5 +1,12 @@
 # iVox 开发日志
 
+## v2.2.1 — 2026-06-21
+
+### 修复
+
+- **Emoji 过滤误杀数字** — `isEmojiPresentation` 漏掉对象 emoji（📟📊🔄 等），改 `isEmoji` 但误杀 ASCII 数字，最终加 ASCII 白名单
+- **mlx-audio-swift 更新** — 同步最新 main (3f6b055)，含 CustomVoice 语音解析修复
+
 ## v2.2.0 — 2026-06-20
 
 ### 架构
