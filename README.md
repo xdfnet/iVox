@@ -74,7 +74,13 @@ ivox version             # 版本信息
 ivox speak "你好"         # 手动播报一段文本
 ivox speak -s codex "文本" # 指定来源（匹配音色）
 ivox speak -v dayi "文本"  # 指定音色
+ivox listen -f 录音.wav     # 语音识别
 ```
+
+### 给其他 App 接入
+
+iVox 的 TTS 和 ASR 都通过 Unix Socket 暴露，任何程序都能调用。
+详见 [Socket API 开发文档](docs/api.md)。
 
 ### 管理命令
 
