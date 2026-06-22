@@ -262,18 +262,9 @@
         </div>
     </div>
     <script>
-        let busy = false;
-        let lastAction = '';
-        let lastTime = 0;
+        let t;
         const okStatuses = new Set(['playing', 'paused', 'success', 'lock_success', 'opened', 'closed', 'running', 'stopped', 'locked', 'unlocked']);
         async function send(a) {
-            // 防抖：300ms 内重复点击同一按钮忽略
-            const now = Date.now();
-            if (a === lastAction && now - lastTime < 300) return;
-            if (busy) return;
-            busy = true;
-            lastAction = a;
-            lastTime = now;
             if (navigator.vibrate) navigator.vibrate(10);
             show('发送中...');
             try {
@@ -282,7 +273,6 @@
                 const ok = okStatuses.has(d.status);
                 show(ok ? '成功' : '失败', !ok);
             } catch (e) { show('错误', true) }
-            busy = false;
         }
         function show(m, e) {
             const el = document.getElementById('toast');

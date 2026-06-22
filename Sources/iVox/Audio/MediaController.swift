@@ -268,14 +268,10 @@ struct MediaController {
             Log.error("应用不存在: \(appConfig.path)")
             return .failure(.eventPostFailed)
         }
-        // 通过 NSWorkspace 打开应用（比 /usr/bin/open 更可靠，适用于 daemon 上下文）
-        let appURL = URL(fileURLWithPath: appConfig.path)
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        guard (try? await NSWorkspace.shared.openApplication(at: appURL, configuration: config)) != nil else {
-            Log.error("NSWorkspace 打开应用失败: \(name)")
-            return .failure(.eventPostFailed)
-        }
+        let process = Process()
+        process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
+        process.arguments = [appConfig.path]
+        try? process.run()
         Log.info("应用已启动: \(appConfig.displayName)")
         return .success(())
     }
