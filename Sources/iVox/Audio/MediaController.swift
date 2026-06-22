@@ -159,16 +159,14 @@ struct MediaController {
 
     /// 是否有媒体 App 在运行
     static func hasMediaAppRunning() -> Bool {
-        NSWorkspace.shared.runningApplications.contains { app in
-            guard let bundleID = app.bundleIdentifier else { return false }
-            return mediaAppBundleIDs.contains(bundleID)
+        mediaAppBundleIDs.contains { bundleID in
+            !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
         }
     }
 
-    /// 检查应用是否运行（通过 AppConfig 映射）
+    /// 检查应用是否运行
     static func isAppRunning(_ appName: String) -> Bool {
-        let bundleID = appBundleID(for: appName)
-        return NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == bundleID }
+        isAppRunning(bundleID: appBundleID(for: appName))
     }
 
     static func play() async -> Result<Void, MediaControllerError> {
@@ -253,24 +251,11 @@ struct MediaController {
 
     private static func closeApp(_ appName: String) async -> Result<Void, MediaControllerError> {
         let bundleID = appBundleID(for: appName)
-        guard let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == bundleID }) else {
-            return .failure(.eventPostFailed)
+        for app in NSRunningApplication.runningApplications(withBundleIdentifier: bundleID) {
+            app.terminate()
+            app.forceTerminate()
         }
-        app.terminate()
-        if await waitForAppTermination(bundleID: bundleID) { return .success(()) }
-        if let forceApp = NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).first,
-           forceApp.forceTerminate() { return .success(()) }
-        return .failure(.eventPostFailed)
-    }
-
-    private static func waitForAppTermination(bundleID: String) async -> Bool {
-        for _ in 0..<10 {
-            try? await Task.sleep(nanoseconds: 500_000_000)
-            if !NSWorkspace.shared.runningApplications.contains(where: { $0.bundleIdentifier == bundleID }) {
-                return true
-            }
-        }
-        return false
+        return .success(())
     }
 
     static func openApp(_ name: String) async -> Result<Void, MediaControllerError> {
@@ -283,37 +268,16 @@ struct MediaController {
             Log.error("应用不存在: \(appConfig.path)")
             return .failure(.eventPostFailed)
         }
-        guard let exitCode = try? executeProcess("/usr/bin/open", arguments: [appConfig.path]) else {
-            Log.error("执行 open 命令异常: \(name)")
+        // 通过 NSWorkspace 打开应用（比 /usr/bin/open 更可靠，适用于 daemon 上下文）
+        let appURL = URL(fileURLWithPath: appConfig.path)
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        guard (try? await NSWorkspace.shared.openApplication(at: appURL, configuration: config)) != nil else {
+            Log.error("NSWorkspace 打开应用失败: \(name)")
             return .failure(.eventPostFailed)
         }
-        guard exitCode == 0 else {
-            Log.error("open 命令失败: \(name), 退出码: \(exitCode)")
-            return .failure(.eventPostFailed)
-        }
-        // 等待应用启动（最多 8 秒，Electron 应用可能较慢）
-        if !(await waitForAppLaunch(bundleID: appConfig.bundleID)) {
-            Log.warn("应用启动未确认: \(appConfig.displayName)")
-            return .failure(.eventPostFailed)
-        }
-        if let app = NSWorkspace.shared.runningApplications.first(where: { $0.bundleIdentifier == appConfig.bundleID }) {
-            if #available(macOS 14.0, *) { app.activate() }
-            else { app.activate(options: .activateIgnoringOtherApps) }
-            Log.info("应用已激活到前台: \(appConfig.displayName)")
-        }
+        Log.info("应用已启动: \(appConfig.displayName)")
         return .success(())
-    }
-
-    private static func waitForAppLaunch(bundleID: String) async -> Bool {
-        // 先等 3 秒给应用启动
-        try? await Task.sleep(nanoseconds: 3_000_000_000)
-        if isAppRunning(bundleID: bundleID) { return true }
-        // 再重试 5 次，每秒一次（Electron 应用可能较慢）
-        for _ in 0..<5 {
-            try? await Task.sleep(nanoseconds: 1_000_000_000)
-            if isAppRunning(bundleID: bundleID) { return true }
-        }
-        return false
     }
 
     // MARK: - 锁屏检测
@@ -402,17 +366,8 @@ struct MediaController {
 
     // MARK: - 辅助方法
 
-    private static func executeProcess(_ executablePath: String, arguments: [String]) throws -> Int32 {
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: executablePath)
-        process.arguments = arguments
-        try process.run()
-        process.waitUntilExit()
-        return process.terminationStatus
-    }
-
     private static func isAppRunning(bundleID: String) -> Bool {
-        NSWorkspace.shared.runningApplications.contains { $0.bundleIdentifier == bundleID }
+        !NSRunningApplication.runningApplications(withBundleIdentifier: bundleID).isEmpty
     }
 
     // MARK: - 应用查询
