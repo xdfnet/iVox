@@ -7,7 +7,7 @@ public func cleanText(_ text: String) -> String {
     let doc = Document(parsing: text)
     var visitor = TextCollector()
     visitor.visit(doc)
-    return visitor.output
+    return visitor.output.trimmingCharacters(in: .whitespacesAndNewlines)
 }
 
 private struct TextCollector: MarkupWalker {
@@ -25,10 +25,10 @@ private struct TextCollector: MarkupWalker {
     mutating func visitSoftBreak(_: SoftBreak) { appendSpace() }
     mutating func visitLineBreak(_: LineBreak) { appendSpace() }
 
-    mutating func visitParagraph(_ node: Paragraph)    { appendSpace(); descendInto(node); appendSpace() }
-    mutating func visitHeading(_ node: Heading)         { appendSpace(); descendInto(node); appendSpace() }
-    mutating func visitListItem(_ node: ListItem)       { appendSpace(); descendInto(node); appendSpace() }
-    mutating func visitBlockQuote(_ node: BlockQuote)   { appendSpace(); descendInto(node); appendSpace() }
+    mutating func visitParagraph(_ node: Paragraph)    { descendInto(node); endBlock() }
+    mutating func visitHeading(_ node: Heading)         { descendInto(node); endBlock() }
+    mutating func visitListItem(_ node: ListItem)       { descendInto(node); endBlock() }
+    mutating func visitBlockQuote(_ node: BlockQuote)   { descendInto(node); endBlock() }
 
     mutating func visitLink(_ node: Link)           { descendInto(node) }
     mutating func visitEmphasis(_ node: Emphasis)   { descendInto(node) }
@@ -38,7 +38,7 @@ private struct TextCollector: MarkupWalker {
 
     mutating func visitCodeBlock(_ node: CodeBlock) {
         let code = node.code.trimmingCharacters(in: .whitespacesAndNewlines).removingEmoji
-        if !code.isEmpty { appendSpace(); output += code; appendSpace() }
+        if !code.isEmpty { appendSpace(); output += code; endBlock() }
     }
 
     mutating func visitImage(_: Image) {}
@@ -46,6 +46,15 @@ private struct TextCollector: MarkupWalker {
     mutating func visitHTMLBlock(_: HTMLBlock) {}
     mutating func visitInlineHTML(_: InlineHTML) {}
     mutating func visitThematicBreak(_: ThematicBreak) {}
+
+    private static let sentenceEnds = Set<Character>("。！？!?\n")
+
+    private mutating func endBlock() {
+        if let last = output.last, !Self.sentenceEnds.contains(last) {
+            output += "。"
+        }
+        appendSpace()
+    }
 
     private mutating func appendSpace() {
         if !lastWasSpace { output += " "; lastWasSpace = true }
