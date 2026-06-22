@@ -60,39 +60,52 @@ actor PlaybackQueue {
         await media.pause()
         try? Task.checkCancellation()
 
+        let batchID = String(UUID().uuidString.prefix(6))
+        var isFirstSegment = true
+
         while !jobs.isEmpty {
             let job = jobs.removeFirst()
 
-            Log.info("TTS 播放开始 [\(job.source)]")
+            Log.info("TTS 播放开始 [\(job.source)-\(batchID)]")
             let startedAt = Date()
+            let segments = splitSentences(job.text)
 
-            do {
-                try Task.checkCancellation()
-                try await waitUntilEngineReady()
-                try Task.checkCancellation()
-
-                player.prepareForPlayback()
-                let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
-                var totalBytes = 0
-                var chunkCount = 0
-
-                for try await pcm in stream {
+            for (idx, seg) in segments.enumerated() {
+                do {
                     try Task.checkCancellation()
-                    chunkCount += 1
-                    totalBytes += pcm.count
-                    player.write(pcm)
+                    try await waitUntilEngineReady()
+                    try Task.checkCancellation()
+
+                    if isFirstSegment {
+                        player.prepareForPlayback()
+                        isFirstSegment = false
+                    }
+
+                    let preview = seg.prefix(60)
+                    let segmentLabel = segments.count > 1 ? "段 \(idx + 1)/\(segments.count): \(preview)" : preview
+                    Log.info("TTS [\(job.source)-\(batchID)] \(segmentLabel)")
+
+                    let stream = await engine.synthesizeStream(text: seg, voiceID: job.voiceID)
+                    var chunkCount = 0
+                    for try await pcm in stream {
+                        try Task.checkCancellation()
+                        chunkCount += 1
+                        player.write(pcm)
+                    }
+
+                    try Task.checkCancellation()
+                    try await player.drain(chunks: chunkCount)
+                } catch is CancellationError {
+                    Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
+                    return  // defer + return: stop all remaining segments
+                } catch {
+                    Log.error("TTS 合成失败: \(error)")
+                    // continue to next segment on non-cancellation errors
                 }
-
-                Log.info("播放写入: chunks=\(chunkCount) bytes=\(totalBytes)")
-
-                try Task.checkCancellation()
-                try await player.drain(chunks: chunkCount)
-                Log.info("TTS 播放完成 [\(job.source)] \(String(format: "%.1f", -startedAt.timeIntervalSinceNow))s")
-            } catch is CancellationError {
-                Log.info("TTS 播放已取消 [\(job.source)]")
-            } catch {
-                Log.error("TTS 合成失败: \(error)")
             }
+
+            let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
+            Log.info("TTS 播放完成 [\(job.source)-\(batchID)] \(elapsed)s \(segments.count) 段")
         }
     }
 
