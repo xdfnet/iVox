@@ -15,7 +15,7 @@ private struct TextCollector: MarkupWalker {
     private var lastWasSpace = true
 
     mutating func visitText(_ node: Text) {
-        let t = node.string.trimmingCharacters(in: .whitespacesAndNewlines).removingEmoji
+        let t = node.string.trimmingCharacters(in: .whitespacesAndNewlines).removingEmoji.removingURLs
         if t.isEmpty { return }
         appendSpace()
         output += t
@@ -62,7 +62,24 @@ private struct TextCollector: MarkupWalker {
 }
 
 private extension String {
+    private static let urlDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+
     var removingEmoji: String {
         unicodeScalars.filter { s in s.value <= 127 || !s.properties.isEmoji }.map(String.init).joined()
+    }
+
+    var removingURLs: String {
+        let ns = self as NSString
+        let range = NSRange(location: 0, length: ns.length)
+        let matches = Self.urlDetector.matches(in: self, range: range)
+        guard !matches.isEmpty else { return self }
+        var result = ""
+        var pos = 0
+        for m in matches {
+            result += ns.substring(with: NSRange(location: pos, length: m.range.location - pos))
+            pos = m.range.location + m.range.length
+        }
+        result += ns.substring(with: NSRange(location: pos, length: ns.length - pos))
+        return result
     }
 }
