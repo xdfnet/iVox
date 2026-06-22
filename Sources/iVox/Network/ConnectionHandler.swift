@@ -5,15 +5,15 @@ import iVoxKit
 actor ConnectionHandler {
     private let queue: PlaybackQueue
     private let config: Config
+    private let asrEngine: ASREngine
 
-    init(queue: PlaybackQueue, config: Config) {
+    init(queue: PlaybackQueue, config: Config, asrEngine: ASREngine) {
         self.queue = queue
         self.config = config
+        self.asrEngine = asrEngine
     }
 
     nonisolated func handle(fd: Int32) {
-        defer { Darwin.close(fd) }
-
         var data = Data()
         var buf = [UInt8](repeating: 0, count: 65536)
         while true {
@@ -22,6 +22,25 @@ actor ConnectionHandler {
             data.append(contentsOf: buf[0..<n])
         }
         Log.info("连接收包: bytes=\(data.count)")
+
+        // 找第一个 \n 切分头/体
+        if let nl = data.firstIndex(of: 0x0A) {
+            let headerBytes = data[0..<nl]
+            guard let header = String(data: headerBytes, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
+                  header.hasPrefix("{"), header.contains("type:asr") else {
+                handleTTS(fd: fd, data: data)
+                return
+            }
+            let body = data[(nl + 1)...]
+            Log.info("ASR 请求: bytes=\(body.count)")
+            handleASR(fd: fd, header: header, body: body)
+        } else {
+            handleTTS(fd: fd, data: data)
+        }
+    }
+
+    private nonisolated func handleTTS(fd: Int32, data: Data) {
+        defer { Darwin.close(fd) }
         guard let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
               !text.isEmpty else { return }
         if text == "__IVOX_STOP__" {
@@ -47,6 +66,38 @@ actor ConnectionHandler {
         let job = PlaybackJob(text: cleaned, voiceID: voiceID, source: source)
         Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(cleaned.count)")
         Task { await queue.enqueue(job) }
+    }
+
+    private nonisolated func handleASR(fd: Int32, header: String, body: Data) {
+        let lang = parseMetaKV(header)["lang"] ?? "zh"
+
+        Task {
+            defer { Darwin.close(fd) }
+            do {
+                let text = try await asrEngine.transcribe(audioData: body, language: lang)
+                let result = (text.isEmpty ? "" : text) + "\n"
+                _ = result.data(using: .utf8).map { data in
+                    data.withUnsafeBytes { raw in
+                        Darwin.write(fd, raw.baseAddress, raw.count)
+                    }
+                }
+                Log.info("ASR 识别完成 [\(text.prefix(60))]")
+            } catch {
+                Log.error("ASR 识别失败: \(error)")
+            }
+        }
+    }
+
+    private nonisolated func parseMetaKV(_ header: String) -> [String: String] {
+        guard header.hasPrefix("{"),
+              let end = header.firstIndex(of: "}") else { return [:] }
+        let inner = String(header[header.index(after: header.startIndex)..<end])
+        var dict: [String: String] = [:]
+        for pair in inner.split(separator: ",") {
+            let kv = pair.split(separator: ":", maxSplits: 1)
+            if kv.count == 2 { dict[String(kv[0])] = String(kv[1]) }
+        }
+        return dict
     }
 
     nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String) {

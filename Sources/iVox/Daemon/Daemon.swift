@@ -45,7 +45,7 @@ actor Daemon {
         let dir = (socketPath as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
 
-        let handler = ConnectionHandler(queue: queue, config: config)
+        let handler = ConnectionHandler(queue: queue, config: config, asrEngine: asrEngine)
         try await server.start(path: socketPath, handler: handler)
 
         Log.info("iVox 已启动，监听 \(socketPath)")
@@ -88,14 +88,14 @@ actor Daemon {
                 Log.error("TTS 模型加载失败: \(error)")
             }
 
-            if config.speechInput?.enabled ?? SpeechInputConfig.default.enabled {
-                if !(await asrEngine.isLoaded) {
-                    do { try await asrEngine.load() }
-                    catch { Log.error("ASR 模型加载失败: \(error)") }
-                }
-            }
+            if !(await asrEngine.isLoaded) {
+            do { try await asrEngine.load() }
+            catch { Log.error("ASR 模型加载失败: \(error)") }
+        }
 
+        if config.speechInput?.enabled ?? SpeechInputConfig.default.enabled {
             speechInput?.start()
+        }
         }
     }
 

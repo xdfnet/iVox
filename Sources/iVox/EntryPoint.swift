@@ -15,6 +15,7 @@ struct iVox: AsyncParsableCommand {
             StatusCommand.self,
             VersionCommand.self,
             RestartCommand.self,
+            ASRCommand.self,
         ],
         defaultSubcommand: ServeCommand.self
     )
