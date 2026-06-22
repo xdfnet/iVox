@@ -16,11 +16,11 @@ actor PlaybackQueue {
     private let config: PlaybackConfig
     private let modelReadyPollNs: UInt64 = 100_000_000
 
-    init(engine: TTSEngine, config: PlaybackConfig, mediaControl: MediaControlConfig) {
+    init(engine: TTSEngine, config: PlaybackConfig, mediaController: MediaController) {
         self.engine = engine
         self.config = config
         self.player = AudioPlayer(config: config)
-        self.media = MediaController(config: mediaControl)
+        self.media = mediaController
     }
 
     func shutdown() {

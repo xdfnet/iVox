@@ -9,6 +9,8 @@ actor Daemon {
     private let queue: PlaybackQueue
     private let server = SocketServer()
     private let speechInput: SpeechInputService?
+    private let mediaController: MediaController
+    private var mediaHTTPServer: MediaHTTPServer?
     private var shutdownContinuation: CheckedContinuation<Void, Never>?
     private var isShuttingDown = false
 
@@ -19,16 +21,17 @@ actor Daemon {
         let ttsEngine = TTSEngine(config: config)
         self.engine = ttsEngine
         self.asrEngine = ASREngine(modelPath: asrPath)
+        self.mediaController = MediaController(config: config.resolvedMediaControl)
         self.queue = PlaybackQueue(
             engine: ttsEngine,
             config: config.resolvedPlayback,
-            mediaControl: config.resolvedMediaControl
+            mediaController: mediaController
         )
 
         let siConfig = config.speechInput ?? .default
         self.speechInput = SpeechInputService(
             config: siConfig,
-            mediaControl: config.resolvedMediaControl,
+            mediaController: mediaController,
             asrEngine: asrEngine
         )
     }
@@ -46,6 +49,9 @@ actor Daemon {
         try await server.start(path: socketPath, handler: handler)
 
         Log.info("iVox 已启动，监听 \(socketPath)")
+        if config.resolvedMediaControl.resolvedHTTPServerEnabled {
+            startMediaHTTPServer()
+        }
         startModelLoading()
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
@@ -93,9 +99,22 @@ actor Daemon {
         }
     }
 
+    private func startMediaHTTPServer() {
+        let port = UInt16(config.resolvedMediaControl.resolvedHTTPServerPort)
+        let httpServer = MediaHTTPServer(port: port)
+        self.mediaHTTPServer = httpServer
+        switch httpServer.start() {
+        case .success:
+            Log.info("媒体控制 Web UI: http://127.0.0.1:\(port)")
+        case .failure(let error):
+            Log.error("媒体控制 HTTP 服务器启动失败: \(error.localizedDescription)")
+        }
+    }
+
     private func cleanup() async {
         Log.info("守护进程退出清理")
         speechInput?.stop()
+        mediaHTTPServer?.stop()
         await server.stop()
         await queue.shutdown()
         Log.info("守护进程已退出")

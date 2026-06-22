@@ -60,8 +60,7 @@ git clone https://github.com/xdfnet/iVox && cd iVox
 ./install.sh              # 编译 + 部署 + 初始化，一条命令搞定
 ```
 
-> 播报时通过 [iDict](https://github.com/xdfnet/iDict) 自动暂停/恢复音乐，  
-> 需同时安装 iDict 并保持运行。
+> 播报时通过系统媒体框架自动暂停/恢复音乐，无需额外服务。
 
 ## 使用
 
@@ -163,9 +162,8 @@ make clean                # 清理 .build
   },
   "mediaControl": {
     "enabled": true,
-    "baseURL": "http://127.0.0.1:8888",
-    "pausePath": "/api/pause",
-    "resumePath": "/api/play"
+    "baseURL": "",
+    "httpServerEnabled": true
   },
   "speechInput": {
     "enabled": true,
@@ -201,10 +199,10 @@ JSON 本身不支持注释，字段说明放在这里：
 | `playback.interruptCurrent` | 新消息是否立即打断旧播报，默认 `true` |
 | `playback.idleReviveSeconds` | 音频引擎空闲多久后播报前主动复活 |
 | `playback.drainBaseTimeoutSeconds` | 等待音频缓冲播完的基础超时时间 |
-| `mediaControl.enabled` | 是否调用 iDict 暂停/恢复音乐；没运行 iDict 可设为 `false` |
-| `mediaControl.baseURL` | iDict 服务地址 |
-| `mediaControl.pausePath` | 暂停音乐 API 路径 |
-| `mediaControl.resumePath` | 恢复音乐 API 路径 |
+| `mediaControl.enabled` | 是否启用媒体控制 |
+| `mediaControl.baseURL` | 空=本地原生引擎（默认）；非空=远程模式调外部 HTTP |
+| `mediaControl.pausePath` | 远程模式暂停路径（本地模式忽略） |
+| `mediaControl.resumePath` | 远程模式恢复路径（本地模式忽略） |
 | `speechInput.enabled` | 是否启用按住右侧 ⌘ 的语音输入 |
 | `speechInput.language` | ASR 识别语言 |
 | `speechInput.autoEnter` | 粘贴识别结果后是否自动回车 |
@@ -222,7 +220,7 @@ JSON 本身不支持注释，字段说明放在这里：
 - Apple Silicon (M1+)
 - Swift 6 / Xcode 16+
 - [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) — 本地 TTS / ASR 推理
-- [iDict](https://github.com/xdfnet/iDict) — 媒体控制（保持运行即可，无需额外配置）
+- 媒体控制 — 内建于 iVox（MediaRemote 系统框架自动暂停/恢复音乐）
 
 ## 许可
 

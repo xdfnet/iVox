@@ -24,7 +24,7 @@
 │                         ▼                                  │
 │                  PlaybackQueue (actor)                      │
 │                    ┌─────┴─────┐                            │
-│                    │ MediaController│  ← iDict HTTP API      │
+│                    │ MediaController│  ← 原生引擎控制媒体     │
 │                    │  pause/resume │    暂停/恢复音乐       │
 │                    └─────┬─────┘                            │
 │              ┌──────────┴──────────┐                       │
@@ -138,7 +138,7 @@ mlx-community/Qwen3-ASR-1.7B-4bit          → ~/.config/ivox/model/Qwen3-ASR-1.
    - cleanText() 清洗 Markdown 和行内噪音
 4. PlaybackQueue.enqueue(job)
    - 新请求入队 → 丢弃 pending 旧任务，并取消正在合成/播放的旧任务
-   - MediaController 调 iDict /api/pause — 暂停音乐
+   - MediaController 调 MediaRemote.sendCommand(.pause) — 暂停音乐
 5. TTSEngine.synthesizeStream() → AsyncThrowingStream<Data>
    - Daemon 先启动 socket，再后台加载/预热模型
    - TTS 未就绪时 PlaybackQueue 等待模型 ready，不阻塞 socket
@@ -149,7 +149,7 @@ mlx-community/Qwen3-ASR-1.7B-4bit          → ~/.config/ivox/model/Qwen3-ASR-1.
    - 语言、流式间隔、重试次数、重试间隔、输出采样率由 `tts` 配置控制
 6. AudioPlayer.write(pcm) → scheduleBuffer 流式播放
 7. player.drain() — 轮询等待 buffer 播完
-8. MediaController 调 iDict /api/play — 恢复音乐
+8. MediaController 调 MediaRemote.sendCommand(.play) — 恢复音乐
 ```
 
 ## 文本过滤
@@ -183,8 +183,8 @@ ConnectionHandler.extractVoicePrefix():
 
 ## 媒体控制
 
-`MediaController` 通过调用 [iDict](https://github.com/xdfnet/iDict) 的 `/api/pause` 和 `/api/play` 来实现播报时暂停音乐、播完恢复。
-地址和路径由 `mediaControl` 配置控制；未运行 iDict 时可把 `mediaControl.enabled` 设为 `false`。**不再需要辅助功能权限或代码签名**。
+`MediaController` 通过 MediaRemote 系统框架直接控制媒体播放，播报时暂停音乐、播完恢复。
+支持本地原生模式（默认）和远程 HTTP 模式（`baseURL` 非空时）。本地模式使用 `MRMediaRemoteSendCommand` 系统 API，无需辅助功能权限。
 
 ## 日志
 

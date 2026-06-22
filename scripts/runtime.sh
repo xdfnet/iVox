@@ -85,6 +85,13 @@ deploy_bin() {
     rm -rf "${HOME}/.local/bin/mlx-swift_Cmlx.bundle"
     cp -R "$mlx_bundle" "${HOME}/.local/bin/"
   fi
+  # 复制 SPM 资源包（index.html、图标等）
+  local ivox_bundle
+  ivox_bundle=$(find "${ROOT}/.build" -type d -name "iVox_iVox.bundle" 2>/dev/null | head -1)
+  if [[ -n "$ivox_bundle" ]]; then
+    rm -rf "${HOME}/.local/bin/iVox_iVox.bundle"
+    cp -R "$ivox_bundle" "${HOME}/.local/bin/"
+  fi
   sign_bin
 }
 

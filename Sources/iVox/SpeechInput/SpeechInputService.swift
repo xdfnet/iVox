@@ -5,12 +5,11 @@ import iVoxKit
 
 final class SpeechInputService: @unchecked Sendable {
     private let config: SpeechInputConfig
-    private let mediaControl: MediaControlConfig
+    private let media: MediaController
     private let recordDir: URL
     private var thread: Thread?
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
-    private let session = URLSession(configuration: .ephemeral)
     private let asrEngine: ASREngine
 
     private enum State {
@@ -20,9 +19,9 @@ final class SpeechInputService: @unchecked Sendable {
     private var state: State = .idle
     private let stateQueue = DispatchQueue(label: "com.user.ivox.speechinput.state")
 
-    init(config: SpeechInputConfig, mediaControl: MediaControlConfig, asrEngine: ASREngine) {
+    init(config: SpeechInputConfig, mediaController: MediaController, asrEngine: ASREngine) {
         self.config = config
-        self.mediaControl = mediaControl
+        self.media = mediaController
         self.asrEngine = asrEngine
         self.recordDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/ivox/recordings")
@@ -124,7 +123,7 @@ final class SpeechInputService: @unchecked Sendable {
             }
             guard shouldStart else { return }
 
-            sendMediaRequest(mediaControl.pausePath)
+            Task { await media.pause() }
             Log.debug("语音输入: ⌘ 按下 → 暂停音乐 → 开始录音")
 
             guard let (recorder, url) = startRecording() else { return }
@@ -139,7 +138,7 @@ final class SpeechInputService: @unchecked Sendable {
             guard let (recorder, audioURL) = job else { return }
 
             Log.debug("语音输入: ⌘ 松开 → 结束录音")
-            sendMediaRequest(mediaControl.resumePath)
+            Task { await media.resume() }
             DispatchQueue.global().async {
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
             }
@@ -255,19 +254,6 @@ final class SpeechInputService: @unchecked Sendable {
     }
 
     // MARK: - Media
-
-    private func sendMediaRequest(_ path: String) {
-        guard mediaControl.enabled else { return }
-        guard let url = URL(string: mediaControl.baseURL + path) else { return }
-        var req = URLRequest(url: url)
-        req.httpMethod = "GET"
-        req.timeoutInterval = 1
-        session.dataTask(with: req) { _, _, error in
-            if let error {
-                Log.debug("语音输入: 媒体请求 \(path) 失败: \(error.localizedDescription)")
-            }
-        }.resume()
-    }
 
     // MARK: - Permissions
 

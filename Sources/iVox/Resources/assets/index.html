@@ -1,0 +1,297 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport"
+        content="width=device-width,initial-scale=1,maximum-scale=1,user-scalable=no,viewport-fit=cover">
+    <meta name="apple-mobile-web-app-capable" content="yes">
+    <meta name="mobile-web-app-capable" content="yes">
+    <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+    <meta name="apple-mobile-web-app-title" content="iVox Remote">
+    <meta name="theme-color" content="#000000">
+    <title>iVox Remote</title>
+    <style>
+        *, *::before, *::after {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box
+        }
+
+        html {
+            position: fixed;
+            width: 100%;
+            height: 100%;
+            overscroll-behavior: none;
+            background: #000000;
+            background-image: linear-gradient(180deg, #1c1c1e 0%, #000000 100%);
+            background-attachment: fixed;
+        }
+
+        body {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            bottom: 0;
+            overscroll-behavior: none;
+            margin: 0;
+            padding: 0;
+            padding-bottom: env(safe-area-inset-bottom);
+            font-family: -apple-system, sans-serif;
+            background: transparent;
+            color: #fff;
+            min-height: 100vh;
+            min-height: -webkit-fill-available;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            -webkit-user-select: none;
+            user-select: none;
+            -webkit-tap-highlight-color: transparent;
+            padding-top: 0;
+            padding-bottom: env(safe-area-inset-bottom, 16px);
+            overflow-x: hidden;
+        }
+
+        .container {
+            width: 100%;
+            max-width: 100%;
+            box-sizing: border-box;
+            padding: 24px 16px;
+            background: transparent;
+            display: flex;
+            flex-direction: column;
+            min-height: 100%;
+        }
+
+        h1 {
+            font-size: 18px;
+            font-weight: 500;
+            color: rgba(255, 255, 255, .85);
+            text-align: center;
+            letter-spacing: 1px;
+        }
+
+        .navigation {
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            gap: 16px;
+        }
+
+        .media-row {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            gap: 12px;
+        }
+
+        .volume-row {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            background: rgba(0, 0, 0, .3);
+            padding: 14px 18px;
+            border-radius: 20px;
+            gap: 16px;
+        }
+
+        button {
+            background: none;
+            border: none;
+            cursor: pointer;
+            color: #fff;
+            transition: all .15s cubic-bezier(.4, 0, .2, 1);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            border-radius: 50%;
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+        }
+
+        button:active {
+            transform: scale(.88);
+            opacity: .75;
+        }
+
+        .play {
+            width: 108px;
+            height: 108px;
+            background: #fff;
+            color: #000;
+            box-shadow: 0 6px 24px rgba(255, 255, 255, .4);
+        }
+
+        .play:active {
+            background: rgba(255, 255, 255, .85);
+        }
+
+        .track {
+            width: 78px;
+            height: 78px;
+            background: rgba(255, 255, 255, .12);
+        }
+
+        .track:active {
+            background: rgba(255, 255, 255, .22);
+        }
+
+        .arrow {
+            width: 78px;
+            height: 78px;
+            background: rgba(255, 255, 255, .12);
+        }
+
+        .arrow:active {
+            background: rgba(255, 255, 255, .22);
+        }
+
+        .volume-row button {
+            width: 70px;
+            height: 70px;
+            background: rgba(255, 255, 255, .1);
+        }
+
+        .volume-row button:active {
+            background: rgba(255, 255, 255, .2);
+        }
+
+        svg {
+            fill: currentColor;
+            filter: drop-shadow(0 2px 6px rgba(0, 0, 0, .25));
+        }
+
+        .toast {
+            position: fixed;
+            bottom: env(safe-area-inset-bottom, 20px);
+            bottom: calc(env(safe-area-inset-bottom, 20px) + 20px);
+            left: 50%;
+            transform: translateX(-50%);
+            padding: 10px 20px;
+            text-align: center;
+            font-size: 13px;
+            font-weight: 500;
+            background: rgba(60, 60, 67, .75);
+            color: rgba(255, 255, 255, .85);
+            border-radius: 20px;
+            opacity: 0;
+            transition: opacity .25s ease;
+            z-index: 1000;
+            backdrop-filter: blur(20px);
+            -webkit-backdrop-filter: blur(20px);
+            box-shadow: 0 4px 16px rgba(0, 0, 0, .3);
+            pointer-events: none;
+        }
+
+        .toast.show { opacity: 1; }
+        .toast.error { background: rgba(255, 69, 58, .75); }
+
+        .app-shortcuts {
+            display: flex;
+            justify-content: center;
+            gap: 24px;
+            margin-top: 32px;
+        }
+
+        .app-icon {
+            width: 78px;
+            height: 78px;
+            border-radius: 18px;
+            overflow: hidden;
+            cursor: pointer;
+            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, .3);
+            background: rgba(255, 255, 255, 0.05);
+            display: flex;
+            align-items: center;
+            justify-content: center;
+        }
+
+        .app-icon:active {
+            transform: scale(0.9);
+            box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
+        }
+
+        .app-icon img {
+            width: 100%;
+            height: 100%;
+            object-fit: cover;
+        }
+    </style>
+</head>
+
+<body>
+    <div id="toast" class="toast">已发送</div>
+    <div class="container">
+        <h1>iVox Remote</h1>
+
+        <!-- 媒体控制 -->
+        <div class="navigation" style="margin-top:28px">
+            <button class="arrow" onclick="send('arrowup')" aria-label="向上"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg></button>
+            <div class="media-row">
+                <button class="track" onclick="send('prev')" aria-label="上一曲"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
+                <button class="play" onclick="send('playpause')" aria-label="播放/暂停"><svg width="40" height="40" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+                <button class="track" onclick="send('next')" aria-label="下一曲"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
+            </div>
+            <button class="arrow" onclick="send('arrowdown')" aria-label="向下"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg></button>
+        </div>
+
+        <!-- 音量 -->
+        <div class="volume-row" style="margin-top:32px">
+            <button onclick="send('volumedown')" aria-label="减小音量"><svg width="26" height="26" viewBox="0 0 24 24"><path d="M18.5 12c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM5 9v6h4l5 5V4L9 9H5z"/></svg></button>
+            <button onclick="send('mute')" aria-label="静音"><svg width="26" height="26" viewBox="0 0 24 24"><path d="M16.5 12c0-1.77-1.02-3.29-2.5-4.03v2.21l2.45 2.45c.03-.2.05-.41.05-.63zm2.5 0c0 .94-.2 1.82-.54 2.64l1.51 1.51C20.63 14.91 21 13.5 21 12c0-4.28-2.99-7.86-7-8.77v2.06c2.89.86 5 3.54 5 6.71zM4.27 3L3 4.27 7.73 9H3v6h4l5 5v-6.73l4.25 4.25c-.67.52-1.42.93-2.25 1.18v2.06c1.38-.31 2.63-.95 3.69-1.81L19.73 21 21 19.73 4.27 3zM12 4L9.91 6.09 12 8.18V4z"/></svg></button>
+            <button onclick="send('volumeup')" aria-label="增加音量"><svg width="26" height="26" viewBox="0 0 24 24"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg></button>
+        </div>
+
+        <!-- 应用快捷方式 -->
+        <div class="app-shortcuts">
+            <div class="app-icon" onclick="send('toggle_douyin')"><img src="/assets/douyin.png" alt="抖音"></div>
+            <div class="app-icon" onclick="send('toggle_qishui')"><img src="/assets/qishui.png" alt="汽水音乐"></div>
+        </div>
+
+        <!-- 锁定屏幕 (靠底) -->
+        <div style="flex:1;display:flex;align-items:flex-end;justify-content:center">
+            <button onclick="send('lock')" aria-label="锁定屏幕"
+                style="background:rgba(255,69,58,.12);border:1px solid rgba(255,69,58,.2);border-radius:14px;padding:10px 22px;color:#ff453a;font-size:13px;font-weight:500;gap:6px;display:flex;align-items:center;margin-bottom:12px">
+                <svg width="16" height="16" viewBox="0 0 24 24" fill="#ff453a"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2z"/></svg>
+                锁定屏幕
+            </button>
+        </div>
+    </div>
+    <script>
+        let busy = false;
+        let lastAction = '';
+        let lastTime = 0;
+        const okStatuses = new Set(['playing', 'paused', 'success', 'lock_success', 'opened', 'closed', 'running', 'stopped', 'locked', 'unlocked']);
+        async function send(a) {
+            // 防抖：300ms 内重复点击同一按钮忽略
+            const now = Date.now();
+            if (a === lastAction && now - lastTime < 300) return;
+            if (busy) return;
+            busy = true;
+            lastAction = a;
+            lastTime = now;
+            if (navigator.vibrate) navigator.vibrate(10);
+            show('发送中...');
+            try {
+                const r = await fetch('/api/' + a);
+                const d = await r.json();
+                const ok = okStatuses.has(d.status);
+                show(ok ? '成功' : '失败', !ok);
+            } catch (e) { show('错误', true) }
+            busy = false;
+        }
+        function show(m, e) {
+            const el = document.getElementById('toast');
+            el.textContent = m;
+            el.className = e ? 'toast error show' : 'toast show';
+            clearTimeout(t);
+            t = setTimeout(() => el.className = e ? 'toast error' : 'toast', 2000);
+        }
+    </script>
+</body>
+
+</html>

@@ -1,5 +1,33 @@
 # iVox 开发日志
 
+## v2.3.0 — 2026-06-22
+
+### 架构
+
+- **媒体控制从 iDict 迁移到 iVox 内建** — 通过 `MediaRemote` 私有框架直接控制系统媒体，不再依赖外部 iDict HTTP 服务
+- **双模调度** — `baseURL` 为空时走本地原生引擎，非空时保留远程模式，向后兼容
+- **嵌入式 HTTP 服务器** — 移植 iDict 的 `MediaHTTPServer`，提供 Web UI 和 REST API（可选启用）
+
+### 新增
+
+- **原生媒体引擎** — `MediaRemoteBridge` 动态加载 `MRMediaRemoteSendCommand`，支持 play/pause/toggle/next/prev
+- **`AudioAppRegistry`** — 从 MediaController 中提取应用注册表，职责单一
+- **Web UI** — `http://127.0.0.1:8888` 移动端远程控制界面（需配置 `httpServerEnabled: true`）
+- **`make deploy` 自动复制资源包** — `iVox_iVox.bundle` 含 index.html 和图标
+
+### 优化
+
+- **音频播报暂停不再走 HTTP** — PlaybackQueue 和 SpeechInputService 直接调原生引擎，消除 iDict 依赖
+- **锁屏交互简化** — 滑块改为按钮，直接触发
+- **MediaHTTPServer 线程安全** — `OSAllocatedUnfairLock` 保护共享状态
+- **应用启动等待延长** — 从 2.3s 增加到 8s，适配 Electron 应用（抖音/汽水音乐）
+- **页面移除状态指示器** — 干净简洁，播放按钮改为固定图标走 `MRMediaRemoteSendCommand(.toggle)`
+- **`MediaControlConfig` 默认改为本地模式** — `baseURL: ""`，新用户开箱即用
+
+### 修复
+
+- **`AudioAppRegistry` 短名匹配 bug** — `bundleID.split(".").last` 取到 `"desktop"` 而非 `"douyin"`，导致 `toggle_douyin` 失败
+
 ## v2.2.1 — 2026-06-21
 
 ### 修复

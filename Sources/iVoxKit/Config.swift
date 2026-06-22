@@ -54,17 +54,30 @@ public struct MediaControlConfig: Codable, Sendable {
     public var baseURL: String
     public var pausePath: String
     public var resumePath: String
+    public var httpServerEnabled: Bool?
+    public var httpServerPort: Int?
 
-    public init(enabled: Bool, baseURL: String, pausePath: String, resumePath: String) {
+    public init(enabled: Bool, baseURL: String, pausePath: String, resumePath: String, httpServerEnabled: Bool? = nil, httpServerPort: Int? = nil) {
         self.enabled = enabled
         self.baseURL = baseURL
         self.pausePath = pausePath
         self.resumePath = resumePath
+        self.httpServerEnabled = httpServerEnabled
+        self.httpServerPort = httpServerPort
     }
+
+    /// 空 baseURL = 本地原生引擎（不依赖外部 HTTP 服务）
+    public var isBuiltin: Bool { enabled && baseURL.isEmpty }
+
+    /// 非空 baseURL = 远程模式（调外部 API，向后兼容）
+    public var isRemote: Bool { enabled && !baseURL.isEmpty }
+
+    public var resolvedHTTPServerEnabled: Bool { httpServerEnabled ?? false }
+    public var resolvedHTTPServerPort: Int { httpServerPort ?? 8888 }
 
     public static let `default` = MediaControlConfig(
         enabled: true,
-        baseURL: "http://127.0.0.1:8888",
+        baseURL: "",
         pausePath: "/api/pause",
         resumePath: "/api/play"
     )
@@ -214,7 +227,7 @@ public func validate(_ config: Config) throws {
         throw ConfigError.invalidConfig("playback.drainBaseTimeoutSeconds 必须大于 0")
     }
     let mediaControl = config.resolvedMediaControl
-    if mediaControl.enabled, URL(string: mediaControl.baseURL) == nil {
+    if mediaControl.isRemote, URL(string: mediaControl.baseURL) == nil {
         throw ConfigError.invalidConfig("mediaControl.baseURL 无效")
     }
     if config.voice(id: config.defaultVoice) == nil {

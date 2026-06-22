@@ -19,6 +19,11 @@ public enum Log {
         writeFile("ERROR", message)
     }
 
+    public static func warn(_ message: String) {
+        os_log("%{public}s", log: log, type: .info, message)
+        writeFile("WARN", message)
+    }
+
     public static func debug(_ message: String) {
         os_log("%{public}s", log: log, type: .debug, message)
         writeFile("DEBUG", message)
