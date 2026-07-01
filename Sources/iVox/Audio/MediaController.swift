@@ -290,12 +290,6 @@ struct MediaController {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    static func requestAccessibilityPermission() {
-        let key = "AXTrustedCheckOptionPrompt" as CFString
-        let options = [key: true] as CFDictionary
-        AXIsProcessTrustedWithOptions(options)
-    }
-
     // MARK: - 权限包装器
 
     private static func withPermissionCheck<T>(

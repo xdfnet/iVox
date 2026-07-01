@@ -134,7 +134,6 @@ actor WeChatPlatform {
         var cycle = 0
 
         while isRunning && !Task.isCancelled {
-            if Task.isCancelled { break }
             cycle += 1
 
             let resp: GetUpdatesResp
@@ -261,12 +260,4 @@ func splitRunes(_ s: String, max: Int) -> [String] {
     }
 }
 
-func isNetworkError(_ error: Error) -> Bool {
-    let ns = error as NSError
-    return ns.domain == NSURLErrorDomain
-}
 
-func isTimeoutError(_ error: Error) -> Bool {
-    let ns = error as NSError
-    return ns.domain == NSURLErrorDomain && ns.code == NSURLErrorTimedOut
-}
