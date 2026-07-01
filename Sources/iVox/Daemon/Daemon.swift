@@ -10,7 +10,6 @@ actor Daemon {
     private let server = SocketServer()
     private let speechInput: SpeechInputService?
     private let mediaController: MediaController
-    private var wechat: WeChatPlatform?
     private var mediaHTTPServer: MediaHTTPServer?
     private var shutdownContinuation: CheckedContinuation<Void, Never>?
     private var isShuttingDown = false
@@ -35,11 +34,6 @@ actor Daemon {
             mediaController: mediaController,
             asrEngine: asrEngine
         )
-
-        if let wc = config.wechat, wc.enabled {
-            self.wechat = WeChatPlatform(config: wc)
-            Log.info("微信平台: 已初始化")
-        }
     }
 
     func run() async throws {
@@ -59,11 +53,6 @@ actor Daemon {
             startMediaHTTPServer()
         }
         startModelLoading()
-
-        // 启动微信轮询
-        if let wechat {
-            await wechat.start(handler: handleWeChatMessage)
-        }
 
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             self.shutdownContinuation = continuation
@@ -122,36 +111,8 @@ actor Daemon {
         }
     }
 
-    // MARK: - 微信消息处理
-
-    private nonisolated func handleWeChatMessage(_ msg: IncomingMessage) async {
-        Log.info("📩 收到微信消息 [来自: \(msg.fromUserID.prefix(20))…]: \(msg.content.prefix(50))")
-
-        // 写 pending_user
-        let pendingFile = NSString(string: "~/.config/ivox/pending_user").expandingTildeInPath
-        try? FileManager.default.createDirectory(atPath: NSString(string: "~/.config/ivox").expandingTildeInPath,
-                                                  withIntermediateDirectories: true)
-        try? msg.fromUserID.write(toFile: pendingFile, atomically: true, encoding: .utf8)
-
-        // 剪贴板注入
-        do {
-            try ClipboardInjector.inject(msg.content)
-            let shortID = msg.fromUserID.prefix(20)
-            Log.info("📋 已注入 Claude Code [来自: \(shortID)] (\(msg.content.count) 字符)")
-        } catch {
-            // fallback 到 osascript
-            if case InjectError.clipboardFailed = error {
-                try? ClipboardInjector.injectViaAppleScript(msg.content)
-                Log.info("📋 已通过 AppleScript 注入")
-            } else {
-                Log.error("❌ 注入失败: \(error)")
-            }
-        }
-    }
-
     private func cleanup() async {
         Log.info("守护进程退出清理")
-        await wechat?.stop()
         speechInput?.stop()
         mediaHTTPServer?.stop()
         await server.stop()

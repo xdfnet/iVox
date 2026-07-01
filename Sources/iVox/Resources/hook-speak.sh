@@ -1,10 +1,12 @@
 #!/bin/bash
-# iVox + iW Hook — Claude Code / Codex Stop Hook
+# iVox Hook — Claude Code / Codex Stop Hook
 # 协议：stdout 必须保持干净；exit 0 = 继续，非 0 = 停止
 [[ "${IVOX_SKIP:-}" == "1" ]] && exit 0
+# 保存原始 stdout，Codex Stop hook 要求返回 JSON
 exec 3>&1
 exec 1>/dev/null
 
+SOURCE="${1:-claude}"
 payload="$(cat)"
 
 text=$(python3 -c "
@@ -15,6 +17,6 @@ print(text[:5000] if text else '')
 " "$payload" 2>/dev/null)
 
 [[ -z "${text// }" ]] && echo '{"continue": true}' >&3 && exit 0
-ivox wechat text "$text" 2>/dev/null &
-ivox speak --source "claude" "$text" 2>/dev/null &
+ivox speak --source "$SOURCE" "$text" 2>/dev/null &
 echo '{"continue": true}' >&3
+exit 0

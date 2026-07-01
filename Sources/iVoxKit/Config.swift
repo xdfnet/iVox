@@ -104,32 +104,6 @@ public struct SpeechInputConfig: Codable, Sendable {
     )
 }
 
-public struct WeChatConfig: Codable, Sendable {
-    public var token: String
-    public var baseURL: String
-    public var allowFrom: String
-    public var longPollMS: Int
-    public var dataDir: String
-
-    public init(token: String = "", baseURL: String = "https://ilinkai.weixin.qq.com", allowFrom: String = "", longPollMS: Int = 35000, dataDir: String = "") {
-        self.token = token
-        self.baseURL = baseURL
-        self.allowFrom = allowFrom
-        self.longPollMS = longPollMS
-        self.dataDir = dataDir
-    }
-
-    public var enabled: Bool { !token.isEmpty }
-
-    private enum CodingKeys: String, CodingKey {
-        case token
-        case baseURL = "base_url"
-        case allowFrom = "allow_from"
-        case longPollMS = "long_poll_timeout_ms"
-        case dataDir = "data_dir"
-    }
-}
-
 public struct VoiceInfo: Codable, Sendable {
     public init(id: String, name: String? = nil, refAudio: String? = nil, refText: String? = nil, description: String? = nil) {
         self.id = id
@@ -163,7 +137,6 @@ public struct Config: Codable, Sendable {
     public var sourceVoices: [String: String]
     public var voices: [VoiceInfo]
     public var speechInput: SpeechInputConfig?
-    public var wechat: WeChatConfig?
     public var configBaseDir: String?
 
     public var voiceByID: [String: VoiceInfo] {
@@ -186,7 +159,6 @@ public struct Config: Codable, Sendable {
         case playback
         case mediaControl
         case speechInput
-        case wechat
         case defaultVoice
         case sourceVoices
         case voices

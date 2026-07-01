@@ -16,7 +16,6 @@ struct iVox: AsyncParsableCommand {
             VersionCommand.self,
             RestartCommand.self,
             ASRCommand.self,
-            WeChatCommand.self,
         ],
         defaultSubcommand: ServeCommand.self
     )
