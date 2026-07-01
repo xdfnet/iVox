@@ -131,26 +131,26 @@ actor WeChatPlatform {
     private func pollLoop() async {
         var backoff: TimeInterval = 1
         let maxBackoff: TimeInterval = 30
+        var cycle = 0
 
         while isRunning && !Task.isCancelled {
             if Task.isCancelled { break }
+            cycle += 1
 
             let resp: GetUpdatesResp
             do {
                 resp = try await client.getUpdates(buf: syncBuf, timeoutMs: config.longPollMS)
             } catch {
                 if Task.isCancelled { break }
-                if isNetworkError(error) || isTimeoutError(error) {
-                    Log.warn("长轮询失败: \(error) (\(Int(backoff))s 后重试)")
-                }
+                Log.warn("长轮询失败: \(error) (\(Int(backoff))s 后重试)")
                 try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
                 backoff = min(backoff * 2, maxBackoff)
                 continue
             }
             backoff = 1
+            if cycle % 5 == 0 { Log.debug("微信轮询第 \(cycle) 轮") }
 
             if resp.errcode == sessionExpiredErrcode {
-                Log.warn("会话过期，\(Int(backoff))s 后重试")
                 try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
                 backoff = min(backoff * 2, maxBackoff)
                 continue

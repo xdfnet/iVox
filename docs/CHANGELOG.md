@@ -1,5 +1,26 @@
 # iVox 开发日志
 
+## v2.4.0 — 2026-07-01
+
+### 新增
+
+- **微信 iW 集成** — 接入 WeChat ilink 协议，长轮询接收消息 → 注入 Claude Code
+- **微信配置** — `config.json` 新增 `wechat` 段：`token`、`base_url`、`allow_from`、`long_poll_timeout_ms`
+- **微信命令** — `ivox wechat setup`、`ivox wechat status`、`ivox wechat text`
+
+### 修复
+
+- **URLSession 超时兼容长轮询** — `withThrowingTaskGroup` 手动超时，绕过长轮询 TCP 保活导致 URLSession 空闲超时不触发的问题
+- **`GetUpdatesResp.ret` 改为可选** — 长轮询空响应不返回 `ret` 字段，`DecodingError.keyNotFound` 导致轮询卡死
+- **轮询日志增强** — 所有错误都打日志，不再静默吞掉非网络类错误
+- **Swift 6.4 编译器崩溃** — MLXAudioTTS 在 `-O` 下 `performSILProcessing()` 栈溢出，固定使用 Swift 6.3.2 工具链编译
+
+### 构建
+
+- **`.swift-version` 移除** — 改用 `TOOLCHAINS=swift-6.3.2-RELEASE` 环境变量
+- **Makefile 新增 `SWIFT` 变量** — `$(SWIFT) build` 自动使用 6.3.2 工具链
+- **`docs/compiler-bugs.md`** — 记录 Swift 编译器已知问题
+
 ## v2.3.1 — 2026-06-22
 
 ### 新增

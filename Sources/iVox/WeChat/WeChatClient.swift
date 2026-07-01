@@ -120,7 +120,22 @@ actor WeChatClient {
         applyAuth(&req)
         req.setValue(randomWechatUIN(), forHTTPHeaderField: "X-WECHAT-UIN")
         if let timeout { req.timeoutInterval = timeout }
-        let (data, resp) = try await session.data(for: req)
+        let (data, resp): (Data, URLResponse)
+        if let t = timeout, t > 10 {
+            let capture = req
+            (data, resp) = try await withThrowingTaskGroup(of: (Data, URLResponse).self) { group in
+                group.addTask { try await self.session.data(for: capture) }
+                group.addTask {
+                    try await Task.sleep(nanoseconds: UInt64(t * 1_500_000_000))
+                    throw URLError(.timedOut)
+                }
+                let result = try await group.next()!
+                group.cancelAll()
+                return result
+            }
+        } else {
+            (data, resp) = try await session.data(for: req)
+        }
         guard let http = resp as? HTTPURLResponse else {
             throw WeChatError.network("非 HTTP 响应")
         }

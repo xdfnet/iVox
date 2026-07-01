@@ -1,5 +1,6 @@
 .PHONY: all install update check init models voices assets build deploy launchd restart uninstall run sign test version clean help
 
+SWIFT := TOOLCHAINS=swift-6.3.2-RELEASE swift
 SWIFT_RELEASE_FLAGS := -c release -Xswiftc -Osize
 MODEL_DIR := $(HOME)/.config/ivox/model
 RUNTIME := scripts/runtime.sh
@@ -34,7 +35,7 @@ voices:
 assets: voices
 
 build:
-	swift build $(SWIFT_RELEASE_FLAGS)
+	$(SWIFT) build $(SWIFT_RELEASE_FLAGS)
 
 deploy: build voices
 	@$(RUNTIME) deploy-bin
@@ -55,7 +56,7 @@ sign:
 	@$(RUNTIME) sign
 
 test:
-	swift test
+	$(SWIFT) test
 
 version:
 	@if [ -z "$(V)" ]; then \

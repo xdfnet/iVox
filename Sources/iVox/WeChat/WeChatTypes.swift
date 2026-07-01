@@ -45,7 +45,7 @@ struct GetUpdatesReq: Codable, Sendable {
 }
 
 struct GetUpdatesResp: Codable, Sendable {
-    let ret: Int
+    let ret: Int?
     let errcode: Int?
     let errmsg: String?
     let msgs: [WeChatMessage]?

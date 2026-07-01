@@ -1,172 +1,195 @@
 # iVox 架构
 
-## 整体
+## 概览
+
+macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、Codex）和微信，输出侧走本地 MLX TTS/ASR + 系统媒体控制。
 
 ```
-┌─ Claude Code ──┐    ┌─ Codex ────────┐
-│ hook-speak.sh   │    │ hook-speak.sh  │
-│ bash ... claude │    │ bash ... codex │
-└────┬────────────┘    └────┬───────────┘
-     │                      │
-     └──────────┬───────────┘
-                │ ivox speak --source <name> <text>
-                ▼
-       Unix Socket (~/.config/ivox/ivox.sock)
-                            │
-                            ▼
-┌───────────────────────────────────────────────────────────┐
-│                   iVox Daemon (launchd)                   │
-│                                                            │
-│  SocketServer → ConnectionHandler       后台加载 TTS/ASR    │
-│      解析 {source:claude,voice:wanwan}                      │
-│      + TextCleaner 清洗 Markdown                           │
-│                         │                                  │
-│                         ▼                                  │
-│                  PlaybackQueue (actor)                      │
-│                    ┌─────┴─────┐                            │
-│                    │ MediaController│  ← 原生引擎控制媒体     │
-│                    │  pause/resume │    暂停/恢复音乐       │
-│                    └─────┬─────┘                            │
-│              ┌──────────┴──────────┐                       │
-│              ▼                     ▼                       │
-│        TTSEngine              AudioPlayer                  │
-│     synthesizeStream()      scheduleBuffer()               │
-│     本地 MLX 流式推理          流式播放                       │
-│     (mlx-audio-swift)       (AVAudioEngine)                 │
-└───────────────────────────────────────────────────────────┘
+                          用户
+                       ┌──┴──┐
+                       │ 微信 │
+                       └──┬──┘
+               ┌──────────┤
+          ilink 长轮询     │ hook-speak.sh
+               │          │ (Claude Code / Codex Stop Hook)
+               ▼          │
+         WeChatPlatform   │
+         ───────────────  │
+         接收 → 注入      │ Unix Socket
+                         ▼
+              ┌─────────────────────┐
+              │   Daemon (actor)    │
+              │                     │
+              │  WeChatPlatform ←──┤
+              │  SocketServer ←────┤
+              │  SpeechInput ←─────┤  ←  ⌘ 键 CGEvent 监听
+              │  MediaHTTPServer   │  →  Web UI (8888)
+              │         │          │
+              │         ▼          │
+              │  PlaybackQueue     │
+              │  (actor)           │
+              │   ├─ TTSEngine     │  mlx-audio-swift 流式推理
+              │   └─ AudioPlayer   │  AVAudioEngine 播放
+              │         │          │
+              │  MediaController   │  MRMediaRemoteSendCommand
+              │  (暂停/恢复音乐)    │
+              └─────────────────────┘
 ```
 
-## 命令体系
+## 子系统
 
-两个入口，职责分离。
+### Daemon — 生命周期管理
 
-### `make` — 构建 + 部署
+`Sources/iVox/Daemon/Daemon.swift`
 
-```
-make / install = 首次安装：检查 + 配置 + 模型 + 构建 + 部署 + 启动
-make update    = 日常更新：构建 + 参考音频 + 部署 + 重启
-make restart   = make update 的兼容别名
-make init       = 配置 + hook，幂等
-make models     = 从 ModelScope mlx-community 下载默认 MLX 模型（已存在则跳过）
-make voices     = 初始化默认参考音频（只补缺失，不覆盖用户文件）
-make build      = 编译 release（使用 -Osize，规避 MLXAudioTTS 的 -O 编译器崩溃）
-make deploy     = 构建 + 初始化参考音频 + 部署 runtime 文件
-make launchd    = 写入 launchd plist + 启动 daemon
-make uninstall  = 停服务 + 删文件
-make run        = 前台调试
-make test       = 运行测试
-make version    = 发版（make version V=vX.Y.Z）
-make clean      = 删除 .build
+所有服务的所有者。按顺序：init（加载配置/状态）→ run（并行启动各服务）→ cleanup（SIGINT/SIGTERM 优雅关闭）。各服务以 `Task` 运行，取消传播到所有子任务。
+
+```swift
+// run() 内部大致结构
+async let ws: Void = wechat?.start(handler: handleWeChatMsg)
+async let sock = socketServer.start(handler: handleSocketMsg)
+async let mic = speechInput.start()
+// ...
+await ws; await sock; await mic
 ```
 
-### `ivox` — 运行时操作
+### WeChatPlatform — 微信 ilink 长轮询
+
+`Sources/iVox/WeChat/WeChatPlatform.swift`
+
+- Actor 封装，通过 `WeChatClient` 调用微信 ilink API
+- 长轮询 `getupdates` 获取新消息，`GetUpdatesResp.ret` 为 `Int?`（空响应不返回此字段）
+- 手动 `withThrowingTaskGroup` 超时（URLSession 空闲超时在 TCP 保活下不触发）
+- 消息去重（5 分钟窗口），`allow_from` 白名单过滤
+- Typing 指示器（10 分钟 ticket 缓存，每 5 秒刷新）
+- 状态持久化：`get_updates.buf` 和 `context_tokens.json` 到 `~/.config/ivox/wechat/`
+
+收到消息 → 写 `pending_user` 文件 → `ClipboardInjector`（`osascript` Cmd+V）注入 Claude Code。
+
+### SocketServer — Unix Domain Socket IPC
+
+`Sources/iVox/Network/`
+
+- `~/.config/ivox/ivox.sock`，JSON 行协议
+- 支持 TTS 播报（`{source:claude,voice:wanwan}` 前缀）和 ASR 识别
+- 详见 [`docs/api.md`](api.md)
+
+### TTSEngine — 本地语音合成
+
+`Sources/iVox/TTS/TTSEngine.swift`
+
+- `mlx-audio-swift` 加载本地 Qwen3-TTS 模型
+- `generateStream()` 流式合成 float32 PCM → 重采样 48kHz → int16
+- 按音色读取 `refAudio` + `refText` 做声音克隆
+- 可配置重试（`maxRetries`、`retryDelayMs`）、流式间隔（`streamingInterval`）
+
+### PlaybackQueue — 播放调度
+
+`Sources/iVox/Audio/PlaybackQueue.swift`
+
+- Actor，管理播报队列
+- 新请求入队时丢弃旧 pending 任务、取消正在合成/播放的任务
+- 等待 TTS 模型就绪后再开始合成
+- 播报前通过 `MediaController` 暂停音乐，播完恢复
+
+### AudioPlayer — 音频播放
+
+`Sources/iVox/Audio/AudioPlayer.swift`
+
+- `AVAudioEngine` + `AVAudioPlayerNode.scheduleBuffer()` 流式播放
+- `drain()` 轮询等待缓冲播完
+
+### MediaController — 系统媒体控制
+
+`Sources/iVox/Audio/MediaController.swift`
+
+- `MRMediaRemoteSendCommand` 系统框架直接控制媒体播放
+- 支持播放/暂停/切换/下一曲，无需辅助功能权限
+
+### SpeechInput — 语音输入
+
+`Sources/iVox/SpeechInput/`
+
+- `CGEvent.tapCreate()` 监听右侧 ⌘ 键按下/松开
+- 按下开始录音（`AVAudioRecorder`），松开触发 ASR
+- ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
+- 需要辅助功能权限（`AXIsProcessTrustedWithOptions`）
+
+### MediaHTTPServer — Web UI
+
+`Sources/iVox/Audio/MediaHTTPServer.swift`
+
+- 嵌入式 HTTP 服务器，端口 8888
+- Web UI：播放/暂停/下一曲控制 + 状态展示
+- REST API：`/api/config`、`/api/speak` 等
+
+### iVoxKit — 共享库
+
+`Sources/iVoxKit/`（无 MLX 依赖，可独立测试）
+
+| 文件 | 职责 |
+|------|------|
+| `Config.swift` | JSON 配置模型（TTS/ASR 路径、音色、媒体控制、微信等） |
+| `Logger.swift` | 日志工具，输出到 daemon.log，5MB 轮转 |
+| `TextCleaner.swift` | Markdown AST 过滤 + 行内噪音（URL/路径/哈希/ANSI） |
+| `AudioPipeline.swift` | 音频格式转换工具 |
+| `TextSplitter.swift` | 按句切分 ≤80 字 |
+
+## 并发模型
+
+所有服务都是 **actor**，跨 actor 通信走 `await`。关键 actor 边界：
 
 ```
-ivox serve   = 启动 daemon（默认命令）
-ivox speak   = 发送播报
-ivox voice   = 音色管理
-ivox stop    = 停止 daemon
-ivox status  = 查看状态
-ivox version = 版本信息
-ivox restart = 重启 daemon
+Daemon (actor)
+  ├── WeChatPlatform (actor)   ← await 调用 WeChatClient (actor)
+  ├── PlaybackQueue (actor)    ← await 调度 TTSEngine / AudioPlayer
+  ├── SocketServer (非 actor)  → 回调 Daemon 的 actor 隔离方法
+  └── SpeechInputService       → CGEvent 回调 → actor 方法
 ```
 
-`ivox setup`、`ivox model` 已移除，由 `make` 替代。
-
-### 日常使用
-
-```bash
-# 首次安装
-git clone ... && cd iVox
-make
-
-# 改完代码后更新
-make
-
-# 卸载重装
-make uninstall
-make
-
-# 运行时操作
-ivox status
-ivox speak "你好"
-ivox voice list
-```
-
-## 模块
-
-| 模块 | 路径 | 职责 |
-|------|------|------|
-| `EntryPoint` | `Sources/iVox/EntryPoint.swift` | CLI 入口，7 个子命令 |
-| `Commands/` | `Sources/iVox/Commands/` | serve / speak / voice / stop / status / version / restart |
-| `Daemon/` | `Sources/iVox/Daemon/Daemon.swift` | 守护进程：监听 Socket → TTS → 播放 |
-| `Network/` | `Sources/iVox/Network/` | Unix Socket 服务器 + ConnectionHandler |
-| `Audio/` | `Sources/iVox/Audio/` | AudioPlayer + PlaybackQueue + MediaController |
-| `TTS/` | `Sources/iVox/TTS/TTSEngine.swift` | 本地 MLX 流式推理，支持配置化重试 |
-| `Utilities/` | `Sources/iVox/Utilities/Logger.swift` | OSLog + 文件日志，5MB 轮转 |
-| `iVoxKit/` | `Sources/iVoxKit/` | 共享库：Config、TextCleaner、AudioPipeline |
-| `scripts/` | `scripts/install-hooks.py` | 安装 hook 到 Claude / Codex |
-
-`SetupCommand`、`ModelCommand`、`HookInstaller` 已移除。Makefile 只保留流程编排，配置、参考音频、二进制部署和 launchd 操作集中在 `scripts/runtime.sh`，模型下载在 `scripts/download-models.py`。
-
-## 模型下载
-
-默认模型来源固定为 ModelScope 的 [mlx-community](https://www.modelscope.cn/organization/mlx-community)：
-
-```
-mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit → ~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit
-mlx-community/Qwen3-ASR-1.7B-4bit          → ~/.config/ivox/model/Qwen3-ASR-1.7B-4bit
-```
-
-`make models` 使用项目私有的 ModelScope Python 环境：
-
-```
-~/.local/share/ivox/modelscope-venv/
-```
-
-下载逻辑在 `scripts/download-models.py` 中。目标目录已有 `config.json` 和权重文件时直接跳过，避免重复下载。
+Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。用 `let capture = varValue` 创建值拷贝再传入闭包。
 
 ## 数据流
 
+### TTS 播报
+
 ```
-1. CLI: ivox speak -s codex "你好"
-2. SpeakCommand 拼 {source:codex}你好 → Unix Socket
-3. ConnectionHandler.handle()
-   - 解 {source:codex} → source="codex"
-   - 查 config.sourceVoices["codex"] → voiceID="wanwan"
-   - 显式 {voice:xxx} 可覆盖
-   - cleanText() 清洗 Markdown 和行内噪音
+1. Hook 脚本 → `ivox speak -s claude "文本"`
+2. SpeakCommand → Unix Socket `{source:claude}文本`
+3. ConnectionHandler.handle():
+   - 解析前缀 → source="claude"
+   - voice = sourceVoices["claude"] ?? defaultVoice
+   - 显式 `{voice:xxx}` 可覆盖
+   - cleanText() 清洗 Markdown + 行内噪音
 4. PlaybackQueue.enqueue(job)
-   - 新请求入队 → 丢弃 pending 旧任务，并取消正在合成/播放的旧任务
-   - MediaController 调 MediaRemote.sendCommand(.pause) — 暂停音乐
+   → 丢弃旧任务，MediaController.pause()
 5. TTSEngine.synthesizeStream() → AsyncThrowingStream<Data>
-   - Daemon 先启动 socket，再后台加载/预热模型
-   - TTS 未就绪时 PlaybackQueue 等待模型 ready，不阻塞 socket
-   - `mlx-audio-swift` 加载本地 Qwen3-TTS 模型
-   - 按音色读取 `refAudio` + `refText`
-   - `generateStream()` 流式产出 float32 样本
-   - `audioToPCM`: 按模型采样率重采样到 48k + float32→int16
-   - 语言、流式间隔、重试次数、重试间隔、输出采样率由 `tts` 配置控制
 6. AudioPlayer.write(pcm) → scheduleBuffer 流式播放
-7. player.drain() — 轮询等待 buffer 播完
-8. MediaController 调 MediaRemote.sendCommand(.play) — 恢复音乐
+7. drain() 等待播放完成
+8. MediaController.resume()
+```
+
+### 微信消息
+
+```
+1. WeChatPlatform 长轮询 getupdates（每 ~35 秒）
+2. 收到消息 → 去重 → 白名单过滤 → 提取文本
+3. Daemon.handleWeChatMessage()
+   → 写 pending_user → ClipboardInjector Cmd+V 注入
+4. Claude Code Stop Hook → ivox speak --source claude
 ```
 
 ## 文本过滤
 
-`TextCleaner` 只在 daemon 侧执行，Hook 脚本不做内容清洗。过滤分两层：
+`TextCleaner` 只在 daemon 侧执行，分两层：
 
-1. Markdown AST 结构过滤
-   - 使用 `swift-markdown` 解析完整回复
-   - 跳过 `CodeBlock`、`InlineCode`、`HTMLBlock`、`InlineHTML`、`Image`、`Table`、`ThematicBreak`
-   - 保留标题、段落、列表项、引用、链接标题、加粗/斜体文本
-2. 行内噪音过滤
-   - 删除 URL、常见绝对路径和 `~/...`
-   - 删除 UUID、12-40 位 commit hash、ANSI 终端转义
-   - 删除 `12MB/s` 这类速度噪音和 `ETA` / `预计剩余` / `剩余时间`
-   - 删除 `✅`、`❌`、`✓`、`✗`，把 `→` 转成"到"
-
-清洗后的段落用中文逗号（`，`）拼接。版本号、API 名、百分比和普通语义文本保留。
+1. **Markdown AST**（`swift-markdown` 库）
+   - 跳过：CodeBlock、InlineCode、HTMLBlock、Image、Table、ThematicBreak
+   - 保留：标题、段落、列表、引用、链接标题、加粗/斜体
+2. **行内噪音**
+   - 删除 URL、绝对路径、UUID、12-40 位哈希、ANSI 转义
+   - 删除速度/ETA 噪音（`12MB/s`、`预计剩余`）
+   - 符号替换：✅❌✓✗→
 
 ## 音色匹配
 
@@ -174,43 +197,47 @@ mlx-community/Qwen3-ASR-1.7B-4bit          → ~/.config/ivox/model/Qwen3-ASR-1.
 
 ```
 ConnectionHandler.extractVoicePrefix():
-  if {voice:xxx} in payload  → 直接用 xxx
+  if {voice:xxx} in payload  → xxx
   else if {source:s}         → sourceVoices[s] ?? defaultVoice
   else                       → defaultVoice
 ```
 
-> 音色由本地 TTS 模型通过 `refAudio` + `refText` 实现声音克隆；不配置参考音频时使用模型默认声音。
-
-## 媒体控制
-
-`MediaController` 通过 MediaRemote 系统框架直接控制媒体播放，播报时暂停音乐、播完恢复。
-支持本地原生模式（默认）和远程 HTTP 模式（`baseURL` 非空时）。本地模式使用 `MRMediaRemoteSendCommand` 系统 API，无需辅助功能权限。
-
-## 日志
-
-`~/.config/ivox/daemon.log`，超过 5MB 自动归档为 `.old`。
-
 ## 部署结构
 
-所有运行时文件在 `~` 下，删除项目目录不影响运行：
+所有运行时文件在 `~` 下，项目目录可删：
 
 ```
-~/.local/bin/ivox                          # CLI 入口
-~/.local/share/ivox/runtime/iVox          # 二进制
-~/.config/ivox/config.json                 # 配置（模型路径、音色、语音输入）
-~/.config/ivox/model/                      # 本地 TTS / ASR 模型
-~/.config/ivox/voices/                     # 可选参考音频
-~/.config/ivox/hook-speak.sh               # Hook 脚本
+~/.local/bin/ivox                          # CLI 入口（符号链接）
+~/.local/share/ivox/runtime/iVox          # 实际二进制
+~/.config/ivox/config.json                 # 配置
+~/.config/ivox/model/                      # TTS/ASR MLX 模型
+~/.config/ivox/voices/                     # 参考音频
+~/.config/ivox/wechat/                     # 微信轮询状态
+~/.config/ivox/daemon.log                  # 日志（5MB 轮转）
 ~/Library/LaunchAgents/com.user.ivox.plist  # launchd 守护
 ```
 
-TTS / ASR 在本机加载模型推理，不需要额外启动 iLLM 服务。
+`make deploy` 构建 → 签名 → 拷贝二进制 → 重启 launchd 服务。
+
+## 构建系统
+
+`Makefile` 使用 `TOOLCHAINS=swift-6.3.2-RELEASE`（Swift 6.4 快照在编译 MLXAudioTTS 时有编译器崩溃，见 [`compiler-bugs.md`](compiler-bugs.md)）。
+
+关键 target：
+
+| Target | 作用 |
+|--------|------|
+| `make build` | `swift build -c release -Xswiftc -Osize` |
+| `make deploy` | build + voices + deploy-bin + sign |
+| `make update` | deploy + launchd restart |
+| `make run` | build + 前台运行（调试） |
+| `make test` | 运行 iVoxKit 测试 |
 
 ## Hook 集成
 
-| 工具 | 配置文件 | 方式 |
+| 工具 | 配置文件 | 触发 |
 |------|----------|------|
-| Claude Code | `~/.claude/settings.json` | Stop → hook-speak.sh claude |
-| Codex | `~/.codex/hooks.json` | Stop → hook-speak.sh codex（首次触发时授权即可） |
+| Claude Code | `~/.claude/settings.json` | Stop Hook → hook-speak.sh |
+| Codex | `~/.codex/hooks.json` | Stop Hook → hook-speak.sh |
 
-由 `scripts/install-hooks.py` 统一安装，已存在则跳过。`make init` 幂等调用。
+`hook-speak.sh` 提取 `last_assistant_message`，调用 `ivox wechat text` 和 `ivox speak`。
