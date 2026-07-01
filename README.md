@@ -43,7 +43,12 @@ ivox listen -f 录音.wav     # 语音识别
 ivox restart                # 重启服务
 ```
 
-**微信**：配置好后微信发的消息自动注入 Claude Code，AI 回复通过 TTS 播报并转发回微信。
+**微信**：配置后微信消息自动注入 Claude Code，AI 回复通过 TTS 播报并转发回微信。
+
+```bash
+ivox wechat setup              # 扫码登录微信机器人的 ilink bot
+ivox wechat status             # 查看配置状态
+```
 
 音色匹配：`--voice` 指定 > `sourceVoices` 映射 > `defaultVoice`
 
