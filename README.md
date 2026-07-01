@@ -91,6 +91,13 @@ ivox serve               # 前台启动（调试用）
 ivox say                 # 语音输入状态
 ```
 
+临时启停（不卸载 plist，适合调试）：
+
+```bash
+launchctl load   ~/Library/LaunchAgents/com.user.ivox.plist   # 启动
+launchctl unload ~/Library/LaunchAgents/com.user.ivox.plist   # 停止
+```
+
 ### 音色
 
 ```bash
