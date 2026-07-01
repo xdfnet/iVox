@@ -32,7 +32,6 @@ actor WeChatPlatform {
             : config.dataDir + "/wechat"
         self.dataDir = dir
         // 在 init 中直接加载状态（不能调 actor-isolated 方法）
-        let fm = FileManager.default
         if let data = try? Data(contentsOf: URL(fileURLWithPath: dir + "/get_updates.buf")),
            let buf = String(data: data, encoding: .utf8) {
             self.syncBuf = buf
