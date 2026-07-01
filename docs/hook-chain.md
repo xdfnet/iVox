@@ -10,7 +10,7 @@
 │ settings.json    │    │ hooks.json     │
 └─────┬────────────┘    └─────┬──────────┘
       │                       │
-      │    hook-speak.sh <source> <text>   │
+      │    hook.sh <source> <text>   │
       │                       │
       └──────────┬────────────┘
                  │
@@ -68,7 +68,7 @@ Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发。
 
 ### 2. Hook 脚本
 
-`~/.config/ivox/hook-speak.sh`
+`~/.config/ivox/hook.sh`
 
 接收来源参数（如 `codex` / `claude`），从 Stop Hook 的 stdin JSON 提取最后一条 assistant message。职责：
 

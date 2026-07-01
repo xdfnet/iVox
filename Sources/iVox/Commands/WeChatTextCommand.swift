@@ -39,8 +39,10 @@ struct WeChatTextCommand: AsyncParsableCommand {
             try await platform.sendMessage(to: userID, text: text)
             try? FileManager.default.removeItem(atPath: pendingFile)
             Log.info("📤 hook-reply: 已发送 \(text.count) 字符 → \(userID.prefix(20))…")
+            Log.flush()
         } catch {
             Log.error("hook-reply: 发送失败: \(error)")
+            Log.flush()
         }
     }
 }

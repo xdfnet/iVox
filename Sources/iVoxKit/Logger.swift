@@ -29,6 +29,11 @@ public enum Log {
         writeFile("DEBUG", message)
     }
 
+    /// 确保所有挂起的写操作完成（CLI 进程退出前调用）
+    public static func flush() {
+        fileQueue.sync(flags: .barrier) {}
+    }
+
     private static func writeFile(_ level: String, _ message: String) {
         fileQueue.async {
             let line = "\(timestamp()) [\(level)] \(message)\n"

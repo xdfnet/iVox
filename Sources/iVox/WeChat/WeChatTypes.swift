@@ -73,7 +73,7 @@ struct SendMessageReq: Codable, Sendable {
 }
 
 struct SendMessageResp: Codable, Sendable {
-    let ret: Int
+    let ret: Int?
     let errcode: Int?
     let errmsg: String?
 }

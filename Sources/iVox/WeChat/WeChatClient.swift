@@ -45,8 +45,8 @@ actor WeChatClient {
         let data = try await post("ilink/bot/sendmessage", body: SendMessageReq(msg: msg, baseInfo: .default))
         if data.isEmpty { return }
         let resp = try decoder.decode(SendMessageResp.self, from: data)
-        if resp.ret != 0 {
-            throw WeChatError.sendFailed(ret: resp.ret, errcode: resp.errcode ?? 0, errmsg: resp.errmsg ?? "")
+        if let r = resp.ret, r != 0 {
+            throw WeChatError.sendFailed(ret: r, errcode: resp.errcode ?? 0, errmsg: resp.errmsg ?? "")
         }
     }
 
@@ -55,8 +55,8 @@ actor WeChatClient {
         let req = GetConfigReq(ilinkUserID: userID, contextToken: contextToken, baseInfo: .default)
         let data = try await post("ilink/bot/getconfig", body: req)
         let resp = try decoder.decode(GetConfigResp.self, from: data)
-        guard resp.ret == 0, resp.errcode == nil || resp.errcode == 0 else {
-            throw WeChatError.configFailed(ret: resp.ret, errcode: resp.errcode ?? 0, errmsg: resp.errmsg ?? "")
+        guard (resp.ret ?? 0) == 0, resp.errcode == nil || resp.errcode == 0 else {
+            throw WeChatError.configFailed(ret: resp.ret ?? 0, errcode: resp.errcode ?? 0, errmsg: resp.errmsg ?? "")
         }
         guard let ticket = resp.typingTicket, !ticket.isEmpty else {
             throw WeChatError.missingTypingTicket
@@ -70,8 +70,8 @@ actor WeChatClient {
         let data = try await post("ilink/bot/sendtyping", body: req)
         if data.isEmpty { return }
         let resp = try decoder.decode(SendMessageResp.self, from: data)
-        if resp.ret != 0 {
-            throw WeChatError.typingFailed(ret: resp.ret, errcode: resp.errcode ?? 0, errmsg: resp.errmsg ?? "")
+        if let r = resp.ret, r != 0 {
+            throw WeChatError.typingFailed(ret: r, errcode: resp.errcode ?? 0, errmsg: resp.errmsg ?? "")
         }
     }
 

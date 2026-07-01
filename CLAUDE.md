@@ -39,7 +39,7 @@ Sources/iVox/          — main executable target
   WeChat/              — WeChat ilink HTTP client + long-poll platform
   Network/             — SocketServer (Unix domain socket for IPC)
   Utilities/           — Version, logging helpers
-  Resources/           — hook-speak.sh, assets, default voices
+  Resources/           — hook.sh, assets, default voices
 
 Sources/iVoxKit/       — shared library (no MLX dependency)
   Config.swift         — JSON config model
@@ -58,7 +58,7 @@ scripts/               — runtime.sh, download-models.sh, install-*.sh
 Actor-based daemon managed by launchd (`com.user.ivox`):
 
 ```
-Claude Code/Codex  →  hook-speak.sh  →  Unix Socket  →  Daemon
+Claude Code/Codex  →  hook.sh  →  Unix Socket  →  Daemon
                                                           ├─ PlaybackQueue (actor)
                                                           │   ├─ TTSEngine (mlx-audio-swift)
                                                           │   └─ AudioPlayer (AVAudioEngine)

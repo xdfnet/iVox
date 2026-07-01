@@ -10,7 +10,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
                        │ 微信 │
                        └──┬──┘
                ┌──────────┤
-          ilink 长轮询     │ hook-speak.sh
+          ilink 长轮询     │ hook.sh
                │          │ (Claude Code / Codex Stop Hook)
                ▼          │
          WeChatPlatform   │
@@ -237,7 +237,7 @@ ConnectionHandler.extractVoicePrefix():
 
 | 工具 | 配置文件 | 触发 |
 |------|----------|------|
-| Claude Code | `~/.claude/settings.json` | Stop Hook → hook-speak.sh |
-| Codex | `~/.codex/hooks.json` | Stop Hook → hook-speak.sh |
+| Claude Code | `~/.claude/settings.json` | Stop Hook → hook.sh |
+| Codex | `~/.codex/hooks.json` | Stop Hook → hook.sh |
 
-`hook-speak.sh` 提取 `last_assistant_message`，调用 `ivox wechat text` 和 `ivox speak`。
+`hook.sh` 提取 `last_assistant_message`，调用 `ivox wechat text` 和 `ivox speak`。

@@ -8,7 +8,7 @@ LAUNCHER="${HOME}/.local/bin/ivox"
 LABEL="com.user.ivox"
 PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 CONFIG="${HOME}/.config/ivox/config.json"
-HOOK_SH="${HOME}/.config/ivox/hook-speak.sh"
+HOOK_SH="${HOME}/.config/ivox/hook.sh"
 LOG="${HOME}/.config/ivox/daemon.log"
 SOCKET="${HOME}/.config/ivox/ivox.sock"
 VOICE_DIR="${HOME}/.config/ivox/voices"
@@ -39,7 +39,7 @@ init_config() {
     echo "[i] 配置已存在: ${CONFIG}"
   fi
 
-  cp "${ROOT}/Sources/iVox/Resources/hook-speak.sh" "${HOOK_SH}"
+  cp "${ROOT}/Sources/iVox/Resources/hook.sh" "${HOOK_SH}"
   chmod 755 "${HOOK_SH}"
   echo "✓  hook: ${HOOK_SH}"
 

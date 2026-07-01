@@ -7,7 +7,7 @@ HOOK_SH="${1:?用法: install-hooks.sh <hook-sh-path>}"
 # ── Claude ──
 CLAUDE_JSON="$HOME/.claude/settings.json"
 if [[ -f "$CLAUDE_JSON" ]]; then
-  if grep -q 'hook-speak.sh' "$CLAUDE_JSON" 2>/dev/null; then
+  if grep -q 'hook.sh' "$CLAUDE_JSON" 2>/dev/null; then
     echo "[i] Claude hook 已存在"
   else
     # 用 jq 加 hook，没有 jq 就 fallback 到系统 python3
@@ -38,7 +38,7 @@ CODEX_JSON="$HOME/.codex/hooks.json"
 mkdir -p "$(dirname "$CODEX_JSON")"
 [[ -f "$CODEX_JSON" ]] || echo '{}' > "$CODEX_JSON"
 
-if grep -q 'hook-speak.sh' "$CODEX_JSON" 2>/dev/null; then
+if grep -q 'hook.sh' "$CODEX_JSON" 2>/dev/null; then
   echo "[i] Codex hook 已存在"
 else
   if command -v jq &>/dev/null; then
