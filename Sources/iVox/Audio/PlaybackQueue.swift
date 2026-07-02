@@ -37,7 +37,6 @@ actor PlaybackQueue {
         currentTask = nil
         jobs.removeAll()
         player.cancelPendingPlayback()
-        player.stop()
     }
 
     func enqueue(_ job: PlaybackJob) async {
