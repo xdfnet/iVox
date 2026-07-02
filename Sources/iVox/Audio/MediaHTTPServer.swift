@@ -167,7 +167,7 @@ final class MediaHTTPServer: @unchecked Sendable {
     /// - 应用切换（toggle/status — 走 NSWorkspace + open，无需 CGEvent）
     private static let actionsWithoutAccessibilityCheck: Set<String> = [
         "status", "lock_status", "status_douyin", "status_qishui",
-        "play", "pause", "playpause", "next", "prev",
+        "play", "pause", "next", "prev",
         "toggle_douyin", "toggle_qishui",
     ]
 
@@ -182,7 +182,7 @@ final class MediaHTTPServer: @unchecked Sendable {
             if case .failure(let e) = await MediaController.pause() { return ("failed", e.errorDescription) }
             return ("paused", nil)
         case "playpause":
-            if case .failure(let e) = await MediaController.playPause() { return ("failed", e.errorDescription) }
+            if case .failure(let e) = await MediaController.pressSpace() { return ("failed", e.errorDescription) }
             return ("success", nil)
         case "next": _ = await MediaController.nextTrack(); return ("success", nil)
         case "prev": _ = await MediaController.previousTrack(); return ("success", nil)
