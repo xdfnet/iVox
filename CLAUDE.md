@@ -49,7 +49,7 @@ Sources/iVoxKit/       — shared library (no MLX dependency)
 
 Sources/iVoxTests/     — tests (depend on iVoxKit only)
 
-docs/                  — architecture.md, api.md, CHANGELOG.md, hook-chain.md, compiler-bugs.md
+docs/                  — architecture.md, api.md, CHANGELOG.md, hook-chain.md, stability.md, compiler-bugs.md
 scripts/               — runtime.sh, download-models.sh, install-*.sh
 ```
 

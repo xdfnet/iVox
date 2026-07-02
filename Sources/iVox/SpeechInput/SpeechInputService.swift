@@ -6,6 +6,7 @@ import iVoxKit
 final class SpeechInputService: @unchecked Sendable {
     private let config: SpeechInputConfig
     private let media: MediaController
+    private let queue: PlaybackQueue
     private let recordDir: URL
     private var thread: Thread?
     private var eventTap: CFMachPort?
@@ -19,9 +20,10 @@ final class SpeechInputService: @unchecked Sendable {
     private var state: State = .idle
     private let stateQueue = DispatchQueue(label: "com.user.ivox.speechinput.state")
 
-    init(config: SpeechInputConfig, mediaController: MediaController, asrEngine: ASREngine) {
+    init(config: SpeechInputConfig, mediaController: MediaController, playbackQueue: PlaybackQueue, asrEngine: ASREngine) {
         self.config = config
         self.media = mediaController
+        self.queue = playbackQueue
         self.asrEngine = asrEngine
         self.recordDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/ivox/recordings")
@@ -124,7 +126,8 @@ final class SpeechInputService: @unchecked Sendable {
             guard shouldStart else { return }
 
             Task { await media.pause() }
-            Log.debug("语音输入: ⌘ 按下 → 暂停音乐 → 开始录音")
+            Task { await queue.cancelAll() }
+            Log.debug("语音输入: ⌘ 按下 → 暂停音乐 → 取消 TTS → 开始录音")
 
             guard let (recorder, url) = startRecording() else { return }
             stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }

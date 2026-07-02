@@ -33,6 +33,7 @@ actor Daemon {
         self.speechInput = SpeechInputService(
             config: siConfig,
             mediaController: mediaController,
+            playbackQueue: queue,
             asrEngine: asrEngine
         )
 

@@ -31,6 +31,15 @@ actor PlaybackQueue {
         player.stop()
     }
 
+    /// 取消所有播放（正在播的和队列中等待的）
+    func cancelAll() {
+        currentTask?.cancel()
+        currentTask = nil
+        jobs.removeAll()
+        player.cancelPendingPlayback()
+        player.stop()
+    }
+
     func enqueue(_ job: PlaybackJob) async {
         if !jobs.isEmpty {
             Log.info("丢弃待播: \(jobs.count) 条")
