@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 安装 iVox hook 到 Claude / Codex，已存在则跳过
+# 安装 iVox hook 到 Claude / Codex / Qwen Code，已存在则跳过
 set -euo pipefail
 
 HOOK_SH="${1:?用法: install-hooks.sh <hook-sh-path>}"
@@ -59,5 +59,34 @@ with open('$CODEX_JSON', 'w') as f:
     echo "✓  Codex hook（首次触发时授权即可）"
   else
     echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
+  fi
+fi
+
+# ── Qwen Code ──
+QWEN_JSON="$HOME/.qwen/settings.json"
+mkdir -p "$(dirname "$QWEN_JSON")"
+[[ -f "$QWEN_JSON" ]] || echo '{}' > "$QWEN_JSON"
+
+if grep -q 'hook.sh' "$QWEN_JSON" 2>/dev/null; then
+  echo "[i] Qwen Code hook 已存在"
+else
+  if command -v jq &>/dev/null; then
+    jq '.hooks.Stop += [{"hooks": [{"command": "bash '"$HOOK_SH"' qwen", "timeout": 60, "type": "command"}]}]' "$QWEN_JSON" > "${QWEN_JSON}.tmp" && mv "${QWEN_JSON}.tmp" "$QWEN_JSON"
+    echo "✓  Qwen Code hook"
+  elif command -v python3 &>/dev/null; then
+    python3 -c "
+import json
+with open('$QWEN_JSON') as f:
+    d = json.load(f)
+d.setdefault('hooks', {}).setdefault('Stop', []).append({
+    'hooks': [{'command': 'bash $HOOK_SH qwen', 'timeout': 60, 'type': 'command'}]
+})
+with open('$QWEN_JSON', 'w') as f:
+    json.dump(d, f, indent=2)
+    f.write('\n')
+"
+    echo "✓  Qwen Code hook"
+  else
+    echo "⚠️  需要 jq 或 python3 写入 Qwen Code 配置，请手动添加"
   fi
 fi

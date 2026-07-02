@@ -24,7 +24,8 @@
   "defaultVoice": "mizai",
   "sourceVoices": {
     "claude": "taozi",
-    "codex": "wanwan"
+    "codex": "wanwan",
+    "qwen": "dayi"
   },
   "speechInput": {
     "enabled": true,
@@ -59,7 +60,7 @@
       "name": "大易",
       "refAudio": "~/.config/ivox/voices/ref_dayi.wav",
       "refText": "大家好，我是大易。我有着沉稳可靠的男声，听起来踏实有力量。需要播报重要通知或者讲述深度内容，交给我就好。",
-      "description": "沉稳可靠"
+      "description": "Qwen Code 音色"
     }
   ]
 }
