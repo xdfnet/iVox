@@ -76,78 +76,34 @@
             letter-spacing: 1px;
         }
 
-        /* ---------- 锁屏滑块 ---------- */
+        /* ---------- 锁屏按钮 ---------- */
         .lock-row {
             display: flex;
             align-items: center;
-            justify-content: space-between;
+            justify-content: center;
             width: 100%;
-            max-width: 280px;
-            background: rgba(255, 255, 255, .06);
+            max-width: 300px;
+            background: rgba(255, 69, 58, .08);
+            border: 1px solid rgba(255, 69, 58, .15);
             border-radius: 16px;
             padding: 14px 20px;
-        }
-
-        .lock-label {
-            display: flex;
-            align-items: center;
-            gap: 10px;
+            cursor: pointer;
+            transition: all .15s cubic-bezier(.4, 0, .2, 1);
+            -webkit-tap-highlight-color: transparent;
+            touch-action: manipulation;
+            gap: 8px;
+            color: #ff453a;
             font-size: 15px;
             font-weight: 500;
-            color: rgba(255, 255, 255, .85);
         }
 
-        /* iOS-style toggle switch */
-        .switch {
-            position: relative;
-            width: 51px;
-            height: 31px;
+        .lock-row:active {
+            transform: scale(.97);
+            opacity: .8;
+        }
+
+        .lock-row svg {
             flex-shrink: 0;
-            cursor: pointer;
-        }
-
-        .switch input {
-            opacity: 0;
-            width: 0;
-            height: 0;
-            position: absolute;
-        }
-
-        .switch .track {
-            position: absolute;
-            inset: 0;
-            background: rgba(255, 255, 255, .2);
-            border-radius: 16px;
-            transition: background .2s cubic-bezier(.4, 0, .2, 1);
-        }
-
-        .switch .thumb {
-            position: absolute;
-            top: 2px;
-            left: 2px;
-            width: 27px;
-            height: 27px;
-            background: #fff;
-            border-radius: 50%;
-            box-shadow: 0 2px 8px rgba(0,0,0,.3);
-            transition: transform .2s cubic-bezier(.4, 0, .2, 1);
-        }
-
-        .switch input:checked + .track {
-            background: #30d158;
-        }
-
-        .switch input:checked + .track .thumb {
-            /* Can't target sibling of sibling with pure CSS, handle via JS class */
-        }
-
-        .switch.on .thumb {
-            transform: translateX(20px);
-        }
-
-        .switch.loading {
-            opacity: .5;
-            pointer-events: none;
         }
 
         /* ---------- App 快捷方式 ---------- */
@@ -306,16 +262,10 @@
     <div class="container">
         <h1>iVox Remote</h1>
 
-        <!-- 锁屏（滑块） -->
-        <div class="lock-row">
-            <span class="lock-label">
-                <svg width="18" height="18" viewBox="0 0 24 24" fill="rgba(255,255,255,.7)"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2z"/></svg>
-                锁定屏幕
-            </span>
-            <label class="switch" id="lockSwitch">
-                <input type="checkbox" id="lockCheckbox">
-                <div class="track"><div class="thumb"></div></div>
-            </label>
+        <!-- 锁屏 -->
+        <div class="lock-row" onclick="send('lock')">
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="#ff453a"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2z"/></svg>
+            锁定屏幕
         </div>
 
         <!-- App 快捷方式 -->
@@ -356,41 +306,6 @@
                 show(ok ? '成功' : '失败', !ok);
             } catch (e) { show('错误', true) }
         }
-
-        // ---------- 锁屏滑块 ----------
-        const lockCheckbox = document.getElementById('lockCheckbox');
-        const lockSwitch = document.getElementById('lockSwitch');
-
-        function updateLockUI(locked) {
-            lockCheckbox.checked = locked;
-            lockSwitch.classList.toggle('on', locked);
-        }
-
-        lockSwitch.addEventListener('click', async function(e) {
-            e.preventDefault();
-            if (lockSwitch.classList.contains('loading')) return;
-            lockSwitch.classList.add('loading');
-            // 先乐观翻转
-            const newState = !lockCheckbox.checked;
-            updateLockUI(newState);
-            try {
-                const r = await fetch('/api/lock');
-                const d = await r.json();
-                const ok = okStatuses.has(d.status);
-                show(ok ? '锁屏已' + (d.status === 'lock_success' ? '锁定' : '切换') : '失败', !ok);
-                if (!ok) updateLockUI(!newState); // 失败回滚
-            } catch (e) {
-                show('错误', true);
-                updateLockUI(!newState); // 失败回滚
-            }
-            lockSwitch.classList.remove('loading');
-        });
-
-        // 页面加载时查询锁屏状态
-        fetch('/api/lock_status')
-            .then(r => r.json())
-            .then(d => updateLockUI(d.status === 'locked'))
-            .catch(() => {});
 
         function show(m, e) {
             const el = document.getElementById('toast');

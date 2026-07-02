@@ -86,8 +86,9 @@ deploy_bin() {
     cp -R "$mlx_bundle" "${HOME}/.local/bin/"
   fi
   # 复制 SPM 资源包（index.html、图标等）
+  # 优先用 release 版本，避免 find 随机命中 debug 旧包
   local ivox_bundle
-  ivox_bundle=$(find "${ROOT}/.build" -type d -name "iVox_iVox.bundle" 2>/dev/null | head -1)
+  ivox_bundle=$(find "${ROOT}/.build/arm64-apple-macosx/release" -type d -name "iVox_iVox.bundle" 2>/dev/null | head -1)
   if [[ -n "$ivox_bundle" ]]; then
     rm -rf "${HOME}/.local/bin/iVox_iVox.bundle"
     cp -R "$ivox_bundle" "${HOME}/.local/bin/"
