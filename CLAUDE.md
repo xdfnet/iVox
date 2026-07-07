@@ -1,117 +1,121 @@
 # CLAUDE.md
 
-This file provides guidance to Claude Code (claude.ai/code) when working with code in this repository.
+为 Claude Code 提供代码协作指导。
 
-## Build
+## 编译
 
 ```bash
-# Release build (default)
+# Release 编译（默认）
 make build
 
-# Deploy + restart launchd service
+# 部署 + 重启 launchd 服务
 make deploy
 
-# Build + deploy + restart
+# 编译 + 部署 + 重启
 make update
 
-# Run tests
+# 运行测试
 make test
 
-# Clean build artifacts
+# 清除构建产物
 make clean
 
-# Front-end debugging
-make run          # build + foreground serve
+# 前台调试运行
+make run
 ```
 
-**Swift 6.3.2 required** — Swift 6.4 snapshot (2026-06-15) crashes on `-O` with MLXAudioTTS. The Makefile uses `TOOLCHAINS=swift-6.3.2-RELEASE`.
+**需要 Swift 6.3.2** — Swift 6.4 快照版（2026-06-15）在 `-O` 下编译 MLXAudioTTS 会崩溃。Makefile 使用 `TOOLCHAINS=swift-6.3.2-RELEASE`。
 
-## Project Structure
+## 项目结构
 
 ```
-Sources/iVox/          — main executable target
-  EntryPoint.swift     — @main, ArgumentParser subcommands
-  Commands/            — ServeCommand, SpeakCommand, WeChatCommand, etc.
+Sources/iVox/          — 主程序 target
+  EntryPoint.swift     — @main, ArgumentParser 子命令
+  Commands/            — ServeCommand, SpeakCommand, WeChatCommand 等
   Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop
-  TTS/                 — TTSEngine (mlx-audio-swift stream synthesis)
+  TTS/                 — TTSEngine（mlx-audio-swift 流式合成）
   Audio/               — AudioPlayer, PlaybackQueue, MediaController, MediaHTTPServer
-  SpeechInput/         — macOS speech recognition, Cmd-key tap via CGEvent
-  WeChat/              — WeChat ilink HTTP client + long-poll platform
-  Network/             — SocketServer (Unix domain socket for IPC)
-  Utilities/           — Version, logging helpers
-  Resources/           — hook.sh, assets, default voices
+  SpeechInput/         — macOS 语音识别，Cmd 键监听 via CGEvent
+  WeChat/              — 微信 ilink HTTP 客户端 + 长轮询平台
+  Network/             — SocketServer（Unix domain socket IPC）
+  Utilities/           — Version, 日志工具
+  Resources/          — hook.sh, assets, 默认音色
 
-Sources/iVoxKit/       — shared library (no MLX dependency)
-  Config.swift         — JSON config model
+Sources/iVoxKit/       — 共享库（无 MLX 依赖）
+  Config.swift         — JSON 配置模型
   Logger.swift         — Log.{info,debug,warn,error}
-  TextCleaner.swift    — Markdown + noise filtering for TTS
-  TextSplitter.swift   — chunk text for streaming
+  TextCleaner.swift    — Markdown + 噪音过滤（给 TTS 用）
+  TextSplitter.swift   — 流式文本分块
 
-Sources/iVoxTests/     — tests (depend on iVoxKit only)
+Sources/iVoxTests/     — 测试（仅依赖 iVoxKit）
 
 docs/                  — architecture.md, api.md, CHANGELOG.md, hook-chain.md, stability.md, compiler-bugs.md
 scripts/               — runtime.sh, download-models.sh, install-*.sh
 ```
 
-## Architecture
+## 架构
 
-Actor-based daemon managed by launchd (`com.user.ivox`):
+基于 launchd 管理的 actor 架构（`com.user.ivox`）：
 
 ```
 Claude Code/Codex  →  hook.sh  →  Unix Socket  →  Daemon
                                                           ├─ PlaybackQueue (actor)
                                                           │   ├─ TTSEngine (mlx-audio-swift)
                                                           │   └─ AudioPlayer (AVAudioEngine)
-                                                          ├─ WeChatPlatform (actor, long-poll)
-                                                          ├─ SpeechInputService (Cmd-key tap + ASR)
-                                                          └─ MediaHTTPServer (port 8888, Web UI)
+                                                          ├─ WeChatPlatform (actor, 长轮询)
+                                                          ├─ SpeechInputService (Cmd 键 + ASR)
+                                                          └─ MediaHTTPServer (端口 8888, Web UI)
 ```
 
-Key patterns:
-- **Swift 6 strict concurrency**: All services are `actor` types. Cross-actor calls use `await`. `@Sendable` closures must capture value-copied `let` bindings (not `var` from actor context).
-- **Daemon lifecycle**: `init` loads config/preferences → `run()` starts all services in parallel → `cleanup()` tears down on SIGINT/SIGTERM.
-- **WeChat long-poll**: `GetUpdatesResp.ret` is `Int?` (API omits `ret` on empty responses). Manual `withThrowingTaskGroup` timeout races the URL request against a `Task.sleep` timer (URLSession idle timeout doesn't fire on long-poll connections with TCP keep-alives).
-- **TTS pipeline**: Qwen3-TTS via `mlx-audio-swift` with streaming `AVAudioEngine` playback. Text is preprocessed by `TextCleaner` (strip Markdown noise, URLs, paths, ANSI codes).
-- **Config**: JSON at `~/.config/ivox/config.json`. All runtime files under `~/.config/ivox/`.
-- **Logging**: `~/.config/ivox/daemon.log` (stdout/stderr from launchd). Use `Log.{info,debug,warn,error}`.
+关键模式：
+- **Swift 6 严格并发**：所有服务都是 `actor` 类型。跨 actor 调用使用 `await`。`@Sendable` 闭包必须捕获值拷贝的 `let` 绑定（不能是 actor 上下文中的 `var`）。
+- **Daemon 生命周期**：`init` 加载配置 → `run()` 并行启动所有服务 → `cleanup()` 处理 SIGINT/SIGTERM 退出。
+- **微信长轮询**：`GetUpdatesResp.ret` 是 `Int?`（API 在空响应时省略 `ret`）。手动用 `withThrowingTaskGroup` 让 URL 请求和 `Task.sleep` 超时竞速（URLSession idle timeout 在长轮询 TCP keep-alive 下不会触发）。
+- **TTS 流水线**：Qwen3-TTS 通过 `mlx-audio-swift` 流式合成，`AVAudioEngine` 播放。文本先由 `TextCleaner` 预处理（去除 Markdown 噪音、URL、路径、ANSI 码）。
 
-## Key Known Issues
+- **配置**：`~/.config/ivox/config.json`，所有运行时文件在 `~/.config/ivox/` 下。
 
-### Compiler crash on Swift 6.4 snapshot
-`swift-frontend` crashes with stack overflow in `performSILProcessing()` when building MLXAudioTTS with `-O`/`-Osize`. Workaround: use Swift 6.3.2 stable toolchain. See `docs/compiler-bugs.md`.
+- **日志**：`~/.config/ivox/daemon.log`（launchd 的 stdout/stderr）。使用 `Log.{info,debug,warn,error}`。
 
-### Code signing invalidates TCC on rebuild
-Ad-hoc signature changes each build → TCC permissions (Microphone, Accessibility) lost. `make deploy` re-signs automatically. After deploy, re-enable permissions in System Settings if needed.
+## 已知问题
 
-## Deployment
+### Swift 6.4 快照版编译器崩溃
+`swift-frontend` 在 `-O`/`-Osize` 下编译 MLXAudioTTS 时 stack overflow。临时方案：使用 Swift 6.3.2 stable。详见 `docs/compiler-bugs.md`。
+
+### 代码签名变更导致 TCC 权限失效
+Ad-hoc 签名每次构建都会变化 → TCC 权限（麦克风、辅助功能）丢失。`make deploy` 会自动重新签名。部署后如权限丢失，需在系统设置中重新勾选。
+
+## 部署
 
 ```bash
-make update       # build → sign → copy to ~/.local/bin/ivox → restart launchd
+make update       # 编译 → 签名 → 复制到 ~/.local/bin/ivox → 重启 launchd
 ```
 
 The binary at `~/.local/bin/ivox` is what `launchd` and hook scripts invoke. Project dir can be deleted after deploy.
 
-## Testing
+`~/.local/bin/ivox` 是 launchd 和 hook 脚本调用的二进制。部署后项目目录可删除。
+
+## 测试
 
 ```bash
 make test
-# Or directly:
+# 或直接：
 TOOLCHAINS=swift-6.3.2-RELEASE swift test
 ```
 
-Tests only cover `iVoxKit` (no MLX dependency, fast). Tests live in `Sources/iVoxTests/`.
+测试仅覆盖 `iVoxKit`（无 MLX 依赖，快）。测试位于 `Sources/iVoxTests/`。
 
-## Versioning
+## 版本号
 
 ```bash
-make version V=v1.2.0    # updates Version.swift, commits, tags
+make version V=v1.2.0    # 更新 Version.swift, 提交并打 tag
 ```
 
-Version defined in `Sources/iVox/Utilities/Version.swift`.
+版本号定义在 `Sources/iVox/Utilities/Version.swift`。
 
-## Publishing
+## 发布流程
 
-发布流程（每次发版前检查）：
+每次发版前检查：
 
 ```bash
 # 1. 确认所有改动已 commit
