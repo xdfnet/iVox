@@ -80,7 +80,7 @@ Swift 6.4 快照有编译器 bug（MLXAudioTTS 在 `-O` 下崩溃），详见 [`
 | 字段 | 说明 |
 |------|------|
 | `models.ttsPath` / `models.asrPath` | 本地 MLX 模型路径 |
-| `tts.streamingInterval` | 流式输出间隔，默认 0.15s |
+| `tts.streamingInterval` | 流式输出间隔，默认 0.08s |
 | `speechInput.enabled` | 语音输入开关 |
 | `mediaControl.httpServerEnabled` | Web UI（端口 8888） |
 | `wechat.token` | 微信 ilink bot token |
