@@ -108,3 +108,35 @@ make version V=v1.2.0    # updates Version.swift, commits, tags
 ```
 
 Version defined in `Sources/iVox/Utilities/Version.swift`.
+
+## Publishing
+
+发布流程（每次发版前检查）：
+
+```bash
+# 1. 确认所有改动已 commit
+git status
+
+# 2. 打包二进制
+cd .build/release && tar czf ivox-vX.X.X-macos-arm64.tar.gz ivox
+
+# 3. 打版本 tag（自动 commit + tag）
+make version V=vX.X.X
+
+# 4. 更新 docs/CHANGELOG.md（填入本版改动）
+
+# 5. 提交 CHANGELOG + push
+git add -A && git commit -m "docs: 更新 CHANGELOG vX.X.X" && git push origin master --tags
+
+# 6. 创建 GitHub Release + 上传二进制
+gh release create vX.X.X --title "iVox vX.X.X" --notes "..."
+gh release upload vX.X.X .build/release/ivox-vX.X.X-macos-arm64.tar.gz --clobber
+
+# 7. 更新 release notes（如有修正）
+gh release edit vX.X.X --notes "..."
+```
+
+注意
+
+- `install-binary.sh` 期望 `.tar.gz` 格式，不是 `.zip`
+- push 后 CI 不做任何事，二进制需手动上传到 Release
