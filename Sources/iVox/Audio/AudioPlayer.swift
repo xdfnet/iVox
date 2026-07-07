@@ -90,7 +90,7 @@ final class AudioPlayer: @unchecked Sendable {
 
     func drain(chunks: Int) async throws {
         let baseTimeout = Int(config.drainBaseTimeoutSeconds.rounded(.up))
-        let maxWait = max(baseTimeout, Int(Double(chunks) * 0.08) + baseTimeout)
+        let maxWait = max(baseTimeout, Int(Double(chunks) * 0.4) + baseTimeout)
         let polls = maxWait * 20
         var drained = false
         for _ in 0..<polls {
