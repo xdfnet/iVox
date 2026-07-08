@@ -29,11 +29,11 @@ actor TTSEngine {
         if model != nil { return }
         loadState = .loading
         let modelPath = expandPath(config.models?.ttsPath ?? "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit")
-        Log.info("加载 TTS 模型: \(modelPath)")
+        Log.debug("加载 TTS 模型: \(modelPath)")
         do {
             model = try await TTS.loadModel(modelRepo: modelPath)
             loadState = .ready
-            Log.info("TTS 模型加载完成")
+            Log.debug("TTS 模型加载完成")
         } catch {
             loadState = .failed(String(describing: error))
             throw error
@@ -42,12 +42,12 @@ actor TTSEngine {
 
     func warmup(voiceID: String) async {
         do {
-            Log.info("TTS 预热 [\(voiceID)]...")
+            Log.debug("TTS 预热 [\(voiceID)]...")
             let stream = synthesizeStream(text: "你好，模型预热完成。", voiceID: voiceID)
             for try await _ in stream { }
-            Log.info("TTS 预热完成 [\(voiceID)]")
+            Log.debug("TTS 预热完成 [\(voiceID)]")
         } catch {
-            Log.info("TTS 预热跳过 [\(voiceID)]: \(error)")
+            Log.debug("TTS 预热跳过 [\(voiceID)]: \(error)")
         }
     }
 

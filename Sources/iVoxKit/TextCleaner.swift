@@ -41,10 +41,10 @@ private struct TextCollector: MarkupWalker {
         if !code.isEmpty { appendSpace(); output += code; endBlock() }
     }
 
-    mutating func visitImage(_: Image) {}
-    mutating func visitTable(_: Table) {}
-    mutating func visitHTMLBlock(_: HTMLBlock) {}
-    mutating func visitInlineHTML(_: InlineHTML) {}
+    mutating func visitImage(_ node: Image) { descendInto(node) }  // 提取 alt 文字
+    mutating func visitTable(_ node: Table) { descendInto(node); endBlock() }  // 提取单元格文字
+    mutating func visitHTMLBlock(_: HTMLBlock) {}   // HTML 对 TTS 无意义，跳过
+    mutating func visitInlineHTML(_: InlineHTML) {} // 同上
     mutating func visitThematicBreak(_: ThematicBreak) {}
 
     private static let sentenceEnds = Set<Character>("。！？!?\n")
@@ -64,8 +64,23 @@ private struct TextCollector: MarkupWalker {
 private extension String {
     private static let urlDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
+    /// 过滤 emoji + 非文字符号，只保留 ASCII 可打印字符
+    /// 只保留文字（字母/数字/中文）+ 语气标点，过滤其余所有符号
     var removingEmoji: String {
-        unicodeScalars.filter { s in s.value <= 127 || !s.properties.isEmoji }.map(String.init).joined()
+        let allowedPunct: Set<UInt32> = [46, 47, 33, 37, 63, 12290, 65281, 65311, 8212]
+        var result = ""
+        for s in unicodeScalars {
+            let v = s.value
+            if v <= 127 {
+                // ASCII：字母、数字、空格保留，语气标点保留，其余过滤
+                if (v >= 65 && v <= 90) || (v >= 97 && v <= 122) || (v >= 48 && v <= 57) || v == 32 || allowedPunct.contains(v) {
+                    result.append(Character(s))
+                }
+            } else if !s.properties.isEmoji {
+                result.append(Character(s))
+            }
+        }
+        return result.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
     }
 
     var removingURLs: String {
@@ -80,6 +95,6 @@ private extension String {
             pos = m.range.location + m.range.length
         }
         result += ns.substring(with: NSRange(location: pos, length: ns.length - pos))
-        return result
+        return result.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
     }
 }

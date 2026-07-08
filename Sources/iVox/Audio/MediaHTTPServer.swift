@@ -119,7 +119,7 @@ final class MediaHTTPServer: @unchecked Sendable {
             return
         }
 
-        Log.info("HTTP 请求: \(path)")
+        Log.debug("HTTP 请求: \(path)")
 
         if path == "/" || path == "/index.html" {
             HTTPResponseHandler.sendHTML(connection, Self.loadHTML())

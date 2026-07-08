@@ -60,7 +60,6 @@ actor SocketServer {
             }
         }
         if clientFD >= 0 {
-            Log.info("Socket 接入: fd=\(clientFD)")
             // handle() 内含同步阻塞 read，放到专用队列避免占用 Swift 并发线程池
             DispatchQueue.global().async {
                 handler.handle(fd: clientFD)

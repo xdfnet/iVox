@@ -41,7 +41,7 @@ actor PlaybackQueue {
 
     func enqueue(_ job: PlaybackJob) async {
         if !jobs.isEmpty {
-            Log.info("丢弃待播: \(jobs.count) 条")
+            Log.debug("丢弃待播: \(jobs.count) 条")
         }
 
         if config.interruptCurrent, let task = currentTask {
@@ -53,7 +53,7 @@ actor PlaybackQueue {
 
         jobs.removeAll()
         jobs.append(job)
-        Log.info("队列状态: pending=\(jobs.count) processing=\(currentTask != nil)")
+        Log.debug("队列状态: pending=\(jobs.count) processing=\(currentTask != nil)")
 
         currentTask = Task { await processNext() }
     }
@@ -76,44 +76,34 @@ actor PlaybackQueue {
 
             Log.info("TTS 播放开始 [\(job.source)-\(batchID)]")
             let startedAt = Date()
-            let segments = splitSentences(job.text)
+            let seg = job.text
 
-            for (idx, seg) in segments.enumerated() {
-                do {
+            do {
+                try Task.checkCancellation()
+                try await waitUntilEngineReady()
+                try Task.checkCancellation()
+
+                player.prepareForPlayback()
+
+                let stream = await engine.synthesizeStream(text: seg, voiceID: job.voiceID)
+                var chunkCount = 0
+                for try await pcm in stream {
                     try Task.checkCancellation()
-                    try await waitUntilEngineReady()
-                    try Task.checkCancellation()
-
-                    if isFirstSegment {
-                        player.prepareForPlayback()
-                        isFirstSegment = false
-                    }
-
-                    let preview = seg.prefix(60)
-                    let segmentLabel = segments.count > 1 ? "段 \(idx + 1)/\(segments.count): \(preview)" : preview
-                    Log.info("TTS [\(job.source)-\(batchID)] \(segmentLabel)")
-
-                    let stream = await engine.synthesizeStream(text: seg, voiceID: job.voiceID)
-                    var chunkCount = 0
-                    for try await pcm in stream {
-                        try Task.checkCancellation()
-                        chunkCount += 1
-                        player.write(pcm)
-                    }
-
-                    try Task.checkCancellation()
-                    try await player.drain(chunks: chunkCount)
-                } catch is CancellationError {
-                    Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
-                    return  // defer + return: stop all remaining segments
-                } catch {
-                    Log.error("TTS 合成失败: \(error)")
-                    // continue to next segment on non-cancellation errors
+                    chunkCount += 1
+                    player.write(pcm)
                 }
+
+                try Task.checkCancellation()
+                try await player.drain(chunks: chunkCount)
+            } catch is CancellationError {
+                Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
+                return
+            } catch {
+                Log.error("TTS 合成失败: \(error)")
             }
 
             let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
-            Log.info("TTS 播放完成 [\(job.source)-\(batchID)] \(elapsed)s \(segments.count) 段")
+            Log.info("TTS 播放完成 [\(job.source)-\(batchID)] \(elapsed)s")
         }
     }
 
@@ -126,7 +116,7 @@ actor PlaybackQueue {
             case .failed(let message):
                 throw PlaybackError.ttsUnavailable(message)
             case .notStarted, .loading:
-                Log.info("TTS 模型尚未就绪，等待加载完成")
+                Log.debug("TTS 模型尚未就绪，等待加载完成")
                 try await Task.sleep(nanoseconds: modelReadyPollNs)
             }
         }

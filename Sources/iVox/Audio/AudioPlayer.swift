@@ -131,10 +131,10 @@ final class AudioPlayer: @unchecked Sendable {
 
     private func reviveIfNeeded() {
         if !engine.isRunning {
-            Log.info("AudioEngine 已停止，自动重启")
+            Log.debug("AudioEngine 已停止，自动重启")
             reviveEngine()
         } else if !node.isPlaying {
-            Log.info("AudioPlayerNode 已停止，自动恢复播放")
+            Log.debug("AudioPlayerNode 已停止，自动恢复播放")
             node.play()
         }
     }

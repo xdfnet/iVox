@@ -1,29 +1,21 @@
 import Foundation
 
-/// 按换行切分文本，每段不超过 maxChars。
+/// 按句末标点切分文本。
+/// 句末标点：。！？!?
 public func splitSentences(_ text: String, maxChars: Int = 50) -> [String] {
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
     if trimmed.isEmpty { return [] }
-    if trimmed.count <= maxChars { return [trimmed] }
 
-    // 先按换行拆
-    let lines = trimmed.split(separator: "\n", omittingEmptySubsequences: false).map(String.init)
-
-    // 贪心合并行到每段 ≤ maxChars
+    let sentencePattern = /[。！？!?]+/
     var segments: [String] = []
-    var buf = ""
-    for line in lines {
-        let lineChars = line.count
-        if buf.isEmpty {
-            buf = line
-        } else if buf.count + 1 + lineChars <= maxChars {
-            buf += "\n" + line
-        } else {
-            segments.append(buf)
-            buf = line
-        }
-    }
-    if !buf.isEmpty { segments.append(buf) }
+    var lastEnd = trimmed.startIndex
 
-    return segments
+    for match in trimmed.matches(of: sentencePattern) {
+        let end = match.range.upperBound
+        let sentence = String(trimmed[lastEnd..<end]).trimmingCharacters(in: .whitespaces)
+        lastEnd = end
+        if !sentence.isEmpty { segments.append(sentence) }
+    }
+
+    return segments.isEmpty ? [trimmed] : segments
 }

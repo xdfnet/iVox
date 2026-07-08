@@ -21,7 +21,7 @@ actor ConnectionHandler {
             if n <= 0 { break }
             data.append(contentsOf: buf[0..<n])
         }
-        Log.info("连接收包: bytes=\(data.count)")
+        Log.info("Socket 接入: fd=\(fd) bytes=\(data.count)")
 
         // 找第一个 \n 切分头/体
         if let nl = data.firstIndex(of: 0x0A) {
@@ -32,7 +32,7 @@ actor ConnectionHandler {
                 return
             }
             let body = data[(nl + 1)...]
-            Log.info("ASR 请求: bytes=\(body.count)")
+            Log.debug("ASR 请求: bytes=\(body.count)")
             handleASR(fd: fd, header: header, body: body)
         } else {
             handleTTS(fd: fd, data: data)
@@ -50,7 +50,7 @@ actor ConnectionHandler {
 
         let (source, voiceID, content) = extractVoicePrefix(text, config: config)
         Log.info("请求解析: source=\(source) voice=\(voiceID) raw_chars=\(content.count)")
-        Log.info("请求内容: source=\(source) raw=\(oneLine(content))")
+        Log.debug("请求原始内容: source=\(source) raw=\(oneLine(content))")
         let cleaned = cleanText(content)
         if cleaned.isEmpty {
             Log.info("清洗后为空，跳过")
@@ -61,7 +61,7 @@ actor ConnectionHandler {
         if olen > 0 {
             Log.info("清洗: [\(source)] \(olen)字 → \(clen)字 (减少 \((100*(olen-clen))/olen)%)")
         }
-        Log.info("清洗内容: source=\(source) cleaned=\(oneLine(cleaned))")
+        Log.debug("清洗后内容: source=\(source) cleaned=\(oneLine(cleaned))")
 
         let job = PlaybackJob(text: cleaned, voiceID: voiceID, source: source)
         Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(cleaned.count)")

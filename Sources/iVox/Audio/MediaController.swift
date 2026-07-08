@@ -88,26 +88,14 @@ struct MediaController {
 
     /// 暂停音乐 (TTS 播报前调用)
     func pause() async {
-        if config.isBuiltin {
-            Log.info("媒体控制(本地): 暂停")
-            _ = await Self.pause()
-        } else {
-            Log.info("媒体控制(远程): 暂停")
-            await send(config.pausePath)
-        }
+        Log.info("媒体控制: 暂停")
+        _ = await Self.pause()
     }
 
     /// 恢复音乐 (TTS 播报完成后调用)
     func resume() async {
-        if config.isBuiltin {
-            Log.info("媒体控制(本地): 恢复")
-            Log.info("---------------------END----------------------")
-            _ = await Self.play()
-        } else {
-            Log.info("媒体控制(远程): 恢复")
-            Log.info("---------------------END----------------------")
-            await send(config.resumePath)
-        }
+        Log.info("媒体控制: 恢复")
+        _ = await Self.play()
     }
 
     // MARK: - 远程模式
