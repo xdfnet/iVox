@@ -11,9 +11,7 @@
     "outputSampleRate": 48000
   },
   "playback": {
-    "interruptCurrent": true,
-    "idleReviveSeconds": 600,
-    "drainBaseTimeoutSeconds": 10
+    "interruptCurrent": true
   },
   "mediaControl": {
     "enabled": true,

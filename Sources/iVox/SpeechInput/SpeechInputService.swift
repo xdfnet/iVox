@@ -231,7 +231,6 @@ final class SpeechInputService: @unchecked Sendable {
     private func pasteText(_ text: String) {
         NSPasteboard.general.clearContents()
         NSPasteboard.general.setString(text, forType: .string)
-        Thread.sleep(forTimeInterval: 0.15)
 
         let source = CGEventSource(stateID: .combinedSessionState)
         guard let vDown = CGEvent(keyboardEventSource: source, virtualKey: 0x09, keyDown: true),
@@ -241,18 +240,23 @@ final class SpeechInputService: @unchecked Sendable {
         }
         vDown.flags = .maskCommand
         vUp.flags = .maskCommand
-        vDown.post(tap: .cgAnnotatedSessionEventTap)
-        vUp.post(tap: .cgAnnotatedSessionEventTap)
 
-        if config.autoEnter {
-            Thread.sleep(forTimeInterval: 0.05)
-            guard let enterDown = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true),
-                  let enterUp = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false) else {
-                Log.error("语音输入: 模拟回车事件创建失败")
-                return
+        // 等待剪贴板就绪，不阻塞事件回调线程
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.08) {
+            vDown.post(tap: .cgAnnotatedSessionEventTap)
+            vUp.post(tap: .cgAnnotatedSessionEventTap)
+
+            if self.config.autoEnter {
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.03) {
+                    guard let enterDown = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true),
+                          let enterUp = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false) else {
+                        Log.error("语音输入: 模拟回车事件创建失败")
+                        return
+                    }
+                    enterDown.post(tap: .cgAnnotatedSessionEventTap)
+                    enterUp.post(tap: .cgAnnotatedSessionEventTap)
+                }
             }
-            enterDown.post(tap: .cgAnnotatedSessionEventTap)
-            enterUp.post(tap: .cgAnnotatedSessionEventTap)
         }
     }
 

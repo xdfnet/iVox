@@ -4,6 +4,13 @@ import Markdown
 /// Markdown → 纯文本：遍历 AST 提取 Text 节点，块级元素间加空格分隔，TTS 自行处理停顿。
 public func cleanText(_ text: String) -> String {
     guard !text.isEmpty else { return "" }
+    // 短文本且无 Markdown 特殊字符时跳过 AST 解析
+    if text.count < 80 {
+        let markdownChars: Set<Character> = ["#", "*", "_", "`", "[", "]", "(", ")", "{", "}", ">", "|", "-"]
+        if !text.contains(where: { markdownChars.contains($0) }) {
+            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+        }
+    }
     let doc = Document(parsing: text)
     var visitor = TextCollector()
     visitor.visit(doc)
@@ -11,14 +18,19 @@ public func cleanText(_ text: String) -> String {
 }
 
 private struct TextCollector: MarkupWalker {
-    var output = ""
-    private var lastWasSpace = true
+    // 预分配 StringBuilder，避免反复 += 造成的 O(n²) 复制
+    fileprivate var output = ""
+    fileprivate var lastWasSpace = true
+
+    init() {
+        output.reserveCapacity(512)
+    }
 
     mutating func visitText(_ node: Text) {
         let t = node.string.trimmingCharacters(in: .whitespacesAndNewlines).removingEmoji.removingURLs
         if t.isEmpty { return }
         appendSpace()
-        output += t
+        output.append(t)
         lastWasSpace = false
     }
 
@@ -34,11 +46,15 @@ private struct TextCollector: MarkupWalker {
     mutating func visitEmphasis(_ node: Emphasis)   { descendInto(node) }
     mutating func visitStrong(_ node: Strong)       { descendInto(node) }
 
-    mutating func visitInlineCode(_ node: InlineCode) { appendSpace(); output += node.code.removingEmoji; appendSpace() }
+    mutating func visitInlineCode(_ node: InlineCode) {
+        appendSpace()
+        output.append(node.code.removingEmoji)
+        appendSpace()
+    }
 
     mutating func visitCodeBlock(_ node: CodeBlock) {
         let code = node.code.trimmingCharacters(in: .whitespacesAndNewlines).removingEmoji
-        if !code.isEmpty { appendSpace(); output += code; endBlock() }
+        if !code.isEmpty { appendSpace(); output.append(code); endBlock() }
     }
 
     mutating func visitImage(_ node: Image) { descendInto(node) }  // 提取 alt 文字
@@ -51,13 +67,13 @@ private struct TextCollector: MarkupWalker {
 
     private mutating func endBlock() {
         if let last = output.last, !Self.sentenceEnds.contains(last) {
-            output += "。"
+            output.append("。")
         }
         appendSpace()
     }
 
     private mutating func appendSpace() {
-        if !lastWasSpace { output += " "; lastWasSpace = true }
+        if !lastWasSpace { output.append(" "); lastWasSpace = true }
     }
 }
 
@@ -69,18 +85,25 @@ private extension String {
     var removingEmoji: String {
         let allowedPunct: Set<UInt32> = [46, 47, 33, 37, 63, 12290, 65281, 65311, 8212]
         var result = ""
+        var lastWasSpace = false
         for s in unicodeScalars {
             let v = s.value
             if v <= 127 {
                 // ASCII：字母、数字、空格保留，语气标点保留，其余过滤
                 if (v >= 65 && v <= 90) || (v >= 97 && v <= 122) || (v >= 48 && v <= 57) || v == 32 || allowedPunct.contains(v) {
+                    if lastWasSpace { result.append(" ") }
                     result.append(Character(s))
+                    lastWasSpace = false
+                } else if v == 32 {
+                    lastWasSpace = true
                 }
             } else if !s.properties.isEmoji {
+                if lastWasSpace { result.append(" ") }
                 result.append(Character(s))
+                lastWasSpace = false
             }
         }
-        return result.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
+        return result
     }
 
     var removingURLs: String {
@@ -90,11 +113,30 @@ private extension String {
         guard !matches.isEmpty else { return self }
         var result = ""
         var pos = 0
+        var lastWasSpace = false
         for m in matches {
-            result += ns.substring(with: NSRange(location: pos, length: m.range.location - pos))
+            let segment = ns.substring(with: NSRange(location: pos, length: m.range.location - pos))
+            for c in segment {
+                if c == " " {
+                    if !lastWasSpace { result.append(" ") }
+                    lastWasSpace = true
+                } else {
+                    result.append(c)
+                    lastWasSpace = false
+                }
+            }
             pos = m.range.location + m.range.length
         }
-        result += ns.substring(with: NSRange(location: pos, length: ns.length - pos))
-        return result.replacingOccurrences(of: " +", with: " ", options: .regularExpression)
+        let tail = ns.substring(with: NSRange(location: pos, length: ns.length - pos))
+        for c in tail {
+            if c == " " {
+                if !lastWasSpace { result.append(" ") }
+                lastWasSpace = true
+            } else {
+                result.append(c)
+                lastWasSpace = false
+            }
+        }
+        return result
     }
 }

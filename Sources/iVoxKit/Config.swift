@@ -33,19 +33,13 @@ public struct TTSConfig: Codable, Sendable {
 
 public struct PlaybackConfig: Codable, Sendable {
     public var interruptCurrent: Bool
-    public var idleReviveSeconds: Double
-    public var drainBaseTimeoutSeconds: Double
 
-    public init(interruptCurrent: Bool, idleReviveSeconds: Double, drainBaseTimeoutSeconds: Double) {
+    public init(interruptCurrent: Bool) {
         self.interruptCurrent = interruptCurrent
-        self.idleReviveSeconds = idleReviveSeconds
-        self.drainBaseTimeoutSeconds = drainBaseTimeoutSeconds
     }
 
     public static let `default` = PlaybackConfig(
-        interruptCurrent: true,
-        idleReviveSeconds: 600,
-        drainBaseTimeoutSeconds: 10
+        interruptCurrent: true
     )
 }
 
@@ -248,12 +242,6 @@ public func validate(_ config: Config) throws {
         throw ConfigError.invalidConfig("tts.outputSampleRate 必须大于 0")
     }
     let playback = config.resolvedPlayback
-    if playback.idleReviveSeconds <= 0 {
-        throw ConfigError.invalidConfig("playback.idleReviveSeconds 必须大于 0")
-    }
-    if playback.drainBaseTimeoutSeconds <= 0 {
-        throw ConfigError.invalidConfig("playback.drainBaseTimeoutSeconds 必须大于 0")
-    }
     let mediaControl = config.resolvedMediaControl
     if mediaControl.isRemote, URL(string: mediaControl.baseURL) == nil {
         throw ConfigError.invalidConfig("mediaControl.baseURL 无效")

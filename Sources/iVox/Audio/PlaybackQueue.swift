@@ -14,7 +14,6 @@ actor PlaybackQueue {
     private let engine: TTSEngine
     private let media: MediaController
     private let config: PlaybackConfig
-    private let modelReadyPollNs: UInt64 = 100_000_000
 
     init(engine: TTSEngine, config: PlaybackConfig, mediaController: MediaController) {
         self.engine = engine
@@ -46,7 +45,7 @@ actor PlaybackQueue {
 
         if config.interruptCurrent, let task = currentTask {
             task.cancel()
-            _ = await task.value
+            // 不在 actor 上等待旧 task 完成，直接启动新的
             player.prepareForPlayback()
             Log.info("打断当前播报，切到最新请求")
         }
@@ -69,7 +68,6 @@ actor PlaybackQueue {
         try? Task.checkCancellation()
 
         let batchID = String(UUID().uuidString.prefix(6))
-        var isFirstSegment = true
 
         while !jobs.isEmpty {
             let job = jobs.removeFirst()
@@ -80,8 +78,11 @@ actor PlaybackQueue {
 
             do {
                 try Task.checkCancellation()
+                // media.pause() 和 engine 就绪检查并行执行，减少启动延迟
+                async let mediaPause: () = media.pause()
                 try await waitUntilEngineReady()
                 try Task.checkCancellation()
+                _ = await mediaPause
 
                 player.prepareForPlayback()
 
@@ -94,10 +95,14 @@ actor PlaybackQueue {
                 }
 
                 try Task.checkCancellation()
-                try await player.drain(chunks: chunkCount)
+                try await player.drain()
             } catch is CancellationError {
                 Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
                 return
+            } catch let error as PlaybackError {
+                if case .ttsUnavailable(let msg) = error {
+                    Log.error("TTS 不可用: \(msg)")
+                }
             } catch {
                 Log.error("TTS 合成失败: \(error)")
             }
@@ -108,21 +113,17 @@ actor PlaybackQueue {
     }
 
     private func waitUntilEngineReady() async throws {
-        while true {
-            try Task.checkCancellation()
-            switch await engine.state {
-            case .ready:
-                return
-            case .failed(let message):
-                throw PlaybackError.ttsUnavailable(message)
-            case .notStarted, .loading:
-                Log.debug("TTS 模型尚未就绪，等待加载完成")
-                try await Task.sleep(nanoseconds: modelReadyPollNs)
-            }
+        try Task.checkCancellation()
+        switch await engine.state {
+        case .ready: return
+        case .failed(let msg): throw PlaybackError.ttsUnavailable(msg)
+        case .notStarted, .loading:
+            Log.debug("TTS 模型尚未就绪，等待通知")
+            await engine.waitUntilReady()
         }
     }
 }
 
-private enum PlaybackError: Error {
+enum PlaybackError: Error {
     case ttsUnavailable(String)
 }

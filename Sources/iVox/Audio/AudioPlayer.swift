@@ -12,11 +12,8 @@ final class AudioPlayer: @unchecked Sendable {
     private let serialQueue = DispatchQueue(label: "ivox.audio")
     private var pendingCount = 0
     private var started = false
-    private var lastActivity = Date()
-    private var needsEngineRevive = false
-    private var lastReviveFailure: Date?
-    private let reviveCooldown: TimeInterval = 30
-    private let config: PlaybackConfig
+    private var config: PlaybackConfig
+    private var drainedContinuation: CheckedContinuation<Void, Never>?
 
     init(config: PlaybackConfig) {
         self.config = config
@@ -39,7 +36,7 @@ final class AudioPlayer: @unchecked Sendable {
         node.play()
         started = true
 
-        // 主动监听：休眠唤醒 / 耳机插拔 / 设备变更
+        // 主动监听：休眠唤醒 / 设备变更
         observeSystemEvents()
     }
 
@@ -47,8 +44,14 @@ final class AudioPlayer: @unchecked Sendable {
         guard started, !pcm.isEmpty else { return }
         let frames = AVAudioFrameCount(pcm.count / 2)
         serialQueue.sync {
-            reviveIfNeeded()
-            lastActivity = Date()
+            // engine 挂了就在这里复活一次，不设冷却期
+            if !engine.isRunning {
+                Log.debug("AudioEngine 已停止，尝试重启")
+                restartEngine()
+            } else if !node.isPlaying {
+                node.play()
+            }
+            guard engine.isRunning else { return }
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
             buffer.frameLength = frames
             pcm.withUnsafeBytes { src in
@@ -60,68 +63,55 @@ final class AudioPlayer: @unchecked Sendable {
             pendingCount += 1
             node.scheduleBuffer(buffer) { [weak self] in
                 guard let self else { return }
-                self.serialQueue.async { self.pendingCount -= 1 }
+                self.serialQueue.async {
+                    self.pendingCount -= 1
+                    if self.pendingCount == 0, let cont = self.drainedContinuation {
+                        self.drainedContinuation = nil
+                        cont.resume()
+                    }
+                }
             }
         }
     }
 
     func prepareForPlayback() {
         serialQueue.sync {
-            // 引擎永久失败后定期重试
-            if !started, let lastFail = lastReviveFailure,
-               Date().timeIntervalSince(lastFail) > reviveCooldown {
-                Log.info("引擎上次异常退出已超过 \(Int(reviveCooldown))s 冷却期，尝试重初始化")
-                if reinitializeEngine() {
-                    started = true
-                    lastReviveFailure = nil
-                }
-            }
-            reviveIfNeeded()
-            if needsEngineRevive {
-                Log.info("音频配置已变更，播报前重启引擎")
-                reviveEngine()
-            } else if Date().timeIntervalSince(lastActivity) > config.idleReviveSeconds {
-                // 长时间空闲后引擎可能静默挂掉（isRunning=true 但不工作），播报前复活，避免写入首段音频时重启。
-                Log.info("空闲超过 \(Int(config.idleReviveSeconds)) 秒，播报前主动复活引擎")
-                reviveEngine()
+            // 播报开始前确保 engine 在线，由 write() 的检查兜底，这里只做一次确认
+            if started, !engine.isRunning {
+                Log.info("prepareForPlayback: engine 已停止，尝试重启")
+                restartEngine()
             }
         }
     }
 
-    func drain(chunks: Int) async throws {
-        let baseTimeout = Int(config.drainBaseTimeoutSeconds.rounded(.up))
-        let maxWait = max(baseTimeout, Int(Double(chunks) * 0.4) + baseTimeout)
-        let polls = maxWait * 20
-        var drained = false
-        for _ in 0..<polls {
-            try Task.checkCancellation()
-            let done = serialQueue.sync { pendingCount == 0 }
-            if done { drained = true; break }
-            try await Task.sleep(nanoseconds: 50_000_000)
-        }
-        if !drained {
-            Log.error("播放超时 (\(chunks) 块未完成)，AudioEngine 可能已挂，重启")
-            serialQueue.sync {
-                pendingCount = 0
-                reviveEngine()
+    func drain() async throws {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            let wasDrained = serialQueue.sync { () -> Bool in
+                if pendingCount == 0 { return true }
+                drainedContinuation = continuation
+                return false
             }
+            if wasDrained { continuation.resume() }
         }
     }
 
     func cancelPendingPlayback() {
         serialQueue.sync {
             pendingCount = 0
+            drainedContinuation?.resume()
+            drainedContinuation = nil
             node.stop()
             if engine.isRunning {
                 node.play()
             }
-            lastActivity = Date()
         }
     }
 
     func stop() {
         serialQueue.sync {
             started = false
+            drainedContinuation?.resume()
+            drainedContinuation = nil
             node.stop()
             engine.stop()
         }
@@ -129,69 +119,19 @@ final class AudioPlayer: @unchecked Sendable {
 
     // MARK: - 内部
 
-    private func reviveIfNeeded() {
-        if !engine.isRunning {
-            Log.debug("AudioEngine 已停止，自动重启")
-            reviveEngine()
-        } else if !node.isPlaying {
-            Log.debug("AudioPlayerNode 已停止，自动恢复播放")
+    /// 通用重启：stop → start → play，失败直接记录（上层 drain 超时会兜底）
+    private func restartEngine() {
+        node.stop()
+        engine.stop()
+        pendingCount = 0
+
+        do {
+            try engine.start()
             node.play()
+            Log.info("AudioEngine 重启成功")
+        } catch {
+            Log.error("AudioEngine 重启失败: \(error)")
         }
-    }
-
-    /// 全量重初始化：重新创建并启动 engine（attach/connect/start），用于永久失败后的冷却重试
-    private func reinitializeEngine() -> Bool {
-        node.stop()
-        engine.stop()
-        pendingCount = 0
-
-        // 断开所有旧连接
-        engine.disconnectNodeOutput(node)
-        engine.disconnectNodeInput(engine.mainMixerNode)
-
-        engine.attach(node)
-        engine.connect(node, to: engine.mainMixerNode, format: format)
-        engine.prepare()
-
-        for attempt in 1...3 {
-            do {
-                try engine.start()
-                node.play()
-                needsEngineRevive = false
-                Log.info("AudioEngine 重初始化成功 (第 \(attempt)/3 次)")
-                return true
-            } catch {
-                Log.error("AudioEngine 重初始化失败 (第 \(attempt)/3 次): \(error)")
-                if attempt < 3 {
-                    Thread.sleep(forTimeInterval: 1.0)
-                }
-            }
-        }
-        return false
-    }
-
-    /// 重启引擎：stop → start → play，重试 3 次，间隔 1s
-    private func reviveEngine() {
-        node.stop()
-        engine.stop()
-        pendingCount = 0
-
-        for attempt in 1...3 {
-            do {
-                try engine.start()
-                node.play()
-                needsEngineRevive = false
-                Log.info("AudioEngine 重启成功 (第 \(attempt)/3 次)")
-                return
-            } catch {
-                Log.error("AudioEngine 重启失败 (第 \(attempt)/3 次): \(error)")
-                if attempt < 3 {
-                    Thread.sleep(forTimeInterval: 1.0)
-                }
-            }
-        }
-        lastReviveFailure = Date()
-        Log.error("AudioEngine 重启最终失败，\(Int(reviveCooldown))s 冷却期后将重试")
     }
 
     // MARK: - 系统事件
@@ -206,12 +146,18 @@ final class AudioPlayer: @unchecked Sendable {
             queue: nil
         ) { _ in
             DispatchQueue.global().asyncAfter(deadline: .now() + 1.0) {
-                player.serialQueue.sync { player.reviveIfNeeded() }
+                player.serialQueue.sync {
+                    if !player.engine.isRunning {
+                        Log.info("系统唤醒，尝试重启 AudioEngine")
+                        player.restartEngine()
+                    } else if !player.node.isPlaying {
+                        player.node.play()
+                    }
+                }
             }
         }
 
-        // 耳机插拔 / 设备变更 / 采样率变化
-        // Apple 文档：延迟+异步，否则死锁。注意此通知有时不触发，被动检测仍是主防线
+        // 耳机插拔 / 采样率变化 → 重启 engine
         NotificationCenter.default.addObserver(
             forName: .AVAudioEngineConfigurationChange,
             object: engine,
@@ -219,8 +165,8 @@ final class AudioPlayer: @unchecked Sendable {
         ) { _ in
             DispatchQueue.global().asyncAfter(deadline: .now() + 0.5) {
                 player.serialQueue.sync {
-                    Log.info("音频配置变更，标记下次播报前重启引擎")
-                    player.needsEngineRevive = true
+                    Log.info("音频配置变更，重启 AudioEngine")
+                    player.restartEngine()
                 }
             }
         }

@@ -16,6 +16,7 @@ actor TTSEngine {
     private var config: Config
     private let ttsConfig: TTSConfig
     private var loadState: LoadState = .notStarted
+    private var stateContinuation: CheckedContinuation<Void, Never>?
 
     init(config: Config) {
         self.config = config
@@ -23,16 +24,28 @@ actor TTSEngine {
     }
 
     var isLoaded: Bool { model != nil }
+
     var state: LoadState { loadState }
 
     func loadModel() async throws {
-        if model != nil { return }
+        if model != nil {
+            // 已加载，直接通知等待者
+            if case .ready = loadState, let cont = stateContinuation {
+                stateContinuation = nil
+                cont.resume()
+            }
+            return
+        }
         loadState = .loading
         let modelPath = expandPath(config.models?.ttsPath ?? "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit")
         Log.debug("加载 TTS 模型: \(modelPath)")
         do {
             model = try await TTS.loadModel(modelRepo: modelPath)
             loadState = .ready
+            if let cont = stateContinuation {
+                stateContinuation = nil
+                cont.resume()
+            }
             Log.debug("TTS 模型加载完成")
         } catch {
             loadState = .failed(String(describing: error))
@@ -48,6 +61,18 @@ actor TTSEngine {
             Log.debug("TTS 预热完成 [\(voiceID)]")
         } catch {
             Log.debug("TTS 预热跳过 [\(voiceID)]: \(error)")
+        }
+    }
+
+    /// 等待模型就绪（事件驱动，不再轮询）
+    func waitUntilReady() async {
+        switch loadState {
+        case .ready: return
+        case .failed(let msg): Log.error("TTS 模型加载失败: \(msg)"); return
+        case .notStarted, .loading:
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                self.stateContinuation = continuation
+            }
         }
     }
 
@@ -95,7 +120,7 @@ actor TTSEngine {
 
         let voice = config.voice(id: voiceID)
         let refText = voice?.refText
-        let refAudio = try loadRefAudio(voice?.refAudio, sampleRate: model.sampleRate)
+        let refAudio = try await loadRefAudio(voice?.refAudio, sampleRate: model.sampleRate)
         Log.info("TTS 请求: voice=\(voiceID) text_chars=\(text.count)")
 
         let stream = model.generateStream(
@@ -130,15 +155,18 @@ actor TTSEngine {
         continuation.finish()
     }
 
-    private func loadRefAudio(_ path: String?, sampleRate: Int) throws -> MLXArray? {
+    private func loadRefAudio(_ path: String?, sampleRate: Int) async throws -> MLXArray? {
         guard let path, !path.isEmpty else { return nil }
         let expanded = expandPath(path)
-        let url = URL(fileURLWithPath: expanded)
         guard FileManager.default.fileExists(atPath: expanded) else {
             Log.info("参考音频不存在，跳过: \(expanded)")
             return nil
         }
-        let (_, refAudio) = try loadAudioArray(from: url, sampleRate: sampleRate)
+        // 磁盘 I/O 在后台执行，避免阻塞 actor
+        let url = URL(fileURLWithPath: expanded)
+        let (_, refAudio) = try await Task.detached(priority: .userInitiated) {
+            try loadAudioArray(from: url, sampleRate: sampleRate)
+        }.value
         return refAudio
     }
 

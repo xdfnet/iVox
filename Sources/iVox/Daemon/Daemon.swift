@@ -74,7 +74,7 @@ actor Daemon {
     }
 
     private func installSignalSource(_ sig: Int32) {
-        let source = DispatchSource.makeSignalSource(signal: sig, queue: .main)
+        let source = DispatchSource.makeSignalSource(signal: sig, queue: DispatchQueue(label: "com.user.ivox.signals", qos: .userInitiated))
         source.setEventHandler { [weak self] in
             guard let self else { return }
             Log.info("收到信号 \(sig)，开始退出")
@@ -128,11 +128,14 @@ actor Daemon {
     private nonisolated func handleWeChatMessage(_ msg: IncomingMessage) async {
         Log.info("📩 收到微信消息 [来自: \(msg.fromUserID.prefix(20))…]: \(msg.content.prefix(50))")
 
-        // 写 pending_user
-        let pendingFile = NSString(string: "~/.config/ivox/pending_user").expandingTildeInPath
-        try? FileManager.default.createDirectory(atPath: NSString(string: "~/.config/ivox").expandingTildeInPath,
-                                                  withIntermediateDirectories: true)
-        try? msg.fromUserID.write(toFile: pendingFile, atomically: true, encoding: .utf8)
+        // 写 pending_user 到后台执行，避免阻塞事件回调
+        let userID = msg.fromUserID
+        Task.detached(priority: .background) {
+            let pendingFile = NSString(string: "~/.config/ivox/pending_user").expandingTildeInPath
+            try? FileManager.default.createDirectory(atPath: NSString(string: "~/.config/ivox").expandingTildeInPath,
+                                                      withIntermediateDirectories: true)
+            try? userID.write(toFile: pendingFile, atomically: true, encoding: .utf8)
+        }
 
         // 剪贴板注入
         do {
