@@ -1,4 +1,4 @@
-.PHONY: all install update check init models voices assets build deploy launchd restart uninstall run sign test version clean help
+.PHONY: all install update check init models voices assets build uninstall run sign test version clean help
 
 SWIFT := TOOLCHAINS=swift-6.3.2-RELEASE swift
 SWIFT_RELEASE_FLAGS := -c release -Xswiftc -Osize
@@ -11,13 +11,15 @@ install:
 	@$(MAKE) check
 	@$(MAKE) init
 	@$(MAKE) models
-	@$(MAKE) deploy
-	@$(MAKE) launchd
+	@$(MAKE) build voices
+	@$(RUNTIME) deploy-bin
+	@$(RUNTIME) launchd
 	@echo "✓  iVox 已就绪"
 
 update:
-	@$(MAKE) deploy
-	@$(MAKE) launchd
+	@$(MAKE) build voices
+	@$(RUNTIME) deploy-bin
+	@$(RUNTIME) launchd
 	@echo "✓  iVox 已更新"
 
 check:
@@ -36,14 +38,6 @@ assets: voices
 
 build:
 	$(SWIFT) build $(SWIFT_RELEASE_FLAGS)
-
-deploy: build voices
-	@$(RUNTIME) deploy-bin
-
-launchd:
-	@$(RUNTIME) launchd
-
-restart: update
 
 uninstall:
 	@$(RUNTIME) uninstall
@@ -76,18 +70,11 @@ clean:
 help:
 	@echo "iVox 构建系统"
 	@echo ""
-	@echo "  make / make install = 首次安装（检查 → 配置 → 模型 → 构建 → 部署 → 启动）"
-	@echo "  make update         = 更新代码后的部署（构建 → 参考音频 → 部署 → 重启）"
-	@echo "  make restart        = make update 的兼容别名"
-	@echo ""
-	@echo "  make models         = 从 ModelScope 下载默认 MLX 模型（已存在则跳过）"
-	@echo "  make voices         = 初始化默认参考音频（已存在则跳过）"
-	@echo "  make build          = 编译 release"
-	@echo "  make deploy         = 构建 + 参考音频 + 部署二进制"
-	@echo "  make launchd        = 写入 launchd plist 并启动 daemon"
-	@echo ""
+	@echo "  make / make install = 首次安装"
+	@echo "  make update         = 编译 + 部署 + 重启"
 	@echo "  make run            = 编译 + 前台调试"
 	@echo "  make test           = 运行测试"
-	@echo "  make version        = 发版（make version V=v1.2.0）"
+	@echo "  make build          = 编译 release"
+	@echo "  make version        = 发版"
 	@echo "  make uninstall      = 停服务 + 删 runtime"
 	@echo "  make clean          = 删除 .build"
