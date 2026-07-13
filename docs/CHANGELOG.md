@@ -1,5 +1,18 @@
 # iVox 开发日志
 
+## v2.6.0 — 2026-07-13
+
+### 改进
+
+- **AudioPipeline 精简** — 去掉 AudioPlayer 自动复活、TTSEngine 重试循环、PlaybackQueue 的 while/async let/defer，线性流程：暂停→播→恢复
+- **打断逻辑修复** — `enqueue()` 打断时先 `cancelPendingPlayback()` 静音再启动新 Task，消除新旧音频重叠
+- **取消不丢任务** — `try?` 改为 `try`，取消信号不会丢失导致任务漏播
+- **Config 简化** — 去掉 `maxRetries`、`retryDelayMs`
+
+### 工具
+
+- **Makefile 精简** — 只保留 `make install` 和 `make update`，去掉 deploy/launchd/restart 中间目标
+
 ## v2.5.0 — 2026-07-09
 
 ### 改进
