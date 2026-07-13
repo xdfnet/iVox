@@ -18,7 +18,7 @@ actor PlaybackQueue {
     init(engine: TTSEngine, config: PlaybackConfig, mediaController: MediaController) {
         self.engine = engine
         self.config = config
-        self.player = AudioPlayer(config: config)
+        self.player = AudioPlayer()
         self.media = mediaController
     }
 
@@ -45,8 +45,7 @@ actor PlaybackQueue {
 
         if config.interruptCurrent, let task = currentTask {
             task.cancel()
-            // 不在 actor 上等待旧 task 完成，直接启动新的
-            player.prepareForPlayback()
+            player.cancelPendingPlayback()
             Log.info("打断当前播报，切到最新请求")
         }
 
@@ -58,58 +57,39 @@ actor PlaybackQueue {
     }
 
     private func processNext() async {
-        defer {
-            player.cancelPendingPlayback()
-            Task { await media.resume() }
-        }
-
         guard !jobs.isEmpty else { return }
-        await media.pause()
-        try? Task.checkCancellation()
+        let job = jobs.removeFirst()
 
         let batchID = String(UUID().uuidString.prefix(6))
+        Log.info("TTS 播放开始 [\(job.source)-\(batchID)]")
+        let startedAt = Date()
 
-        while !jobs.isEmpty {
-            let job = jobs.removeFirst()
+        do {
+            try Task.checkCancellation()
+            await media.pause()
+            try await waitUntilEngineReady()
+            try Task.checkCancellation()
 
-            Log.info("TTS 播放开始 [\(job.source)-\(batchID)]")
-            let startedAt = Date()
-            let seg = job.text
-
-            do {
+            let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
+            for try await pcm in stream {
                 try Task.checkCancellation()
-                // media.pause() 和 engine 就绪检查并行执行，减少启动延迟
-                async let mediaPause: () = media.pause()
-                try await waitUntilEngineReady()
-                try Task.checkCancellation()
-                _ = await mediaPause
-
-                player.prepareForPlayback()
-
-                let stream = await engine.synthesizeStream(text: seg, voiceID: job.voiceID)
-                var chunkCount = 0
-                for try await pcm in stream {
-                    try Task.checkCancellation()
-                    chunkCount += 1
-                    player.write(pcm)
-                }
-
-                try Task.checkCancellation()
-                try await player.drain()
-            } catch is CancellationError {
-                Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
-                return
-            } catch let error as PlaybackError {
-                if case .ttsUnavailable(let msg) = error {
-                    Log.error("TTS 不可用: \(msg)")
-                }
-            } catch {
-                Log.error("TTS 合成失败: \(error)")
+                player.write(pcm)
             }
 
-            let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
-            Log.info("TTS 播放完成 [\(job.source)-\(batchID)] \(elapsed)s")
+            try Task.checkCancellation()
+            try await player.drain()
+        } catch is CancellationError {
+            player.cancelPendingPlayback()
+            Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
+            return
+        } catch {
+            player.cancelPendingPlayback()
+            Log.error("TTS 合成失败: \(error)")
         }
+
+        let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
+        Log.info("TTS 播放完成 [\(job.source)-\(batchID)] \(elapsed)s")
+        Task { await media.resume() }
     }
 
     private func waitUntilEngineReady() async throws {

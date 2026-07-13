@@ -79,7 +79,14 @@ actor TTSEngine {
     func synthesizeStream(text: String, voiceID: String) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
-                await synthesizeWithRetry(text: text, voiceID: voiceID, continuation: continuation)
+                do {
+                    try await synthesize(text: text, voiceID: voiceID, continuation: continuation)
+                } catch is CancellationError {
+                    Log.info("TTS 合成已取消")
+                    continuation.finish(throwing: CancellationError())
+                } catch {
+                    continuation.finish(throwing: error)
+                }
             }
             continuation.onTermination = { @Sendable _ in
                 task.cancel()
@@ -87,32 +94,7 @@ actor TTSEngine {
         }
     }
 
-    private func synthesizeWithRetry(
-        text: String, voiceID: String,
-        continuation: AsyncThrowingStream<Data, Error>.Continuation
-    ) async {
-        for attempt in 0...ttsConfig.maxRetries {
-            do {
-                try Task.checkCancellation()
-                try await synthesizeOnce(text: text, voiceID: voiceID, continuation: continuation)
-                return
-            } catch is CancellationError {
-                Log.info("TTS 合成已取消")
-                continuation.finish(throwing: CancellationError())
-                return
-            } catch {
-                let isLast = attempt == ttsConfig.maxRetries
-                Log.error("TTS 合成失败 (attempt \(attempt+1)/\(ttsConfig.maxRetries+1)): \(error)")
-                if isLast {
-                    continuation.finish(throwing: error)
-                    return
-                }
-                try? await Task.sleep(nanoseconds: UInt64(ttsConfig.retryDelayMs) * 1_000_000)
-            }
-        }
-    }
-
-    private func synthesizeOnce(
+    private func synthesize(
         text: String, voiceID: String,
         continuation: AsyncThrowingStream<Data, Error>.Continuation
     ) async throws {

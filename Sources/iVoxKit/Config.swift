@@ -10,23 +10,17 @@ public struct ModelConfig: Codable, Sendable {
 public struct TTSConfig: Codable, Sendable {
     public var language: String
     public var streamingInterval: Double
-    public var maxRetries: Int
-    public var retryDelayMs: Int
     public var outputSampleRate: Int
 
-    public init(language: String, streamingInterval: Double, maxRetries: Int, retryDelayMs: Int, outputSampleRate: Int) {
+    public init(language: String, streamingInterval: Double, outputSampleRate: Int) {
         self.language = language
         self.streamingInterval = streamingInterval
-        self.maxRetries = maxRetries
-        self.retryDelayMs = retryDelayMs
         self.outputSampleRate = outputSampleRate
     }
 
     public static let `default` = TTSConfig(
         language: "Chinese",
         streamingInterval: 0.08,
-        maxRetries: 2,
-        retryDelayMs: 500,
         outputSampleRate: 48_000
     )
 }
@@ -232,16 +226,9 @@ public func validate(_ config: Config) throws {
     if tts.streamingInterval <= 0 {
         throw ConfigError.invalidConfig("tts.streamingInterval 必须大于 0")
     }
-    if tts.maxRetries < 0 {
-        throw ConfigError.invalidConfig("tts.maxRetries 不能小于 0")
-    }
-    if tts.retryDelayMs < 0 {
-        throw ConfigError.invalidConfig("tts.retryDelayMs 不能小于 0")
-    }
     if tts.outputSampleRate <= 0 {
         throw ConfigError.invalidConfig("tts.outputSampleRate 必须大于 0")
     }
-    let playback = config.resolvedPlayback
     let mediaControl = config.resolvedMediaControl
     if mediaControl.isRemote, URL(string: mediaControl.baseURL) == nil {
         throw ConfigError.invalidConfig("mediaControl.baseURL 无效")
