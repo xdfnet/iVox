@@ -1,5 +1,18 @@
 # iVox 开发日志
 
+## v2.7.0 — 2026-07-15
+
+### 新增
+
+- **ESC 快捷键** — 按 ESC 中断当前播报，队列里等待的 jobs 继续播（FIFO 不打断）
+- **`cancelCurrent()`** — 新增 PlaybackQueue 异步方法：取消旧 task → await 退出 → 启动新 processNext 接队列，避免并发写 player
+
+### 改进
+
+- **FIFO 排队** — `enqueue()` 不再 `removeAll`，队列可累积多条任务按顺序播完
+- **不打断正在播** — 去掉 `config.interruptCurrent` 强制切换逻辑，新任务入队不打断当前
+- **processNext 改 while 循环** — 一次性消费队列里所有 jobs，播完再统一 `media.resume()`
+
 ## v2.6.0 — 2026-07-13
 
 ### 改进
