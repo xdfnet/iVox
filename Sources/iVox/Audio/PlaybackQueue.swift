@@ -38,57 +38,68 @@ actor PlaybackQueue {
         player.cancelPendingPlayback()
     }
 
-    func enqueue(_ job: PlaybackJob) async {
+    /// 取消正在播的当前 job，保留队列里等待的（ESC 用）
+    func cancelCurrent() async {
+        let oldTask = currentTask
+        currentTask = nil
+        oldTask?.cancel()
+        player.cancelPendingPlayback()
+        _ = await oldTask?.value  // 等旧 task 退出再启动新的，避免并发写 player
+
         if !jobs.isEmpty {
-            Log.debug("丢弃待播: \(jobs.count) 条")
+            currentTask = Task { await processNext() }
         }
+    }
 
-        if config.interruptCurrent, let task = currentTask {
-            task.cancel()
-            player.cancelPendingPlayback()
-            Log.info("打断当前播报，切到最新请求")
-        }
-
-        jobs.removeAll()
+    func enqueue(_ job: PlaybackJob) async {
         jobs.append(job)
         Log.debug("队列状态: pending=\(jobs.count) processing=\(currentTask != nil)")
 
-        currentTask = Task { await processNext() }
+        // 正在播就不打断；当前 task 跑完 processNext 的 while 会自动消费新 job
+        if currentTask == nil {
+            currentTask = Task { await processNext() }
+        }
     }
 
     private func processNext() async {
-        guard !jobs.isEmpty else { return }
-        let job = jobs.removeFirst()
+        await media.pause()
 
-        let batchID = String(UUID().uuidString.prefix(6))
-        Log.info("TTS 播放开始 [\(job.source)-\(batchID)]")
-        let startedAt = Date()
+        while !jobs.isEmpty {
+            let job = jobs.removeFirst()
 
-        do {
-            try Task.checkCancellation()
-            await media.pause()
-            try await waitUntilEngineReady()
-            try Task.checkCancellation()
+            let batchID = String(UUID().uuidString.prefix(6))
+            Log.info("TTS 播放开始 [\(job.source)-\(batchID)]")
+            let startedAt = Date()
 
-            let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
-            for try await pcm in stream {
+            do {
                 try Task.checkCancellation()
-                player.write(pcm)
+                try await waitUntilEngineReady()
+                try Task.checkCancellation()
+
+                let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
+                for try await pcm in stream {
+                    try Task.checkCancellation()
+                    player.write(pcm)
+                }
+
+                try Task.checkCancellation()
+                try await player.drain()
+            } catch is CancellationError {
+                player.cancelPendingPlayback()
+                Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
+                currentTask = nil
+                Task { await media.resume() }
+                return
+            } catch {
+                player.cancelPendingPlayback()
+                Log.error("TTS 合成失败: \(error)")
             }
 
-            try Task.checkCancellation()
-            try await player.drain()
-        } catch is CancellationError {
-            player.cancelPendingPlayback()
-            Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
-            return
-        } catch {
-            player.cancelPendingPlayback()
-            Log.error("TTS 合成失败: \(error)")
+            let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
+            Log.info("TTS 播放完成 [\(job.source)-\(batchID)] \(elapsed)s")
         }
 
-        let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
-        Log.info("TTS 播放完成 [\(job.source)-\(batchID)] \(elapsed)s")
+        currentTask = nil
         Task { await media.resume() }
     }
 

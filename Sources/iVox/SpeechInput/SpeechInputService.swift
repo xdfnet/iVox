@@ -89,18 +89,21 @@ final class SpeechInputService: @unchecked Sendable {
     // MARK: - Event tap
 
     private func createEventTap() -> CFMachPort? {
-        let mask = 1 << CGEventType.flagsChanged.rawValue
+        let mask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
-            guard type == .flagsChanged else { return Unmanaged.passUnretained(event) }
-            guard event.getIntegerValueField(.keyboardEventKeycode) == 0x36 else {
-                return Unmanaged.passUnretained(event)
+            let keycode = event.getIntegerValueField(.keyboardEventKeycode)
+            switch type {
+            case .flagsChanged where keycode == 0x36:
+                let isDown = event.flags.contains(.maskCommand)
+                let service = Unmanaged<SpeechInputService>.fromOpaque(refcon!).takeUnretainedValue()
+                service.handleKey(isDown: isDown)
+            case .keyDown where keycode == 0x35:
+                let service = Unmanaged<SpeechInputService>.fromOpaque(refcon!).takeUnretainedValue()
+                service.handleEscape()
+            default:
+                break
             }
-
-            let isDown = event.flags.contains(.maskCommand)
-            let service = Unmanaged<SpeechInputService>.fromOpaque(refcon!).takeUnretainedValue()
-            service.handleKey(isDown: isDown)
-
             return Unmanaged.passUnretained(event)
         }
 
@@ -146,6 +149,11 @@ final class SpeechInputService: @unchecked Sendable {
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
             }
         }
+    }
+
+    private func handleEscape() {
+        Log.debug("语音输入: ESC 按下 → 停当前，保留队列")
+        Task { await queue.cancelCurrent() }
     }
 
     // MARK: - Recording
