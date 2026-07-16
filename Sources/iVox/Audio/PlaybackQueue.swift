@@ -28,6 +28,7 @@ actor PlaybackQueue {
         jobs.removeAll()
         player.cancelPendingPlayback()
         player.stop()
+        Task { await media.resume() }   // 退出时确保 music 恢复，避免 daemon 重启后卡暂停
     }
 
     /// 取消所有播放（正在播的和队列中等待的）
@@ -38,16 +39,19 @@ actor PlaybackQueue {
         player.cancelPendingPlayback()
     }
 
-    /// 取消正在播的当前 job，保留队列里等待的（ESC 用）
-    func cancelCurrent() async {
+    /// 跳过当前正在播的 job，直接播队列里下一个；队列空才真的停
+    func skipCurrent() async {
+        guard currentTask != nil else { return }   // 空闲/录音中按 DEL：什么都不做，避免误发 resume
         let oldTask = currentTask
         currentTask = nil
         oldTask?.cancel()
         player.cancelPendingPlayback()
         _ = await oldTask?.value  // 等旧 task 退出再启动新的，避免并发写 player
 
-        if !jobs.isEmpty {
-            currentTask = Task { await processNext() }
+        if jobs.isEmpty {
+            Task { await media.resume() }   // 真结束：恢复音乐
+        } else {
+            currentTask = Task { await processNext() }   // 新 task 入口会 pause
         }
     }
 
@@ -88,7 +92,7 @@ actor PlaybackQueue {
                 player.cancelPendingPlayback()
                 Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
                 currentTask = nil
-                Task { await media.resume() }
+                // 媒体恢复交给 skipCurrent 统一处理，避免跟新 processNext 入口的 pause 竞速
                 return
             } catch {
                 player.cancelPendingPlayback()
@@ -100,7 +104,10 @@ actor PlaybackQueue {
         }
 
         currentTask = nil
-        Task { await media.resume() }
+        await Task.yield()   // 给 enqueue 插入机会：若 yield 期间有新 job 入队，jobs 非空 → 不 resume，由新 processNext 接管 pause
+        if jobs.isEmpty {
+            Task { await media.resume() }
+        }
     }
 
     private func waitUntilEngineReady() async throws {

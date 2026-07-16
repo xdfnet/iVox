@@ -98,9 +98,9 @@ final class SpeechInputService: @unchecked Sendable {
                 let isDown = event.flags.contains(.maskCommand)
                 let service = Unmanaged<SpeechInputService>.fromOpaque(refcon!).takeUnretainedValue()
                 service.handleKey(isDown: isDown)
-            case .keyDown where keycode == 0x35:
+            case .keyDown where keycode == 0x75:
                 let service = Unmanaged<SpeechInputService>.fromOpaque(refcon!).takeUnretainedValue()
-                service.handleEscape()
+                service.handleSkip()
             default:
                 break
             }
@@ -151,9 +151,9 @@ final class SpeechInputService: @unchecked Sendable {
         }
     }
 
-    private func handleEscape() {
-        Log.debug("语音输入: ESC 按下 → 停当前，保留队列")
-        Task { await queue.cancelCurrent() }
+    private func handleSkip() {
+        Log.debug("语音输入: ⌦ 按下 → 跳到下一个")
+        Task { await queue.skipCurrent() }
     }
 
     // MARK: - Recording

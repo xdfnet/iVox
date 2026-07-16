@@ -4,8 +4,8 @@
 
 ### 新增
 
-- **ESC 快捷键** — 按 ESC 中断当前播报，队列里等待的 jobs 继续播（FIFO 不打断）
-- **`cancelCurrent()`** — 新增 PlaybackQueue 异步方法：取消旧 task → await 退出 → 启动新 processNext 接队列，避免并发写 player
+- **⌦ 快捷键** — 按 Forward Delete 跳过当前播报，直接播队列里下一个；队列空才停
+- **`skipCurrent()`** — 新增 PlaybackQueue 异步方法：取消旧 task → await 退出 → 启动新 processNext 接队列，避免并发写 player
 
 ### 改进
 
