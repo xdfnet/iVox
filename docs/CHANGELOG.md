@@ -1,5 +1,13 @@
 # iVox 开发日志
 
+## v2.8.0 — 2026-07-20
+
+### 修复
+
+- **AudioPlayer 自愈** — 写入前自检引擎状态，异常时自动 `reset() + start() + play()` 重建；之前会静默丢弃 PCM
+- **TextCleaner 过滤统一** — 千分位逗号、ASCII hyphen 纳入白名单保留；Tab / NBSP / 全角空格等 Unicode 空白统一当空格合并；emoji 修饰符（含肤色）一并砍掉
+- **PlaybackQueue race 修复** — DEL/取消时若 job 已被 `removeFirst` 取出但未开始播放，还回队首避免静默丢段
+
 ## v2.7.0 — 2026-07-15
 
 ### 新增
