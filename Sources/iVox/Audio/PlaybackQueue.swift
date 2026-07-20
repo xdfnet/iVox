@@ -68,12 +68,12 @@ actor PlaybackQueue {
     private func processNext() async {
         await media.pause()
 
-        while !jobs.isEmpty {
-            let job = jobs.removeFirst()
-
+        // peek + claim：队首 job 直到真正开始播放才拿出，避免 cancel 时丢段
+        while let job = jobs.first {
             let batchID = String(UUID().uuidString.prefix(6))
             Log.info("TTS 播放开始 [\(job.source)-\(batchID)]")
             let startedAt = Date()
+            var consumed = false   // job 是否已从 jobs 拿出
 
             do {
                 try Task.checkCancellation()
@@ -81,6 +81,9 @@ actor PlaybackQueue {
                 try Task.checkCancellation()
 
                 let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
+                consumed = true
+                jobs.removeFirst()  // claim：拿到 stream 后才同步拿出，cancel 不会撞上
+
                 for try await pcm in stream {
                     try Task.checkCancellation()
                     player.write(pcm)
@@ -89,13 +92,14 @@ actor PlaybackQueue {
                 try Task.checkCancellation()
                 try await player.drain()
             } catch is CancellationError {
-                player.cancelPendingPlayback()
-                jobs.insert(job, at: 0)   // cancel 时把已取出的 job 还回队首，避免 race 窗口内静默丢失
+                if consumed { player.cancelPendingPlayback() }
+                // 未 consumed 时队首 job 留在 jobs，新 task 会继续消费
                 Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
                 currentTask = nil
                 // 媒体恢复交给 skipCurrent 统一处理，避免跟新 processNext 入口的 pause 竞速
                 return
             } catch {
+                if !consumed { jobs.removeFirst() }   // 合成失败时跳过此 job，避免死循环
                 player.cancelPendingPlayback()
                 Log.error("TTS 合成失败: \(error)")
             }
