@@ -90,6 +90,7 @@ actor PlaybackQueue {
                 try await player.drain()
             } catch is CancellationError {
                 player.cancelPendingPlayback()
+                jobs.insert(job, at: 0)   // cancel 时把已取出的 job 还回队首，避免 race 窗口内静默丢失
                 Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
                 currentTask = nil
                 // 媒体恢复交给 skipCurrent 统一处理，避免跟新 processNext 入口的 pause 竞速
