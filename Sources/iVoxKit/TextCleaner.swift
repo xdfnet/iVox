@@ -80,24 +80,34 @@ private struct TextCollector: MarkupWalker {
 private extension String {
     private static let urlDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
-    /// 过滤 emoji + 非文字符号，只保留 ASCII 可打印字符
-    /// 只保留文字（字母/数字/中文）+ 语气标点，过滤其余所有符号
+    /// 过滤 emoji + 非文字符号，只保留文字（字母/数字/中文）+ 语气标点。
+    /// Tab / 不间断空格 / 全角空格 → 当空格合并；emoji 修饰符 → 砍。
     var removingEmoji: String {
-        let allowedPunct: Set<UInt32> = [46, 47, 33, 37, 63, 12290, 65281, 65311, 8212]
+        let allowedPunct: Set<UInt32> = [46, 47, 33, 37, 63, 44, 12290, 65281, 65311, 8212]
+        // 各类 Unicode 空白：NBSP、各宽空格、零宽空白（部分）
+        let unicodeSpaces: Set<UInt32> = [0x00A0, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x202F, 0x205F, 0x3000, 0xFEFF]
         var result = ""
         var lastWasSpace = false
         for s in unicodeScalars {
             let v = s.value
             if v <= 127 {
-                // ASCII：字母、数字、空格保留，语气标点保留，其余过滤
                 if (v >= 65 && v <= 90) || (v >= 97 && v <= 122) || (v >= 48 && v <= 57) || v == 32 || allowedPunct.contains(v) {
                     if lastWasSpace { result.append(" ") }
                     result.append(Character(s))
                     lastWasSpace = false
-                } else if v == 32 {
+                } else if v == 32 || v == 9 {  // 空格 + Tab 合并
                     lastWasSpace = true
                 }
-            } else if !s.properties.isEmoji {
+                // 其余 ASCII 符号（含 \r \n）丢弃
+            } else {
+                let p = s.properties
+                if p.isEmoji || p.isEmojiModifier || p.isEmojiModifierBase || p.isEmojiPresentation {
+                    continue  // emoji 主字 + 修饰符 + 肤色 + 展示序列
+                }
+                if unicodeSpaces.contains(v) {
+                    lastWasSpace = true
+                    continue
+                }
                 if lastWasSpace { result.append(" ") }
                 result.append(Character(s))
                 lastWasSpace = false
@@ -116,20 +126,18 @@ private extension String {
         var lastWasSpace = false
         for m in matches {
             let segment = ns.substring(with: NSRange(location: pos, length: m.range.location - pos))
-            for c in segment {
-                if c == " " {
-                    if !lastWasSpace { result.append(" ") }
-                    lastWasSpace = true
-                } else {
-                    result.append(c)
-                    lastWasSpace = false
-                }
-            }
+            appendNormalizingWhitespace(segment, into: &result, lastWasSpace: &lastWasSpace)
             pos = m.range.location + m.range.length
         }
         let tail = ns.substring(with: NSRange(location: pos, length: ns.length - pos))
-        for c in tail {
-            if c == " " {
+        appendNormalizingWhitespace(tail, into: &result, lastWasSpace: &lastWasSpace)
+        return result
+    }
+
+    /// 逐字符拷贝，ASCII 空格 + Tab 都合并为一个空格，其他原样保留
+    private func appendNormalizingWhitespace(_ seg: String, into result: inout String, lastWasSpace: inout Bool) {
+        for c in seg {
+            if c == " " || c == "\t" {
                 if !lastWasSpace { result.append(" ") }
                 lastWasSpace = true
             } else {
@@ -137,6 +145,5 @@ private extension String {
                 lastWasSpace = false
             }
         }
-        return result
     }
 }

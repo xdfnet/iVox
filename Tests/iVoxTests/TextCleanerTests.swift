@@ -64,4 +64,31 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertTrue(got.contains("苹果"))
         XCTAssertTrue(got.contains("香蕉"))
     }
+
+    func testPreservesComma() {
+        // 走 AST 路径（粗体标记触发），保留千分位逗号；块结束补 "。"
+        XCTAssertEqual(cleanText("**1,234,567**"), "1,234,567。")
+    }
+
+    func testNormalizesWhitespace() {
+        // Tab 与 NBSP 当空格合并，前后不留
+        let input = "**a\tb\u{00A0}c\u{3000}d**"
+        XCTAssertEqual(cleanText(input), "a b c d。")
+    }
+
+    func testStripsEmojiModifier() {
+        // 👶 主字 + 🏽 肤色修饰符都应砍
+        let input = "**a👶🏽b**"
+        XCTAssertEqual(cleanText(input), "ab。")
+    }
+
+    func testURLSegmentNormalizesTab() {
+        // 走 AST（粗体触发），URL 前后段落的 Tab 也合并成空格
+        let input = "**参考\thttps://apple.com\t结束**"
+        let got = cleanText(input)
+        XCTAssertFalse(got.contains("\t"), "Tab 应被合并")
+        XCTAssertTrue(got.contains("参考"))
+        XCTAssertTrue(got.contains("结束"))
+        XCTAssertFalse(got.contains("https://"), "URL 应被砍")
+    }
 }
