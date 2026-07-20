@@ -70,6 +70,11 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(cleanText("**1,234,567**"), "1,234,567。")
     }
 
+    func testPreservesHyphen() {
+        // 英文连字符保留，给 TTS 节奏感（如 "x86-64"）
+        XCTAssertEqual(cleanText("**x86-64**"), "x86-64。")
+    }
+
     func testNormalizesWhitespace() {
         // Tab 与 NBSP 当空格合并，前后不留
         let input = "**a\tb\u{00A0}c\u{3000}d**"

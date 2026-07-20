@@ -83,7 +83,7 @@ private extension String {
     /// 过滤 emoji + 非文字符号，只保留文字（字母/数字/中文）+ 语气标点。
     /// Tab / 不间断空格 / 全角空格 → 当空格合并；emoji 修饰符 → 砍。
     var removingEmoji: String {
-        let allowedPunct: Set<UInt32> = [46, 47, 33, 37, 63, 44, 12290, 65281, 65311, 8212]
+        let allowedPunct: Set<UInt32> = [46, 47, 33, 37, 63, 44, 45, 12290, 65281, 65311, 8212]
         // 各类 Unicode 空白：NBSP、各宽空格、零宽空白（部分）
         let unicodeSpaces: Set<UInt32> = [0x00A0, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x202F, 0x205F, 0x3000, 0xFEFF]
         var result = ""
