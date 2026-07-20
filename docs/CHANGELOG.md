@@ -1,5 +1,11 @@
 # iVox 开发日志
 
+## v2.8.1 — 2026-07-20
+
+### 修复
+
+- **PlaybackQueue peek + claim** — v2.8.0 的"catch 还回 job"修复在队列空时会重听当前段（DEL 被解读为"重听 A"）。改用 peek + claim 模式：队首 job 直到 `synthesizeStream` 拿到 stream 才 `removeFirst`，cancel 撞不上这条同步路径，catch 块不再动 `jobs`
+
 ## v2.8.0 — 2026-07-20
 
 ### 修复
