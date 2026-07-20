@@ -36,7 +36,7 @@ final class AudioPlayer: @unchecked Sendable {
         guard started, !pcm.isEmpty else { return }
         let frames = AVAudioFrameCount(pcm.count / 2)
         serialQueue.sync {
-            guard engine.isRunning, node.isPlaying else { return }
+            if !ensureHealthy() { return }
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
             buffer.frameLength = frames
             pcm.withUnsafeBytes { src in
@@ -89,6 +89,30 @@ final class AudioPlayer: @unchecked Sendable {
             drainedContinuation = nil
             node.stop()
             engine.stop()
+        }
+    }
+
+    /// 流式写入前自检：engine 未运行或 node 未在播 → 重建一次。
+    /// 已启动的前提下，常规情况下是一次 isRunning 查询（O(1)）。
+    /// 必须在 serialQueue 内调用。
+    private func ensureHealthy() -> Bool {
+        if engine.isRunning && node.isPlaying { return true }
+
+        Log.warn("AudioEngine 异常，尝试重建: engine.isRunning=\(engine.isRunning) node.isPlaying=\(node.isPlaying)")
+
+        node.stop()
+        engine.stop()
+        engine.reset()
+
+        do {
+            try engine.start()
+            node.play()
+            Log.info("AudioEngine 重建成功")
+            return true
+        } catch {
+            Log.error("AudioEngine 重建失败: \(error)")
+            started = false
+            return false
         }
     }
 }
