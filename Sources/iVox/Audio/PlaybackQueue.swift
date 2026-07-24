@@ -10,6 +10,7 @@ struct PlaybackJob: Sendable {
 actor PlaybackQueue {
     private var jobs: [PlaybackJob] = []
     private var currentTask: Task<Void, Never>?
+    private var generation: UInt = 0
     private let player: AudioPlayer
     private let engine: TTSEngine
     private let media: MediaController
@@ -48,10 +49,17 @@ actor PlaybackQueue {
         _ = await oldTask.value  // 等旧 task 退出再启动新的，避免并发写 player
 
         if jobs.isEmpty {
-            Task { await media.resume() }   // 真结束：恢复音乐
+            await media.resume()
         } else {
-            currentTask = Task { await processNext() }   // 新 task 入口会 pause
+            generation &+= 1
+            currentTask = Task { await processNext() }
         }
+    }
+
+    /// 空闲时恢复音乐（由外部调用，如语音输入结束后）
+    func resumeIfIdle() async {
+        guard jobs.isEmpty, currentTask == nil else { return }
+        await media.resume()
     }
 
     func enqueue(_ job: PlaybackJob) async {
@@ -65,6 +73,8 @@ actor PlaybackQueue {
     }
 
     private func processNext() async {
+        generation &+= 1
+        let gen = generation
         await media.pause()
 
         // peek + claim：队首 job 直到真正开始播放才拿出，避免 cancel 时丢段
@@ -108,9 +118,9 @@ actor PlaybackQueue {
         }
 
         currentTask = nil
-        await Task.yield()   // 给 enqueue 插入机会：若 yield 期间有新 job 入队，jobs 非空 → 不 resume，由新 processNext 接管 pause
-        if jobs.isEmpty {
-            Task { await media.resume() }
+        await Task.yield()
+        if jobs.isEmpty, gen == generation {
+            await media.resume()
         }
     }
 

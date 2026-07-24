@@ -1,5 +1,16 @@
 # iVox 开发日志
 
+## v2.8.2 — 2026-07-24
+
+### 修复
+
+- **语音输入后音乐恢复时序** — ⌘ 松开后立即 `media.resume()` 可能抢在 TTS 入队前恢复音乐，导致播报和音乐重叠。改为延迟 2 秒调用 `resumeIfIdle()`，仅在队列真正空闲时才恢复
+- **processNext 竞态恢复音乐** — 旧一代的 `processNext` 在 yield 后判断 `jobs.isEmpty` 可能误恢复音乐，而此时新一代 task 已入队。引入 `generation` 计数，只有最新一代的 task 能执行 `media.resume()`
+
+### 改进
+
+- **`resumeIfIdle()`** — PlaybackQueue 新增安全恢复接口，外部（如语音输入）可在不确定队列状态时安全请求恢复音乐，仅在 `jobs.isEmpty && currentTask == nil` 时执行
+
 ## v2.8.1 — 2026-07-20
 
 ### 修复

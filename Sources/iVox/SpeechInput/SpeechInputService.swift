@@ -144,7 +144,10 @@ final class SpeechInputService: @unchecked Sendable {
             guard let (recorder, audioURL) = job else { return }
 
             Log.debug("语音输入: ⌘ 松开 → 结束录音")
-            Task { await media.resume() }
+            Task {
+                try? await Task.sleep(for: .seconds(2))
+                await queue.resumeIfIdle()
+            }
             DispatchQueue.global().async {
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
             }
