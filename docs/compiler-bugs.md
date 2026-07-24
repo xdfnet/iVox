@@ -2,7 +2,9 @@
 
 ## Bug 1: Swift 6.4 快照 — SIL 处理栈溢出 (MLXAudioTTS)
 
-### 症状
+**状态：已修复** ✅（自 Swift 6.4 快照 `2026-06-15` 起，`release/6.4.x` 分支已修复）
+
+### 症状（已不存在）
 
 `swift build -c release` 编译包含 `mlx-audio-swift` 的项目时崩溃：
 
@@ -42,36 +44,32 @@ swift build -c release
 
 ### 根本原因
 
-Swift 6.4 开发快照中存在编译器回归 bug，在 SIL 优化阶段（`performSILProcessing`）有栈溢出。
-
-**官方相关 Issue：**
-
-- [\[6.4 regression\] SILGenCleanup ownership crash #89787](https://github.com/swiftlang/swift/issues/89787) — typed-throws + enum-case pattern 导致 SILGenCleanup 崩溃
-- [RedundantLoadElimination: insert a `drop_deinit` #89601](https://github.com/swiftlang/swift/pull/89601) — 修复了一类 SIL 验证器崩溃，但未完全解决
-
-截至 2026-07-01，`release/6.4.x` 分支最新快照仍为 `2026-06-15`，未发布修复版本。
+Swift 6.4 开发快照中存在编译器回归 bug，在 SIL 优化阶段（`performSILProcessing`）有栈溢出。此 bug 已在 `release/6.4.x` 分支的 `2026-06-15` 快照中**修复**，官方在约 6 月后推送了修复，但未公开关联到具体 issue。
 
 ### 解决方案
 
-**使用 Swift 6.3.2 稳定版工具链编译 release：**
+**使用 Swift 6.4 开发快照编译 release：**
 
 ```bash
-TOOLCHAINS=swift-6.3.2-RELEASE swift build -c release
+xcrun --toolchain swift-latest swift build -c release -Xswiftc -Osize
 ```
 
-Swift 6.3.2（Xcode 26.x 内置）不受此 bug 影响，可正常编译 release 构建。
+本地 `swift-latest` 工具链指向 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`（安装在 `~/Library/Developer/Toolchains/`）。
 
 ### 项目配置
 
-iVox 的构建系统已固定为 6.3.2：
+iVox 的构建系统已更新为 6.4：
 
-- `Makefile`：`SWIFT := TOOLCHAINS=swift-6.3.2-RELEASE swift`
-- `.swift-version`：已删除（避免与 `TOOLCHAINS` 环境变量冲突）
+- `Makefile`：`SWIFT := xcrun --toolchain swift-latest swift`
+- 不再需要指定 `TOOLCHAINS` 环境变量
 
 ### 后续
 
-- 关注 [swiftlang/swift Issue #89787](https://github.com/swiftlang/swift/issues/89787)
-- 当 Swift 6.4 发布正式版或修复版快照后，可以切回
+- ✅ 此 bug 已在 `release/6.4.x` 分支的 `2026-06-15` 快照中修复
+- 早前怀疑相关的两个 issue 已确认是不同 bug：
+  - [#89787](https://github.com/swiftlang/swift/issues/89787) — typed-throws + catch 的 SILGenCleanup ownership crash（已由 PR #90330 修复，合入 `main`）
+  - [#89601](https://github.com/swiftlang/swift/pull/89601) — RedundantLoadElimination 的 SIL verifier crash（已合入 `release/6.4.x`，但与此栈溢出无关）
+- 自 2026-06-15 后未发布过新的 6.4 快照；等正式版发布后可再次验证
 
 ---
 

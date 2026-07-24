@@ -24,7 +24,7 @@ make clean
 make run
 ```
 
-**需要 Swift 6.3.2** — Swift 6.4 快照版（2026-06-15）在 `-O` 下编译 MLXAudioTTS 会崩溃。Makefile 使用 `TOOLCHAINS=swift-6.3.2-RELEASE`。
+**需要 Swift 6.4** — 使用开发快照 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`。Makefile 使用 `xcrun --toolchain swift-latest swift`（`swift-latest` 符号链接指向该快照）。
 
 ## 项目结构
 
@@ -79,8 +79,8 @@ Claude Code/Codex  →  hook.sh  →  Unix Socket  →  Daemon
 
 ## 已知问题
 
-### Swift 6.4 快照版编译器崩溃
-`swift-frontend` 在 `-O`/`-Osize` 下编译 MLXAudioTTS 时 stack overflow。临时方案：使用 Swift 6.3.2 stable。详见 `docs/compiler-bugs.md`。
+### Swift 6.4 快照版编译器崩溃（已修复）
+此问题已在 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a` 中修复。详见 `docs/compiler-bugs.md`。
 
 ### 代码签名变更导致 TCC 权限失效
 Ad-hoc 签名每次构建都会变化 → TCC 权限（麦克风、辅助功能）丢失。`make deploy` 会自动重新签名。部署后如权限丢失，需在系统设置中重新勾选。
@@ -100,7 +100,8 @@ The binary at `~/.local/bin/ivox` is what `launchd` and hook scripts invoke. Pro
 ```bash
 make test
 # 或直接：
-TOOLCHAINS=swift-6.3.2-RELEASE swift test
+TOOLCHAINS=swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a swift test
+# 或直接用 make test（自动使用 xcrun --toolchain swift-latest）
 ```
 
 测试仅覆盖 `iVoxKit`（无 MLX 依赖，快）。测试位于 `Sources/iVoxTests/`。

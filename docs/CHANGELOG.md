@@ -10,6 +10,7 @@
 ### 改进
 
 - **`resumeIfIdle()`** — PlaybackQueue 新增安全恢复接口，外部（如语音输入）可在不确定队列状态时安全请求恢复音乐，仅在 `jobs.isEmpty && currentTask == nil` 时执行
+- **切换到 Swift 6.4 工具链** — 之前因 `performSILProcessing` 栈溢出 bug 锁定在 6.3.2，该 bug 已在 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a` 中修复。改用 `xcrun --toolchain swift-latest swift` 构建
 
 ## v2.8.1 — 2026-07-20
 
