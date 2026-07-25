@@ -42,16 +42,16 @@ actor PlaybackQueue {
 
     /// 跳过当前正在播的 job，直接播队列里下一个；队列空才真的停
     func skipCurrent() async {
-        guard let oldTask = currentTask else { return }   // 空闲/录音中按 DEL：什么都不做，避免误发 resume
+        guard let oldTask = currentTask else { return }
+        generation &+= 1
         currentTask = nil
         oldTask.cancel()
         player.cancelPendingPlayback()
-        _ = await oldTask.value  // 等旧 task 退出再启动新的，避免并发写 player
+        _ = await oldTask.value
 
         if jobs.isEmpty {
             await media.resume()
         } else {
-            generation &+= 1
             currentTask = Task { await processNext() }
         }
     }
