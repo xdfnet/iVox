@@ -1,5 +1,16 @@
 # iVox 开发日志
 
+## v2.8.3 — 2026-07-26
+
+### 修复
+
+- **并发安全** — TTSEngine 多 waiter 共享数组替代单 continuation、失败时也 resume；AudioPlayer deinit 恢复 drainContinuation；MediaHTTPServer generation 防 stop/start 竞态；ClipboardInjector 串行队列防多线程竞态；SpeechInputService deinit 防悬空指针
+- **注入防护** — hook.sh `--` 防参数注入、后台进程关 fd3；install-hooks.sh `jq --arg` 消除命令注入
+- **脚本健壮性** — install-binary.sh heredoc 展开 `$HOME`、darwin asset 过滤；download-models.sh clone 前后 `rm -rf`；runtime.sh bootstrap 失败给明确提示、去无差别 `pkill`；Makefile sed/grep 兼容 Linux
+- **WeChatPlatform** — session 过期时 `verifyToken()` 刷新替代死循环
+- **SocketServer** — client socket 加 `SO_NOSIGPIPE`，防 SIGPIPE 杀 daemon
+- **ASRClient** — `defer` 移到 `write` 之前，写失败也能清 temp file
+
 ## v2.8.2 — 2026-07-24
 
 ### 修复
