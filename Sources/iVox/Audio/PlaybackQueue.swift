@@ -51,7 +51,7 @@ actor PlaybackQueue {
 
         if jobs.isEmpty {
             await media.resume()
-        } else {
+        } else if currentTask == nil {
             currentTask = Task { await processNext() }
         }
     }
