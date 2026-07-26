@@ -149,8 +149,16 @@ actor WeChatPlatform {
             if cycle % 5 == 0 { Log.debug("微信轮询第 \(cycle) 轮") }
 
             if resp.errcode == sessionExpiredErrcode {
-                try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
-                backoff = min(backoff * 2, maxBackoff)
+                Log.warn("Session 过期，尝试重新验证…")
+                do {
+                    try await client.verifyToken()
+                    syncBuf = ""
+                    backoff = 1
+                } catch {
+                    Log.error("Session 刷新失败: \(error)")
+                    try? await Task.sleep(nanoseconds: UInt64(backoff * 1_000_000_000))
+                    backoff = min(backoff * 2, maxBackoff)
+                }
                 continue
             }
             backoff = 1

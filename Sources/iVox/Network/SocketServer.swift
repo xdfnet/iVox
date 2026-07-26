@@ -60,7 +60,8 @@ actor SocketServer {
             }
         }
         if clientFD >= 0 {
-            // handle() 内含同步阻塞 read，放到专用队列避免占用 Swift 并发线程池
+            var on: Int32 = 1
+            setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
             DispatchQueue.global().async {
                 handler.handle(fd: clientFD)
             }

@@ -4,6 +4,12 @@ SWIFT := xcrun --toolchain swift-latest swift
 SWIFT_RELEASE_FLAGS := -c release -Xswiftc -Osize
 MODEL_DIR := $(HOME)/.config/ivox/model
 RUNTIME := scripts/runtime.sh
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Darwin)
+	SED_INPLACE := sed -i ''
+else
+	SED_INPLACE := sed -i
+endif
 
 all: install
 
@@ -56,8 +62,8 @@ version:
 	@if [ -z "$(V)" ]; then \
 		echo "用法: make version V=v1.x.x"; exit 1; \
 	fi
-	@echo "$(V)" | grep -q '^v[0-9]\+\.[0-9]\+\.[0-9]\+$$' || { echo "格式错误：需要 vX.Y.Z"; exit 1; }
-	sed -i '' 's/let iVoxVersion = ".*"/let iVoxVersion = "$(subst v,,$(V))"/' Sources/iVox/Utilities/Version.swift
+	@echo "$(V)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "格式错误：需要 vX.Y.Z"; exit 1; }
+	$(SED_INPLACE) 's/let iVoxVersion = ".*"/let iVoxVersion = "$(subst v,,$(V))"/' Sources/iVox/Utilities/Version.swift
 	git add Sources/iVox/Utilities/Version.swift
 	git commit -m "chore: 版本号 $(V)"
 	-git tag -d "$(V)" 2>/dev/null; true

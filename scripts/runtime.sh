@@ -124,9 +124,6 @@ start_launchd() {
   local domain="gui/$(id -u)"
   local output
 
-  # 清理可能残留的旧进程
-  pkill -x ivox 2>/dev/null || true
-
   write_launchd_plist
   launchctl bootout "${domain}" "${PLIST}" 2>/dev/null || \
     launchctl bootout "${domain}/${LABEL}" 2>/dev/null || true
@@ -138,6 +135,9 @@ start_launchd() {
       launchctl kickstart -k "${domain}/${LABEL}" 2>/dev/null || true
     else
       echo "${output}"
+      echo "✗  bootstrap 失败，守护进程未启动"
+      echo "   请检查日志: ${LOG}"
+      echo "   手动启动: launchctl bootstrap ${domain} ${PLIST}"
       exit 1
     fi
   fi

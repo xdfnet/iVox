@@ -17,6 +17,6 @@ print(text[:5000] if text else '')
 " "$payload" 2>/dev/null)
 
 [[ -z "${text// }" ]] && echo '{"continue": true}' >&3 && exit 0
-ivox wechat text "$text" 2>/dev/null &
-ivox speak --source "$source" "$text" 2>/dev/null &
+ivox wechat text "$text" 2>/dev/null 3>&- &
+ivox speak --source "$source" -- "$text" 2>/dev/null 3>&- &
 echo '{"continue": true}' >&3

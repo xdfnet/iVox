@@ -16,7 +16,7 @@ actor TTSEngine {
     private var config: Config
     private let ttsConfig: TTSConfig
     private var loadState: LoadState = .notStarted
-    private var stateContinuation: CheckedContinuation<Void, Never>?
+    private var stateContinuations: [CheckedContinuation<Void, Never>] = []
 
     init(config: Config) {
         self.config = config
@@ -29,11 +29,7 @@ actor TTSEngine {
 
     func loadModel() async throws {
         if model != nil {
-            // 已加载，直接通知等待者
-            if case .ready = loadState, let cont = stateContinuation {
-                stateContinuation = nil
-                cont.resume()
-            }
+            if case .ready = loadState { resumeAllWaiters() }
             return
         }
         loadState = .loading
@@ -42,13 +38,11 @@ actor TTSEngine {
         do {
             model = try await TTS.loadModel(modelRepo: modelPath)
             loadState = .ready
-            if let cont = stateContinuation {
-                stateContinuation = nil
-                cont.resume()
-            }
+            resumeAllWaiters()
             Log.debug("TTS 模型加载完成")
         } catch {
             loadState = .failed(String(describing: error))
+            resumeAllWaiters()
             throw error
         }
     }
@@ -71,9 +65,15 @@ actor TTSEngine {
         case .failed(let msg): Log.error("TTS 模型加载失败: \(msg)"); return
         case .notStarted, .loading:
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-                self.stateContinuation = continuation
+                self.stateContinuations.append(continuation)
             }
         }
+    }
+
+    private func resumeAllWaiters() {
+        let waiters = stateContinuations
+        stateContinuations.removeAll()
+        for cont in waiters { cont.resume() }
     }
 
     func synthesizeStream(text: String, voiceID: String) -> AsyncThrowingStream<Data, Error> {

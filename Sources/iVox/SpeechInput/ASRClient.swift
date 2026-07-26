@@ -26,8 +26,8 @@ actor ASREngine {
 
         let tempDir = FileManager.default.temporaryDirectory
         let tempURL = tempDir.appendingPathComponent("ivox_asr_\(UUID().uuidString).wav")
-        try audioData.write(to: tempURL)
         defer { try? FileManager.default.removeItem(at: tempURL) }
+        try audioData.write(to: tempURL)
 
         let (_, audio) = try loadAudioArray(from: tempURL, sampleRate: 16000)
         let mono = audio.ndim > 1 ? audio.mean(axis: -1) : audio

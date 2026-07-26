@@ -4,32 +4,46 @@ set -euo pipefail
 
 HOOK_SH="${1:?用法: install-hooks.sh <hook-sh-path>}"
 
+# ── 公共函数：用 jq 或 python3 安全写入 hook 配置 ──
+write_hook() {
+  local config_path="$1"
+  local tool_name="$2"
+  local timeout="$3"
+  local cmd="bash $HOOK_SH $tool_name"
+
+  if command -v jq &>/dev/null; then
+    jq --arg cmd "$cmd" --argjson timeout "$timeout" \
+      '.hooks.Stop += [{"hooks": [{"command": $cmd, "timeout": $timeout, "type": "command"}]}]' \
+      "$config_path" > "${config_path}.tmp" && mv "${config_path}.tmp" "$config_path"
+  elif command -v python3 &>/dev/null; then
+    python3 -c "
+import json, sys
+cmd = sys.argv[1]
+timeout = int(sys.argv[2])
+path = sys.argv[3]
+with open(path) as f:
+    d = json.load(f)
+d.setdefault('hooks', {}).setdefault('Stop', []).append({
+    'hooks': [{'command': cmd, 'timeout': timeout, 'type': 'command'}]
+})
+with open(path, 'w') as f:
+    json.dump(d, f, indent=2)
+    f.write('\n')
+" "$cmd" "$timeout" "$config_path"
+  else
+    return 1
+  fi
+}
+
 # ── Claude ──
 CLAUDE_JSON="$HOME/.claude/settings.json"
 if [[ -f "$CLAUDE_JSON" ]]; then
   if grep -q 'hook.sh' "$CLAUDE_JSON" 2>/dev/null; then
     echo "[i] Claude hook 已存在"
+  elif write_hook "$CLAUDE_JSON" "claude" 10; then
+    echo "✓  Claude hook"
   else
-    # 用 jq 加 hook，没有 jq 就 fallback 到系统 python3
-    if command -v jq &>/dev/null; then
-      jq '.hooks.Stop += [{"hooks": [{"command": "bash '"$HOOK_SH"' claude", "timeout": 10, "type": "command"}]}]' "$CLAUDE_JSON" > "${CLAUDE_JSON}.tmp" && mv "${CLAUDE_JSON}.tmp" "$CLAUDE_JSON"
-      echo "✓  Claude hook"
-    elif command -v python3 &>/dev/null; then
-      python3 -c "
-import json
-with open('$CLAUDE_JSON') as f:
-    d = json.load(f)
-d.setdefault('hooks', {}).setdefault('Stop', []).append({
-    'hooks': [{'command': 'bash $HOOK_SH claude', 'timeout': 10, 'type': 'command'}]
-})
-with open('$CLAUDE_JSON', 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-"
-      echo "✓  Claude hook"
-    else
-      echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"
-    fi
+    echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"
   fi
 fi
 
@@ -40,26 +54,10 @@ mkdir -p "$(dirname "$CODEX_JSON")"
 
 if grep -q 'hook.sh' "$CODEX_JSON" 2>/dev/null; then
   echo "[i] Codex hook 已存在"
+elif write_hook "$CODEX_JSON" "codex" 30; then
+  echo "✓  Codex hook（首次触发时授权即可）"
 else
-  if command -v jq &>/dev/null; then
-    jq '.hooks.Stop += [{"hooks": [{"command": "bash '"$HOOK_SH"' codex", "timeout": 30, "type": "command"}]}]' "$CODEX_JSON" > "${CODEX_JSON}.tmp" && mv "${CODEX_JSON}.tmp" "$CODEX_JSON"
-    echo "✓  Codex hook（首次触发时授权即可）"
-  elif command -v python3 &>/dev/null; then
-    python3 -c "
-import json
-with open('$CODEX_JSON') as f:
-    d = json.load(f)
-d.setdefault('hooks', {}).setdefault('Stop', []).append({
-    'hooks': [{'command': 'bash $HOOK_SH codex', 'timeout': 30, 'type': 'command'}]
-})
-with open('$CODEX_JSON', 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-"
-    echo "✓  Codex hook（首次触发时授权即可）"
-  else
-    echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
-  fi
+  echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
 fi
 
 # ── Qwen Code ──
@@ -69,24 +67,8 @@ mkdir -p "$(dirname "$QWEN_JSON")"
 
 if grep -q 'hook.sh' "$QWEN_JSON" 2>/dev/null; then
   echo "[i] Qwen Code hook 已存在"
+elif write_hook "$QWEN_JSON" "qwen" 60; then
+  echo "✓  Qwen Code hook"
 else
-  if command -v jq &>/dev/null; then
-    jq '.hooks.Stop += [{"hooks": [{"command": "bash '"$HOOK_SH"' qwen", "timeout": 60, "type": "command"}]}]' "$QWEN_JSON" > "${QWEN_JSON}.tmp" && mv "${QWEN_JSON}.tmp" "$QWEN_JSON"
-    echo "✓  Qwen Code hook"
-  elif command -v python3 &>/dev/null; then
-    python3 -c "
-import json
-with open('$QWEN_JSON') as f:
-    d = json.load(f)
-d.setdefault('hooks', {}).setdefault('Stop', []).append({
-    'hooks': [{'command': 'bash $HOOK_SH qwen', 'timeout': 60, 'type': 'command'}]
-})
-with open('$QWEN_JSON', 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-"
-    echo "✓  Qwen Code hook"
-  else
-    echo "⚠️  需要 jq 或 python3 写入 Qwen Code 配置，请手动添加"
-  fi
+  echo "⚠️  需要 jq 或 python3 写入 Qwen Code 配置，请手动添加"
 fi

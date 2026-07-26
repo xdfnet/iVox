@@ -29,6 +29,10 @@ final class SpeechInputService: @unchecked Sendable {
             .appendingPathComponent(".config/ivox/recordings")
     }
 
+    deinit {
+        stop()
+    }
+
     // MARK: - Lifecycle
 
     func start() {

@@ -24,9 +24,8 @@ enum MediaHTTPServerError: LocalizedError {
 final class MediaHTTPServer: @unchecked Sendable {
     private var listener: NWListener?
     private let port: UInt16
+    private var listenerGeneration: UInt64 = 0
 
-    // 以下两个属性被 stateUpdateHandler（NWListener 内部队列）和 stop()（调用者线程）访问，
-    // 用锁保护避免 data race。
     private let stateLock = OSAllocatedUnfairLock()
     private var _isRunning = false
     private var _serverURL: String?
@@ -57,6 +56,8 @@ final class MediaHTTPServer: @unchecked Sendable {
             guard let nwPort = NWEndpoint.Port(rawValue: port) else {
                 return .failure(.invalidPort)
             }
+            listenerGeneration &+= 1
+            let gen = listenerGeneration
             listener = try NWListener(using: params, on: nwPort)
 
             listener?.newConnectionHandler = { [weak self] connection in
@@ -65,7 +66,7 @@ final class MediaHTTPServer: @unchecked Sendable {
             }
 
             listener?.stateUpdateHandler = { [weak self] state in
-                guard let server = self else { return }
+                guard let server = self, server.listenerGeneration == gen else { return }
                 switch state {
                 case .ready:
                     server.setState(running: true, url: "http://127.0.0.1:\(server.port)")

@@ -26,12 +26,13 @@ for entry in "${MODELS[@]}"; do
   fi
 
   echo "↓  下载 $model_id -> $target"
-  mkdir -p "$target"
+  rm -rf "$target"
   git lfs install --skip-repo 2>/dev/null
   GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$HF_BASE/$model_id" "$target" 2>&1
 
   if ! is_complete "$target"; then
     echo "✗  模型下载不完整: $target"
+    rm -rf "$target"
     exit 1
   fi
   echo "✓  模型就绪: $target ($(du -sh "$target" | cut -f1))"

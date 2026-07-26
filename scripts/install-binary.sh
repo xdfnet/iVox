@@ -38,7 +38,7 @@ mkdir -p "$BIN_DIR"
 
 if [[ "$VERSION" == "latest" ]]; then
   ASSET_URL=$(curl -sfL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep "browser_download_url" | grep "\.tar\.gz" | cut -d'"' -f4 | head -1)
+    | grep "browser_download_url" | grep "\.tar\.gz" | grep -i "darwin" | cut -d'"' -f4 | head -1)
 else
   ASSET_URL="https://github.com/$REPO/releases/download/$VERSION/ivox-${VERSION}.tar.gz"
 fi
@@ -69,11 +69,11 @@ mkdir -p "$CONFIG_DIR" "$VOICE_DIR" "$RUNTIME_DIR"
 
 # 默认配置
 if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
-  cat > "$CONFIG_DIR/config.json" <<'JSON'
+  cat > "$CONFIG_DIR/config.json" <<JSON
 {
   "models": {
-    "asrPath": "~/.config/ivox/model/Qwen3-ASR-1.7B-4bit",
-    "ttsPath": "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+    "asrPath": "${HOME}/.config/ivox/model/Qwen3-ASR-1.7B-4bit",
+    "ttsPath": "${HOME}/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
   },
   "tts": { "language": "Chinese", "streamingInterval": 0.08, "maxRetries": 2, "retryDelayMs": 500, "outputSampleRate": 48000 },
   "playback": { "interruptCurrent": true, "idleReviveSeconds": 600, "drainBaseTimeoutSeconds": 10 },

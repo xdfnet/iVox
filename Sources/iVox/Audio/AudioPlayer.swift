@@ -11,6 +11,13 @@ final class AudioPlayer: @unchecked Sendable {
     private var started = false
     private var drainedContinuation: CheckedContinuation<Void, Never>?
 
+    deinit {
+        serialQueue.sync {
+            drainedContinuation?.resume()
+            drainedContinuation = nil
+        }
+    }
+
     init() {
         format = AVAudioFormat(commonFormat: .pcmFormatInt16, sampleRate: 48000, channels: 1, interleaved: false)!
 
