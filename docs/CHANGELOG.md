@@ -1,5 +1,15 @@
 # iVox 开发日志
 
+## v2.8.5 — 2026-07-31
+
+### 新功能
+
+- **`type:tts` 合成返回 PCM 协议** — 发送 `{type:tts,source:…,voice:…}\n<文本>`,iVox 合成但不播放、不入队,流式分块返回 48kHz Int16 mono PCM(`[4B 小端长度][数据]` 帧,4 个 0 的 `end` 结尾),供调用方自己播放(如 iAgent AEC 回声消除的参考信号)。客户端断开时立即停止合成,释放 GPU
+
+### 修复
+
+- **麦克风权限描述缺失** — launchd plist 未声明 `NSMicrophoneUsageDescription`,通过 `-sectcreate` 嵌入 `__TEXT,__info_plist` 让 TCC 能找到用途描述,避免麦克风权限被拒
+
 ## v2.8.4 — 2026-07-31
 
 ### 新功能
