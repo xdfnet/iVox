@@ -88,7 +88,9 @@ await ws; await sock; await mic
 `Sources/iVox/Audio/PlaybackQueue.swift`
 
 - Actor，管理播报队列
-- 新请求入队时丢弃旧 pending 任务、取消正在合成/播放的任务
+- `enqueue` 追加到队列尾部，不打断当前播放；`processNext` 的 while 循环自然消费
+- 抢新（取消当前播报、跳到下一个）由 `skipCurrent()` 处理，仅 DEL 键触发
+- `cancelAll()` 清空队列 + 取消全部播放
 - 等待 TTS 模型就绪后再开始合成
 - 播报前通过 `MediaController` 暂停音乐，播完恢复
 
@@ -162,7 +164,7 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
    - 显式 `{voice:xxx}` 可覆盖
    - cleanText() 清洗 Markdown + 行内噪音
 4. PlaybackQueue.enqueue(job)
-   → 丢弃旧任务，MediaController.pause()
+   → 追加到队尾；如空闲则启动 processNext，其入口调用 MediaController.pause()
 5. TTSEngine.synthesizeStream() → AsyncThrowingStream<Data>
 6. AudioPlayer.write(pcm) → scheduleBuffer 流式播放
 7. drain() 等待播放完成
