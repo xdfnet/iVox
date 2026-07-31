@@ -28,6 +28,14 @@ let package = Package(
                 .product(name: "MLXAudioCore", package: "mlx-audio-swift"),
             ],
             resources: [.copy("Resources")],
+            linkerSettings: [
+                .unsafeFlags([
+                    "-Xlinker", "-sectcreate",
+                    "-Xlinker", "__TEXT",
+                    "-Xlinker", "__info_plist",
+                    "-Xlinker", "Sources/iVox/Resources/Info.plist",
+                ]),
+            ],
         ),
         .testTarget(
             name: "iVoxTests",
