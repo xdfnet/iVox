@@ -47,6 +47,11 @@ actor ConnectionHandler {
             Log.info("收到停止指令，守护进程退出")
             exit(0)
         }
+        if text == "__IVOX_STOP_PLAYBACK__" {
+            Log.info("收到停止播放指令，取消当前及排队播放")
+            Task { await queue.cancelAll() }
+            return
+        }
 
         let (source, voiceID, content) = extractVoicePrefix(text, config: config)
         Log.info("请求解析: source=\(source) voice=\(voiceID) raw_chars=\(content.count)")
