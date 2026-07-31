@@ -6,11 +6,13 @@ actor ConnectionHandler {
     private let queue: PlaybackQueue
     private let config: Config
     private let asrEngine: ASREngine
+    private let engine: TTSEngine
 
-    init(queue: PlaybackQueue, config: Config, asrEngine: ASREngine) {
+    init(queue: PlaybackQueue, config: Config, asrEngine: ASREngine, engine: TTSEngine) {
         self.queue = queue
         self.config = config
         self.asrEngine = asrEngine
+        self.engine = engine
     }
 
     nonisolated func handle(fd: Int32) {
@@ -27,13 +29,20 @@ actor ConnectionHandler {
         if let nl = data.firstIndex(of: 0x0A) {
             let headerBytes = data[0..<nl]
             guard let header = String(data: headerBytes, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
-                  header.hasPrefix("{"), header.contains("type:asr") else {
+                  header.hasPrefix("{") else {
                 handleTTS(fd: fd, data: data)
                 return
             }
             let body = data[(nl + 1)...]
-            Log.debug("ASR 请求: bytes=\(body.count)")
-            handleASR(fd: fd, header: header, body: body)
+            if header.contains("type:asr") {
+                Log.debug("ASR 请求: bytes=\(body.count)")
+                handleASR(fd: fd, header: header, body: body)
+            } else if header.contains("type:tts") {
+                Log.debug("TTS PCM 请求: header=\(header) text_bytes=\(body.count)")
+                handleTTSPCM(fd: fd, header: header, body: body)
+            } else {
+                handleTTS(fd: fd, data: data)
+            }
         } else {
             handleTTS(fd: fd, data: data)
         }
@@ -90,6 +99,59 @@ actor ConnectionHandler {
             } catch {
                 Log.error("ASR 识别失败: \(error)")
             }
+        }
+    }
+
+    /// 合成 TTS 并将 PCM 分块写回客户端（请求-响应，不播放、不入队）
+    private nonisolated func handleTTSPCM(fd: Int32, header: String, body: Data) {
+        let meta = parseMetaKV(header)
+        let sourceID = meta["source"] ?? "default"
+        let voiceID = meta["voice"] ?? config.sourceVoices[sourceID] ?? config.defaultVoice
+
+        let text = String(data: body, encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let cleaned = cleanText(text)
+        guard !cleaned.isEmpty else {
+            _ = writeAll(StreamFrame.end, to: fd)
+            Darwin.close(fd)
+            return
+        }
+
+        Task {
+            defer { Darwin.close(fd) }
+            do {
+                let stream = await engine.synthesizeStream(text: cleaned, voiceID: voiceID)
+                var total = 0
+                var ok = true
+                for try await pcm in stream {
+                    if !writeAll(StreamFrame.chunk(pcm), to: fd) {
+                        ok = false
+                        Log.warn("TTS PCM 写入失败，客户端断开，终止合成")
+                        break
+                    }
+                    total += pcm.count
+                }
+                if ok {
+                    _ = writeAll(StreamFrame.end, to: fd)
+                    Log.info("TTS PCM 完成: source=\(sourceID) voice=\(voiceID) bytes=\(total) chars=\(cleaned.count)")
+                }
+            } catch {
+                Log.error("TTS PCM 合成失败: \(error)")
+                _ = writeAll(StreamFrame.end, to: fd)
+            }
+        }
+    }
+
+    /// 循环写入直到全部写完，处理短写
+    private nonisolated func writeAll(_ data: Data, to fd: Int32) -> Bool {
+        data.withUnsafeBytes { raw in
+            var offset = 0
+            while offset < raw.count {
+                let n = Darwin.write(fd, raw.baseAddress!.advanced(by: offset), raw.count - offset)
+                if n <= 0 { return false }
+                offset += n
+            }
+            return true
         }
     }
 

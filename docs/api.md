@@ -90,7 +90,50 @@ payload.append(wavData)
 // 返回的字符串就是识别文本
 ```
 
-### 3. CLI 工具
+### 3. TTS 合成回传 PCM — 合成但不播放
+
+合成 TTS 并把 PCM 分块写回，供调用方自己播放（如 AEC 回声消除的参考信号）。不播放、不入队。
+
+```
+请求（头 + 文本体）:
+  {type:tts,source:myapp,voice:taozi}\n<文本>
+
+响应（分块帧，直到 end）:
+  [4B 小端 UInt32 长度 N][N 字节 PCM]   ← 重复
+  [0x00 0x00 0x00 0x00]                ← end
+```
+
+**参数**
+
+| 字段 | 必填 | 说明 |
+|------|------|------|
+| `type` | 是 | 固定 `tts` |
+| `source` | 否 | 来源标识，默认 `default` |
+| `voice` | 否 | 音色 ID，默认按 `config.json` 中 `sourceVoices` 映射 |
+
+**响应格式**：48kHz、16-bit PCM、mono，流式分块；文本为空或合成失败也以 `end` 帧结尾
+
+> ⚠️ 发送后必须 `shutdown(SHUT_WR)`（或 close）触发服务器处理——服务器读到 EOF 才开始合成回传
+
+**示例（Python）**
+```python
+import socket, struct
+s = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+s.connect("/Users/admin/.config/ivox/ivox.sock")
+s.sendall("{type:tts,source:myapp,voice:taozi}\n你好".encode())
+s.shutdown(socket.SHUT_WR)          # 关键：half-close
+data = b""
+while c := s.recv(65536):
+    data += c
+frames, off = [], 0
+while off + 4 <= len(data):
+    (n,) = struct.unpack("<I", data[off:off+4]); off += 4
+    if n == 0: break                 # end
+    frames.append(data[off:off+n]); off += n
+pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
+```
+
+### 4. CLI 工具
 
 ```bash
 # TTS
@@ -108,4 +151,6 @@ ivox listen -l en < english.wav           # 英文
 - 守护进程未运行 → connect 失败，`ECONNREFUSED`
 - ASR 识别失败 → 服务端日志记录，客户端 read 返回 0 字节（无响应）
 - ASR 结果为空 → 返回空字符串 + `\n`
+- TTS PCM 合成失败或文本为空 → 仍以 `end` 帧结束
+- TTS PCM 中途客户端断开 → 服务端停止合成并关闭连接（`daemon.log` 记录 WARN）
 - TTS 从不报错（fire-and-forget），有问题看 `~/.config/ivox/daemon.log`

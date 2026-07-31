@@ -52,7 +52,7 @@ actor Daemon {
         let dir = (socketPath as NSString).deletingLastPathComponent
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
 
-        let handler = ConnectionHandler(queue: queue, config: config, asrEngine: asrEngine)
+        let handler = ConnectionHandler(queue: queue, config: config, asrEngine: asrEngine, engine: engine)
         try await server.start(path: socketPath, handler: handler)
 
         Log.info("iVox 已启动，监听 \(socketPath)")
