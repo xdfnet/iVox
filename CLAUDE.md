@@ -131,7 +131,7 @@ make version V=vX.X.X
 # 4. 更新 docs/CHANGELOG.md（填入本版改动）
 
 # 5. 提交 CHANGELOG + push
-git add -A && git commit -m "docs: 更新 CHANGELOG vX.X.X" && git push origin master --tags
+git add -A && git commit -m "docs: 更新 CHANGELOG vX.X.X" && git push origin main --tags
 
 # 6. 创建 GitHub Release + 上传二进制
 gh release create vX.X.X --title "iVox vX.X.X" --notes "..."

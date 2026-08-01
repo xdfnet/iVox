@@ -43,7 +43,7 @@ make version V=vX.X.X
 ## 5. 提交并推送
 
 ```bash
-git add -A && git commit -m "docs: 更新 CHANGELOG vX.X.X" && git push origin master --tags
+git add -A && git commit -m "docs: 更新 CHANGELOG vX.X.X" && git push origin main --tags
 ```
 
 ## 6. 创建 GitHub Release

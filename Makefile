@@ -68,7 +68,7 @@ version:
 	git commit -m "chore: 版本号 $(V)"
 	-git tag -d "$(V)" 2>/dev/null; true
 	git tag "$(V)"
-	@echo "✓ 版本 $(V) 已就绪，运行 git push origin master --tags 发布"
+	@echo "✓ 版本 $(V) 已就绪，运行 git push origin main --tags 发布"
 
 clean:
 	rm -rf .build
