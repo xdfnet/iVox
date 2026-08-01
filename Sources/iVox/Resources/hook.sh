@@ -10,9 +10,12 @@ payload="$(cat)"
 source="${1:-claude}"
 
 text=$(python3 -c "
-import json, sys
+import json, sys, re
 d = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
 text = d.get('last_assistant_message', '')
+# 过短的纯西文确认（如 true/ok/done）不播报
+if text and len(text) <= 5 and not re.search(r'[一-鿿]', text):
+    text = ''
 print(text[:5000] if text else '')
 " "$payload" 2>/dev/null)
 
