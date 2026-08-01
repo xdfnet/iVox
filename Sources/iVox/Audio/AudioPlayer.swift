@@ -8,8 +8,10 @@ final class AudioPlayer: @unchecked Sendable {
     private let format: AVAudioFormat
     private let serialQueue = DispatchQueue(label: "ivox.audio")
     private var pendingCount = 0
+    private var pendingFrames = 0   // 本播放段累计写入帧数，drain 超时按此估算
     private var started = false
     private var drainedContinuation: CheckedContinuation<Void, Never>?
+    private static let drainSlack: TimeInterval = 2.0   // drain 超时余量（秒）
 
     deinit {
         serialQueue.sync {
@@ -53,6 +55,7 @@ final class AudioPlayer: @unchecked Sendable {
                 }
             }
             pendingCount += 1
+            pendingFrames += Int(frames)
             node.scheduleBuffer(buffer) { [weak self] in
                 guard let self else { return }
                 self.serialQueue.async {
@@ -67,19 +70,38 @@ final class AudioPlayer: @unchecked Sendable {
     }
 
     func drain() async throws {
+        // 超时兜底：预计播放时长 = 本段已写帧数 / 采样率 + 余量（drain 时写入已完成）
+        let deadline = serialQueue.sync { () -> DispatchTime in
+            let ms = Int((Double(pendingFrames) / format.sampleRate + Self.drainSlack) * 1000)
+            pendingFrames = 0
+            return DispatchTime.now() + .milliseconds(ms)
+        }
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
             let wasDrained = serialQueue.sync { () -> Bool in
                 if pendingCount == 0 { return true }
                 drainedContinuation = continuation
                 return false
             }
-            if wasDrained { continuation.resume() }
+            if wasDrained {
+                continuation.resume()
+            } else {
+                // buffer 播放回调丢失（如 AudioEngine 被系统事件停止）时兜底，避免播放队列永久阻塞
+                serialQueue.asyncAfter(deadline: deadline) { [weak self] in
+                    guard let self else { return }
+                    if let cont = self.drainedContinuation {
+                        self.drainedContinuation = nil
+                        Log.warn("drain 超时强制返回（pendingCount=\(self.pendingCount)）")
+                        cont.resume()
+                    }
+                }
+            }
         }
     }
 
     func cancelPendingPlayback() {
         serialQueue.sync {
             pendingCount = 0
+            pendingFrames = 0
             drainedContinuation?.resume()
             drainedContinuation = nil
             node.stop()
