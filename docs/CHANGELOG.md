@@ -1,5 +1,12 @@
 # iVox 开发日志
 
+## v2.8.9 — 2026-08-03
+
+### 修复
+
+- **hook 静音 reflexio 后台学习文本泄漏** — reflexio（claude-smart）后台学习进程用 `claude -p` 子进程生成规则整合/学习决策文本，退出时触发同一 Stop hook，其未渲染的 assistant 文本被当成"最后一条回复"播报（用户听到屏幕外的英文 JSON 噪音）。reflexio 官方为内部调用设置 `CLAUDE_SMART_INTERNAL=1` 标记，hook.sh 现认领该标记，检测到即提前 `exit 0` 跳过播报（与 `IVOX_SKIP` 并列为两个静音开关）
+- 新增 `docs/hook-tts-leak.md` 固化根因、四条 TTS 路径核查表与排查方法论
+
 ## v2.8.8 — 2026-08-02
 
 ### 修复
