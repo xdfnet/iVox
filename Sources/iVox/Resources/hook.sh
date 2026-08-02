@@ -2,7 +2,9 @@
 # iVox + iW Hook — Claude Code / Codex / Qwen Code Stop Hook
 # Usage: hook.sh <source>   # source: claude | codex | qwen
 # 协议：stdout 必须保持干净；exit 0 = 继续，非 0 = 停止
+# 手动静音（IVOX_SKIP=1，如 Samantha 内部调用）或 reflexio 后台学习调用（CLAUDE_SMART_INTERNAL=1）→ 不播报
 [[ "${IVOX_SKIP:-}" == "1" ]] && exit 0
+[[ "${CLAUDE_SMART_INTERNAL:-}" == "1" ]] && exit 0
 exec 3>&1
 exec 1>/dev/null
 
