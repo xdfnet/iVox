@@ -9,6 +9,7 @@ final class AudioPlayer: @unchecked Sendable {
     private let serialQueue = DispatchQueue(label: "ivox.audio")
     private var pendingCount = 0
     private var pendingFrames = 0   // 本播放段累计写入帧数，drain 超时按此估算
+    private var generation = 0      // 世代：cancelPendingPlayback 递增，旧 buffer 回调据此丢弃，防止计数被减成负数
     private var started = false
     private var drainedContinuation: CheckedContinuation<Void, Never>?
     private static let drainSlack: TimeInterval = 2.0   // drain 超时余量（秒）
@@ -54,11 +55,15 @@ final class AudioPlayer: @unchecked Sendable {
                     dst.initialize(from: srcPtr, count: Int(frames))
                 }
             }
+            let gen = generation
             pendingCount += 1
             pendingFrames += Int(frames)
-            node.scheduleBuffer(buffer) { [weak self] in
+            // .dataConsumed：数据被播放器读出即回调，不依赖引擎在播放末尾是否 auto-shutdown
+            // （默认旧 API 的 .dataPlayedBack 语义在 engine 停止时回调永不触发，导致 drain 超时）
+            node.scheduleBuffer(buffer, completionCallbackType: .dataConsumed) { [weak self] _ in
                 guard let self else { return }
                 self.serialQueue.async {
+                    guard self.generation == gen else { return }   // 已被取消的旧世代回调直接丢弃
                     self.pendingCount -= 1
                     if self.pendingCount == 0, let cont = self.drainedContinuation {
                         self.drainedContinuation = nil
@@ -100,6 +105,7 @@ final class AudioPlayer: @unchecked Sendable {
 
     func cancelPendingPlayback() {
         serialQueue.sync {
+            generation += 1        // 使已排队 buffer 的回调失效，避免其把 pendingCount 减成负数
             pendingCount = 0
             pendingFrames = 0
             drainedContinuation?.resume()

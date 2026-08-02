@@ -1,5 +1,13 @@
 # iVox 开发日志
 
+## v2.8.8 — 2026-08-02
+
+### 修复
+
+- **AudioPlayer.drain 回调丢失根治** — `scheduleBuffer` 原用旧 API（`.dataPlayedBack` 语义），播放末尾引擎 auto-shutdown 时完成回调永不触发，`pendingCount` 不归零，`drain()` 只能靠超时兜底强制返回（每段末尾丢尾/超时 WARN）。现改用 `completionCallbackType: .dataConsumed`（数据被播放器读出即回调，不依赖引擎存活），从根上消除回调丢失
+- **取消后计数污染** — `cancelPendingPlayback()` 归零后旧 buffer 回调再 `-= 1` 把 `pendingCount` 减成负数（曾见 -772），drain 必走超时、账目失真。现递增 `generation` 使旧世代回调经 guard 丢弃，计数保持干净
+- 新增 `docs/audio-player-drain.md` 固化问题与三层解决方案（超时兜底 / 世代计数 / `.dataConsumed`），`docs/playback-queue.md` 同步维护约束
+
 ## v2.8.7 — 2026-08-02
 
 ### 修复
