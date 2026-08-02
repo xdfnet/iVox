@@ -192,7 +192,7 @@ struct WeChatSetupCommand: AsyncParsableCommand {
         )
 
         print()
-        print("   请点击 + 添加 \(NSHomeDirectory())/.local/bin/ivox 并勾选")
+        print("   请点击 + 添加 \(AppPaths.binDir)/ivox 并勾选")
         print("   完成后按 Enter 继续...", terminator: "")
         _ = readLine()
         print("🔐 辅助功能权限配置完成")

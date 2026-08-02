@@ -9,11 +9,11 @@ struct SayCommand: ParsableCommand {
     )
 
     func run() throws {
-        let socketPath = NSString(string: "~/.config/ivox/ivox.sock").expandingTildeInPath
+        let socketPath = AppPaths.socketPath
 
         guard SocketClient.isRunning(path: socketPath) else {
             print("语音输入: 守护进程未运行")
-            return
+            throw ExitCode.failure
         }
         print("语音输入: 守护进程运行中")
         print("按住右侧 ⌘ 说话，松开后自动粘贴")

@@ -18,9 +18,9 @@ struct SpeakCommand: AsyncParsableCommand {
     var text: String
 
     func run() async throws {
-        let socketPath = NSString(string: "~/.config/ivox/ivox.sock").expandingTildeInPath
+        let socketPath = AppPaths.socketPath
         var parts: [String] = []
-        if let source { parts.append("source:\(source)") }
+        if let source, !source.isEmpty { parts.append("source:\(source)") }
         if let voice, !voice.isEmpty { parts.append("voice:\(voice)") }
         let prefix = parts.isEmpty ? "" : "{\(parts.joined(separator: ","))}"
         try SocketClient.send(prefix + text, to: socketPath)

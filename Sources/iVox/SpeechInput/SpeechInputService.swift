@@ -11,6 +11,8 @@ final class SpeechInputService: @unchecked Sendable {
     private var thread: Thread?
     private var eventTap: CFMachPort?
     private var runLoopSource: CFRunLoopSource?
+    private var runLoop: CFRunLoop?
+    private var shouldStop = false
     private let asrEngine: ASREngine
 
     private enum State {
@@ -45,30 +47,46 @@ final class SpeechInputService: @unchecked Sendable {
         }
         t.name = "com.user.ivox.speechinput"
         t.start()
-        thread = t
+        stateQueue.sync {
+            shouldStop = false
+            thread = t
+        }
     }
 
     func stop() {
-        if let runLoopSource {
-            CFRunLoopRemoveSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        var loopToStop: CFRunLoop?
+        stateQueue.sync {
+            shouldStop = true
+            if let eventTap {
+                CFMachPortInvalidate(eventTap)
+            }
+            eventTap = nil
+            runLoopSource = nil
+            loopToStop = runLoop
+            runLoop = nil
+            thread?.cancel()
+            thread = nil
         }
-        if let eventTap {
-            CFMachPortInvalidate(eventTap)
+        // 在事件线程自己的 runloop 上唤醒，让它退出 CFRunLoopRun
+        if let loopToStop {
+            CFRunLoopStop(loopToStop)
         }
-        eventTap = nil
-        runLoopSource = nil
-        thread?.cancel()
-        thread = nil
     }
 
     // MARK: - Event loop
 
     private func run() {
+        stateQueue.sync { runLoop = CFRunLoopGetCurrent() }
+        guard !isStopped else {
+            stateQueue.sync { runLoop = nil }
+            return
+        }
+
         // 检查两类权限
         let hasMic = checkMicPermission()
         let hasAccessibility: Bool
         if let tap = createEventTap() {
-            eventTap = tap
+            stateQueue.sync { eventTap = tap }
             hasAccessibility = true
         } else {
             hasAccessibility = checkAccessibilityPermission()
@@ -78,16 +96,23 @@ final class SpeechInputService: @unchecked Sendable {
         let needMic = !hasMic
         let needAccessibility = !hasAccessibility
         if needMic || needAccessibility {
-            if let tap = eventTap { CFMachPortInvalidate(tap); eventTap = nil }
+            stateQueue.sync {
+                if let tap = eventTap { CFMachPortInvalidate(tap); eventTap = nil }
+            }
             waitForPermissions(needMic: needMic, needAccessibility: needAccessibility)
+            stateQueue.sync { runLoop = nil }
             return
         }
 
-        runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, eventTap!, 0)
-        CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        stateQueue.sync {
+            guard !shouldStop, let tap = eventTap else { return }
+            runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+            CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
+        }
         Log.info("语音输入已启动 (⌘→说话→松开→粘贴)")
 
         CFRunLoopRun()
+        stateQueue.sync { runLoop = nil }
     }
 
     // MARK: - Event tap
@@ -96,14 +121,15 @@ final class SpeechInputService: @unchecked Sendable {
         let mask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
+            guard let refcon else { return Unmanaged.passUnretained(event) }
+            let service = Unmanaged<SpeechInputService>.fromOpaque(refcon).takeUnretainedValue()
+            guard !service.isStopped else { return Unmanaged.passUnretained(event) }
             let keycode = event.getIntegerValueField(.keyboardEventKeycode)
             switch type {
             case .flagsChanged where keycode == 0x36:
                 let isDown = event.flags.contains(.maskCommand)
-                let service = Unmanaged<SpeechInputService>.fromOpaque(refcon!).takeUnretainedValue()
                 service.handleKey(isDown: isDown)
             case .keyDown where keycode == 0x75:
-                let service = Unmanaged<SpeechInputService>.fromOpaque(refcon!).takeUnretainedValue()
                 service.handleSkip()
             default:
                 break
@@ -279,6 +305,10 @@ final class SpeechInputService: @unchecked Sendable {
 
     // MARK: - Permissions
 
+    private var isStopped: Bool {
+        stateQueue.sync { shouldStop }
+    }
+
     /// 检查麦克风权限，notDetermined 时阻塞等待用户选择
     private func checkMicPermission() -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -327,7 +357,7 @@ final class SpeechInputService: @unchecked Sendable {
     private func waitForPermissions(needMic: Bool, needAccessibility: Bool) {
         var needMic = needMic
         var needAccessibility = needAccessibility
-        while needMic || needAccessibility {
+        while !isStopped && (needMic || needAccessibility) {
             Thread.sleep(forTimeInterval: 5)
             if needMic, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
                 Log.info("语音输入: 麦克风已授权")
@@ -340,6 +370,10 @@ final class SpeechInputService: @unchecked Sendable {
                     needAccessibility = false
                 }
             }
+        }
+        guard !isStopped else {
+            Log.info("语音输入: 已停止")
+            return
         }
         Log.info("语音输入: 权限已就绪，重新启动")
         start()

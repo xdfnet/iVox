@@ -125,7 +125,7 @@ final class MediaHTTPServer: @unchecked Sendable {
         if path == "/" || path == "/index.html" {
             HTTPResponseHandler.sendHTML(connection, Self.loadHTML())
         } else if path.hasPrefix("/api/") {
-            await handleAPI(path: path, connection: connection)
+            handleAPI(path: path, connection: connection)
         } else if path.hasPrefix("/assets/") {
             Self.serveAsset(path: path, connection: connection)
         } else {

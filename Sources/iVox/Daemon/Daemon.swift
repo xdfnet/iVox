@@ -48,8 +48,8 @@ actor Daemon {
         installSignalSource(SIGINT)
         installSignalSource(SIGTERM)
 
-        let socketPath = NSString(string: "~/.config/ivox/ivox.sock").expandingTildeInPath
-        let dir = (socketPath as NSString).deletingLastPathComponent
+        let socketPath = AppPaths.socketPath
+        let dir = AppPaths.configDir
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
 
         let handler = ConnectionHandler(queue: queue, config: config, asrEngine: asrEngine, engine: engine)

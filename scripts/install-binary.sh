@@ -37,8 +37,15 @@ section "下载 iVox"
 mkdir -p "$BIN_DIR"
 
 if [[ "$VERSION" == "latest" ]]; then
+  ARCH="$(uname -m)"
+  case "$ARCH" in
+    arm64)   ARCH_PATTERN="arm64|aarch64" ;;
+    x86_64)  ARCH_PATTERN="x86_64|amd64" ;;
+    *)       ARCH_PATTERN="darwin" ;;
+  esac
   ASSET_URL=$(curl -sfL "https://api.github.com/repos/$REPO/releases/latest" \
-    | grep "browser_download_url" | grep "\.tar\.gz" | grep -i "darwin" | cut -d'"' -f4 | head -1)
+    | grep "browser_download_url" | grep "\.tar\.gz" \
+    | grep -iE "darwin|macos" | grep -iE "$ARCH_PATTERN" | cut -d'"' -f4 | head -1)
 else
   ASSET_URL="https://github.com/$REPO/releases/download/$VERSION/ivox-${VERSION}.tar.gz"
 fi

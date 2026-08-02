@@ -31,10 +31,12 @@ enum ClipboardInjector {
 
             Thread.sleep(forTimeInterval: 0.1)
 
-            let enterDown = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true)
-            enterDown?.post(tap: .cghidEventTap)
-            let enterUp = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false)
-            enterUp?.post(tap: .cghidEventTap)
+            guard let enterDown = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: true),
+                  let enterUp = CGEvent(keyboardEventSource: source, virtualKey: 0x24, keyDown: false) else {
+                throw InjectError.keyEventCreationFailed
+            }
+            enterDown.post(tap: .cghidEventTap)
+            enterUp.post(tap: .cghidEventTap)
         }
     }
 

@@ -18,8 +18,8 @@ struct VoiceList: ParsableCommand {
 
     func run() throws {
         guard let config = try? loadConfig() else {
-            print("无法加载配置 ~/.config/ivox/config.json")
-            return
+            print("无法加载配置 \(AppPaths.configDir)/config.json")
+            throw ExitCode.failure
         }
         for v in config.voices {
             let mark = v.id == config.defaultVoice ? " ●" : "  "

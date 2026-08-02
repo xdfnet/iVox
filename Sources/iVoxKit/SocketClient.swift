@@ -1,6 +1,19 @@
 import Darwin
 import Foundation
 
+/// 常用路径（HOME 优先取环境变量，HOME 未设时退回 NSHomeDirectory，避免波浪号展开失败）
+public enum AppPaths {
+    public static var configDir: String { expandTilde("~/.config/ivox") }
+    public static var socketPath: String { configDir + "/ivox.sock" }
+    public static var binDir: String { expandTilde("~/.local/bin") }
+
+    static func expandTilde(_ path: String) -> String {
+        guard path.hasPrefix("~/") else { return path }
+        let home = ProcessInfo.processInfo.environment["HOME"] ?? NSHomeDirectory()
+        return home + path.dropFirst()
+    }
+}
+
 /// Unix Domain Socket 客户端工具
 public enum SocketClient {
     /// 连接 UNIX Socket，返回 fd（调用方负责 close）
@@ -24,6 +37,11 @@ public enum SocketClient {
             }
         }
         guard ret == 0 else { Darwin.close(fd); throw POSIXError(.ECONNREFUSED) }
+
+        // 读写超时 10s，防止 daemon 异常时无限阻塞
+        var tv = timeval(tv_sec: 10, tv_usec: 0)
+        setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
+        setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         return fd
     }
 
@@ -58,8 +76,8 @@ public enum SocketClient {
     public static func isRunning(path: String) -> Bool {
         var st = stat()
         guard stat(path, &st) == 0 else { return false }
-        let fd = try? connect(to: path)
-        if fd != nil { Darwin.close(fd!); return true }
-        return false
+        guard let fd = try? connect(to: path) else { return false }
+        Darwin.close(fd)
+        return true
     }
 }

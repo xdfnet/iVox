@@ -34,7 +34,7 @@ struct WeChatStatusCommand: ParsableCommand {
         print()
 
         // 检查 daemon 是否运行
-        let socketPath = NSString(string: "~/.config/ivox/ivox.sock").expandingTildeInPath
+        let socketPath = AppPaths.socketPath
         var st = stat()
         if stat(socketPath, &st) == 0 {
             print("🟢 守护进程运行中")

@@ -89,20 +89,27 @@ struct MediaController {
     /// 暂停音乐 (TTS 播报前调用)
     func pause() async {
         Log.info("媒体控制: 暂停")
-        _ = await Self.pause()
+        if case .failure(let err) = await Self.pause() {
+            Log.warn("媒体控制: 暂停失败 \(err.localizedDescription)")
+        }
     }
 
     /// 恢复音乐 (TTS 播报完成后调用)
     func resume() async {
         Log.info("媒体控制: 恢复")
-        _ = await Self.play()
+        if case .failure(let err) = await Self.play() {
+            Log.warn("媒体控制: 恢复失败 \(err.localizedDescription)")
+        }
     }
 
     // MARK: - 远程模式
 
     private func send(_ path: String) async {
         guard config.enabled else { return }
-        guard let url = URL(string: config.baseURL + path) else { return }
+        guard let url = URL(string: config.baseURL + path) else {
+            Log.error("媒体控制: 无效 URL \(config.baseURL + path)")
+            return
+        }
 
         if let lastFail = remote.lastFailureTime,
            Date().timeIntervalSince(lastFail) < cooldownInterval {
@@ -259,7 +266,12 @@ struct MediaController {
         let process = Process()
         process.executableURL = URL(fileURLWithPath: "/usr/bin/open")
         process.arguments = [appConfig.path]
-        try? process.run()
+        do {
+            try process.run()
+        } catch {
+            Log.error("应用启动失败: \(error.localizedDescription)")
+            return .failure(.eventPostFailed)
+        }
         Log.info("应用已启动: \(appConfig.displayName)")
         return .success(())
     }

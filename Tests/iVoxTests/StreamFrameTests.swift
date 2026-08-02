@@ -59,6 +59,23 @@ final class StreamFrameTests: XCTestCase {
         XCTAssertTrue(remaining.isEmpty)
     }
 
+    func testOversizedFrameDropped() {
+        var remaining = [UInt8]()
+        // 小端 0x0C000000 = 201326592（~192MB），超过 maxFrameBytes
+        let bad = Data([0x00, 0x00, 0x00, 0x0C])
+        let frames = StreamFrame.parseChunks(from: bad, into: &remaining)
+        XCTAssertTrue(frames.isEmpty)
+        XCTAssertTrue(remaining.isEmpty, "超大帧应清空缓冲")
+    }
+
+    func testNormalFrameBelowLimit() {
+        var remaining = [UInt8]()
+        let wire = StreamFrame.chunk(Data(repeating: 1, count: 1024))
+        let frames = StreamFrame.parseChunks(from: wire, into: &remaining)
+        XCTAssertEqual(frames.count, 1)
+        XCTAssertEqual(frames[0].count, 1024)
+    }
+
     func testEmptyChunk() {
         var remaining = [UInt8]()
         let frames = StreamFrame.parseChunks(from: Data([0, 0, 0, 0]), into: &remaining)

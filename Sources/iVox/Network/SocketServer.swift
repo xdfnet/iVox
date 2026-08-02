@@ -29,13 +29,15 @@ actor SocketServer {
 
         let addrSize = socklen_t(MemoryLayout<sockaddr_un>.size)
         guard withUnsafePointer(to: &addr, { $0.withMemoryRebound(to: sockaddr.self, capacity: 1) { Darwin.bind(socketFD, $0, addrSize) } }) == 0 else {
-            Darwin.close(socketFD); throw SocketError.bindFailed(String(cString: strerror(errno)))
+            Darwin.close(socketFD); unlink(path)
+            throw SocketError.bindFailed(String(cString: strerror(errno)))
         }
+        chmod(path, 0o600)
         guard Darwin.listen(socketFD, 5) == 0 else {
-            Darwin.close(socketFD); throw SocketError.listenFailed(String(cString: strerror(errno)))
+            Darwin.close(socketFD); unlink(path)
+            throw SocketError.listenFailed(String(cString: strerror(errno)))
         }
 
-        chmod(path, 0o600)
         Log.info("Socket 监听: \(path)")
 
         let fd = socketFD
@@ -62,6 +64,9 @@ actor SocketServer {
         if clientFD >= 0 {
             var on: Int32 = 1
             setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+            // 读超时 10s：坏客户端不关闭连接时，read 循环不会无限阻塞
+            var tv = timeval(tv_sec: 10, tv_usec: 0)
+            setsockopt(clientFD, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
             DispatchQueue.global().async {
                 handler.handle(fd: clientFD)
             }

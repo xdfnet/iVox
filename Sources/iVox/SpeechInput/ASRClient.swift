@@ -22,6 +22,9 @@ actor ASREngine {
     }
 
     func transcribe(audioData: Data, language: String) async throws -> String {
+        guard !language.isEmpty, language.allSatisfy(\.isLetter) else {
+            throw ASRError.invalidLanguage(language)
+        }
         guard let m = model else { throw ASRError.notLoaded }
 
         let tempDir = FileManager.default.temporaryDirectory
@@ -52,5 +55,6 @@ actor ASREngine {
 
     enum ASRError: Error {
         case notLoaded
+        case invalidLanguage(String)
     }
 }

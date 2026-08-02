@@ -55,8 +55,8 @@ actor WeChatClient {
         let req = GetConfigReq(ilinkUserID: userID, contextToken: contextToken, baseInfo: .default)
         let data = try await post("ilink/bot/getconfig", body: req)
         let resp = try decoder.decode(GetConfigResp.self, from: data)
-        guard (resp.ret ?? 0) == 0, resp.errcode == nil || resp.errcode == 0 else {
-            throw WeChatError.configFailed(ret: resp.ret ?? 0, errcode: resp.errcode ?? 0, errmsg: resp.errmsg ?? "")
+        guard resp.ret == 0, resp.errcode == nil || resp.errcode == 0 else {
+            throw WeChatError.configFailed(ret: resp.ret, errcode: resp.errcode ?? 0, errmsg: resp.errmsg ?? "")
         }
         guard let ticket = resp.typingTicket, !ticket.isEmpty else {
             throw WeChatError.missingTypingTicket
@@ -79,15 +79,22 @@ actor WeChatClient {
 
     func getBotQRCode(botType: String = "3") async throws -> BotQRResponse {
         let url = baseURL + "ilink/bot/get_bot_qrcode?bot_type=" + botType
-        var req = URLRequest(url: URL(string: url)!)
+        guard let requestURL = URL(string: url) else {
+            throw WeChatError.network("无效 URL: \(url)")
+        }
+        var req = URLRequest(url: requestURL)
         req.timeoutInterval = 15
         let (data, _) = try await session.data(for: req)
         return try decoder.decode(BotQRResponse.self, from: data)
     }
 
     func pollQRStatus(qrKey: String) async throws -> QRStatusResponse {
-        let url = baseURL + "ilink/bot/get_qrcode_status?qrcode=" + qrKey
-        var req = URLRequest(url: URL(string: url)!)
+        let encodedKey = qrKey.addingPercentEncoding(withAllowedCharacters: .urlQueryAllowed) ?? qrKey
+        let url = baseURL + "ilink/bot/get_qrcode_status?qrcode=" + encodedKey
+        guard let requestURL = URL(string: url) else {
+            throw WeChatError.network("无效 URL: \(url)")
+        }
+        var req = URLRequest(url: requestURL)
         req.timeoutInterval = 40
         req.setValue("1", forHTTPHeaderField: "iLink-App-ClientVersion")
         let (data, _) = try await session.data(for: req)
@@ -96,7 +103,11 @@ actor WeChatClient {
 
     func verifyToken() async throws {
         let body = "{\"get_updates_buf\":\"\",\"base_info\":{\"channel_version\":\"ivox-verify/1.0\"}}"
-        var req = URLRequest(url: URL(string: baseURL + "ilink/bot/getupdates")!)
+        let url = baseURL + "ilink/bot/getupdates"
+        guard let requestURL = URL(string: url) else {
+            throw WeChatError.network("无效 URL: \(url)")
+        }
+        var req = URLRequest(url: requestURL)
         req.httpMethod = "POST"
         req.httpBody = body.data(using: .utf8)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -113,7 +124,10 @@ actor WeChatClient {
 
     private func post(_ endpoint: String, body: some Codable, timeout: Double? = nil) async throws -> Data {
         let url = baseURL + endpoint
-        var req = URLRequest(url: URL(string: url)!)
+        guard let requestURL = URL(string: url) else {
+            throw WeChatError.network("无效 URL: \(url)")
+        }
+        var req = URLRequest(url: requestURL)
         req.httpMethod = "POST"
         req.httpBody = try JSONEncoder().encode(body)
         req.setValue("application/json", forHTTPHeaderField: "Content-Type")
@@ -129,7 +143,9 @@ actor WeChatClient {
                     try await Task.sleep(nanoseconds: UInt64(t * 1_500_000_000))
                     throw URLError(.timedOut)
                 }
-                let result = try await group.next()!
+                guard let result = try await group.next() else {
+                    throw WeChatError.network("请求任务提前结束")
+                }
                 group.cancelAll()
                 return result
             }

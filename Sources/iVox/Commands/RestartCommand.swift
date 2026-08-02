@@ -25,9 +25,11 @@ struct RestartCommand: ParsableCommand {
                 print("[✓] 守护进程已重启")
             } else {
                 print("[✗] 守护进程未注册，请先运行: make launchd")
+                throw ExitCode.failure
             }
         } catch {
             print("[✗] 重启失败: \(error)")
+            throw ExitCode.failure
         }
     }
 }

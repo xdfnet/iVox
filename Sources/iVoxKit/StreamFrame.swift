@@ -4,6 +4,9 @@ import Foundation
 /// 格式：`[4B 小端 UInt32 长度 N][N 字节 48kHz Int16 mono PCM]`，合成结束写 `end`（4 个 0）。
 /// 放 iVoxKit 以便 iVoxTests 直接单测编解码。
 public enum StreamFrame {
+    /// 单帧数据上限（100MB），防止恶意/损坏流声明超大帧导致缓冲膨胀
+    public static let maxFrameBytes = 100 * 1024 * 1024
+
     /// 编码一帧：4 字节小端长度前缀 + 数据
     public static func chunk(_ data: Data) -> Data {
         var out = Data()
@@ -35,6 +38,11 @@ public enum StreamFrame {
                 | (UInt32(remaining[offset + 3]) << 24)
             if len == 0 {
                 offset += 4
+                break
+            }
+            guard Int(len) <= maxFrameBytes else {
+                // 声明帧超出上限：丢弃缓冲，终止解析
+                remaining.removeAll()
                 break
             }
             let total = Int(len) + 4

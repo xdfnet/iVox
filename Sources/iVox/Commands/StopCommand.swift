@@ -9,7 +9,7 @@ struct StopCommand: ParsableCommand {
     )
 
     func run() throws {
-        let socketPath = NSString(string: "~/.config/ivox/ivox.sock").expandingTildeInPath
+        let socketPath = AppPaths.socketPath
         do {
             try SocketClient.send("__IVOX_STOP__", to: socketPath)
             print("[✓] 已发送停止指令")

@@ -1,5 +1,24 @@
 # iVox 开发日志
 
+## v2.8.7 — 2026-08-02
+
+### 修复
+
+- **语音输入事件线程生命周期** — `stop()` 原先用 `CFRunLoopGetCurrent()` 在调用线程的 runloop 上移除事件线程的 source，`CFRunLoopRun` 永不退出导致线程泄漏；权限轮询无退出条件，stop 后还会自动拉起新线程。现改为记录事件线程自己的 runloop、用 `CFRunLoopStop` 唤醒退出，轮询检查停止标志，事件 tap / runloop / 线程引用统一用队列保护（消除 TOCTOU），事件回调与 `eventTap!`/`refcon!` 强制解包一并清理
+- **强制解包清理** — `WeChatClient` 4 处 `URL(string:)!` 与 `group.next()!` 改为 guard + 抛错；`TextCleaner` 的 `try! NSDataDetector` 改 `try?`，失败时降级返回原文
+- **静默吞错** — `MediaController` 暂停/恢复失败、应用启动失败不再静默，记录日志并返回失败；`ClipboardInjector` Enter 事件创建失败改为抛错
+- **socket 阻塞超时** — `SocketClient` 连接设置 10s 读写超时；`SocketServer` 对客户端连接设置 10s 读超时，坏客户端不关闭连接时读取不再无限挂起
+- **命令退出码** — `ivox say`（守护进程未运行）、`ivox restart`（重启失败/未注册）、`ivox voice list`（配置加载失败）不再静默返回 0
+- **硬编码路径集中** — 新增 `AppPaths`（HOME 未设时退回 `NSHomeDirectory`），7 处重复的 `~/.config/ivox/ivox.sock` 统一收敛，微信配置引导的二进制路径一并修正
+- **输入校验** — `ivox listen` 语言参数只允许纯字母（防协议注入），stdin 改分块读取并限 100MB（防内存耗尽）；微信扫码 `qrKey` 补 URL 编码；ASR 语言码校验
+- **StreamFrame 超大帧防护** — 声明帧超过 100MB 直接清空缓冲终止解析，防恶意流缓冲膨胀（新增 2 个单测）
+- **socket 文件清理** — bind/listen 失败时 unlink 残留 socket 文件；`chmod` 提前到 listen 前执行
+- **脚本健壮性** — `install-binary.sh` 按 CPU 架构（arm64/x86_64）精确选择 release 资产，避免下到不兼容二进制；`runtime.sh` bundle 缺失时输出明确警告
+
+### 其他
+
+- 清理编译 warning：`MediaHTTPServer` 多余 `await`、`WeChatClient` 非可选 `??`
+
 ## v2.8.6 — 2026-08-01
 
 ### 修复

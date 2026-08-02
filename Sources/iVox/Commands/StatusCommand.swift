@@ -9,7 +9,7 @@ struct StatusCommand: ParsableCommand {
     )
 
     func run() throws {
-        let socketPath = NSString(string: "~/.config/ivox/ivox.sock").expandingTildeInPath
+        let socketPath = AppPaths.socketPath
 
         guard SocketClient.isRunning(path: socketPath) else {
             print("状态: 未运行")

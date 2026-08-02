@@ -78,7 +78,7 @@ private struct TextCollector: MarkupWalker {
 }
 
 private extension String {
-    private static let urlDetector = try! NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    private static let urlDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
 
     /// 过滤 emoji + 非文字符号，只保留文字（字母/数字/中文）+ 语气标点。
     /// Tab / 不间断空格 / 全角空格 → 当空格合并；emoji 修饰符 → 砍。
@@ -119,7 +119,8 @@ private extension String {
     var removingURLs: String {
         let ns = self as NSString
         let range = NSRange(location: 0, length: ns.length)
-        let matches = Self.urlDetector.matches(in: self, range: range)
+        guard let urlDetector = Self.urlDetector else { return self }
+        let matches = urlDetector.matches(in: self, range: range)
         guard !matches.isEmpty else { return self }
         var result = ""
         var pos = 0

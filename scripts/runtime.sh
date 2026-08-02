@@ -84,6 +84,8 @@ deploy_bin() {
   if [[ -n "$mlx_bundle" ]]; then
     rm -rf "${HOME}/.local/bin/mlx-swift_Cmlx.bundle"
     cp -R "$mlx_bundle" "${HOME}/.local/bin/"
+  else
+    echo "⚠️  未找到 mlx-swift_Cmlx.bundle，跳过（可能未编译 MLX）" >&2
   fi
   # 复制 SPM 资源包（index.html、图标等）
   # 优先用 release 版本，避免 find 随机命中 debug 旧包
@@ -92,6 +94,8 @@ deploy_bin() {
   if [[ -n "$ivox_bundle" ]]; then
     rm -rf "${HOME}/.local/bin/iVox_iVox.bundle"
     cp -R "$ivox_bundle" "${HOME}/.local/bin/"
+  else
+    echo "⚠️  未找到 iVox_iVox.bundle，跳过（可能未编译资源包）" >&2
   fi
   sign_bin
 }
