@@ -1,5 +1,21 @@
 # iVox 开发日志
 
+## v2.9.0 — 2026-08-04
+
+### 新增
+
+- **`ivox start` 命令** — 通过 `launchctl bootstrap` 启动守护进程；已在运行则提示"已运行"，plist 未安装则引导 `make launchd`；幂等（先清残留 job 再 bootstrap，job 已加载时 kickstart 兜底拉起）
+- **`AppPaths.launchdPlistPath`** — 收敛 launchd plist 路径（`~/Library/LaunchAgents/com.user.ivox.plist`），供 start/stop 复用
+
+### 修复
+
+- **`ivox stop` 真正停止** — 原实现仅通过 socket 发 `__IVOX_STOP__` 让进程自退，因 launchd `KeepAlive: true` 秒拉新实例，等效于"重启"。现改为 `launchctl bootout` 移除 launchd job，进程退出后不再被拉起；bootout 失败（如 nohup 手动运行、job 未注册）时退回 socket 停止信号；bootout 后轮询等待 socket 消失（最多 5s），确认进程真正退出再返回
+- **launchctl stderr 静默** — start/stop 内幂等的预清理 bootout 不再向终端泄漏 `Boot-out failed` 噪音
+
+### 其他
+
+- 子命令增至 11 个，`stop` / `start` / `restart` 语义对称（临时关闭 / 恢复启动 / 原地重启）
+
 ## v2.8.9 — 2026-08-03
 
 ### 修复
