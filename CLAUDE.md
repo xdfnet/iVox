@@ -8,10 +8,7 @@
 # Release 编译（默认）
 make build
 
-# 部署 + 重启 launchd 服务
-make deploy
-
-# 编译 + 部署 + 重启
+# 编译 + 部署 + 重启守护进程
 make update
 
 # 运行测试
@@ -55,7 +52,7 @@ scripts/               — runtime.sh, download-models.sh, install-*.sh
 
 ## 架构
 
-基于 launchd 管理的 actor 架构（`com.user.ivox`）：
+基于守护进程的 actor 架构（无 launchd，`ivox start/stop` 手动管理）：
 
 ```
 Claude Code/Codex  →  hook.sh  →  Unix Socket  →  Daemon
@@ -75,7 +72,7 @@ Claude Code/Codex  →  hook.sh  →  Unix Socket  →  Daemon
 
 - **配置**：`~/.config/ivox/config.json`，所有运行时文件在 `~/.config/ivox/` 下。
 
-- **日志**：`~/.config/ivox/daemon.log`（launchd 的 stdout/stderr）。使用 `Log.{info,debug,warn,error}`。
+- **日志**：`~/.config/ivox/daemon.log`（nohup 的 stdout/stderr）。使用 `Log.{info,debug,warn,error}`。
 
 ## 已知问题
 
@@ -83,17 +80,17 @@ Claude Code/Codex  →  hook.sh  →  Unix Socket  →  Daemon
 此问题已在 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a` 中修复。详见 `docs/compiler-bugs.md`。
 
 ### 代码签名变更导致 TCC 权限失效
-Ad-hoc 签名每次构建都会变化 → TCC 权限（麦克风、辅助功能）丢失。`make deploy` 会自动重新签名。部署后如权限丢失，需在系统设置中重新勾选。
+Ad-hoc 签名每次构建都会变化 → TCC 权限（麦克风、辅助功能）丢失。`deploy-bin`（`make update`）会自动重新签名。部署后如权限丢失，需在系统设置中重新勾选。
 
 ## 部署
 
 ```bash
-make update       # 编译 → 签名 → 复制到 ~/.local/bin/ivox → 重启 launchd
+make update       # 编译 → 签名 → 复制到 ~/.local/bin/ivox → 重启守护进程
 ```
 
-The binary at `~/.local/bin/ivox` is what `launchd` and hook scripts invoke. Project dir can be deleted after deploy.
+The binary at `~/.local/bin/ivox` is what hook scripts and `ivox start/stop` invoke. Project dir can be deleted after deploy.
 
-`~/.local/bin/ivox` 是 launchd 和 hook 脚本调用的二进制。部署后项目目录可删除。
+`~/.local/bin/ivox` 是 hook 脚本调用的二进制，由 `ivox start/stop` 手动管理。部署后项目目录可删除。
 
 ## 测试
 

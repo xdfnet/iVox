@@ -19,13 +19,12 @@ install:
 	@$(MAKE) models
 	@$(MAKE) build voices
 	@$(RUNTIME) deploy-bin
-	@$(RUNTIME) launchd
-	@echo "✓  iVox 已就绪"
+	@echo "✓  iVox 已就绪（手动启动: ~/.local/bin/ivox start）"
 
 update:
 	@$(MAKE) build voices
 	@$(RUNTIME) deploy-bin
-	@$(RUNTIME) launchd
+	@if [ -S "$(HOME)/.config/ivox/ivox.sock" ]; then ~/.local/bin/ivox restart; fi
 	@echo "✓  iVox 已更新"
 
 check:

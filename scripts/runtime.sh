@@ -6,7 +6,6 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNTIME="${HOME}/.local/share/ivox/runtime"
 LAUNCHER="${HOME}/.local/bin/ivox"
 LABEL="com.user.ivox"
-PLIST="${HOME}/Library/LaunchAgents/${LABEL}.plist"
 CONFIG="${HOME}/.config/ivox/config.json"
 HOOK_SH="${HOME}/.config/ivox/hook.sh"
 LOG="${HOME}/.config/ivox/daemon.log"
@@ -100,70 +99,8 @@ deploy_bin() {
   sign_bin
 }
 
-write_launchd_plist() {
-  mkdir -p "${HOME}/Library/LaunchAgents" "${HOME}/.config/ivox" "${RUNTIME}"
-  cat > "${PLIST}" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>${LABEL}</string>
-  <key>ProgramArguments</key><array>
-    <string>${LAUNCHER}</string>
-    <string>serve</string>
-  </array>
-  <key>WorkingDirectory</key><string>${HOME}/.local/bin</string>
-  <key>ProcessType</key><string>Standard</string>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${LOG}</string>
-  <key>StandardErrorPath</key><string>${LOG}</string>
-  <key>EnvironmentVariables</key><dict>
-    <key>HOME</key><string>${HOME}</string>
-  </dict>
-</dict></plist>
-PLIST
-}
-
-start_launchd() {
-  local domain="gui/$(id -u)"
-  local output
-
-  write_launchd_plist
-  launchctl bootout "${domain}" "${PLIST}" 2>/dev/null || \
-    launchctl bootout "${domain}/${LABEL}" 2>/dev/null || true
-  sleep 0.5
-  rm -f "${SOCKET}"
-
-  if ! output="$(launchctl bootstrap "${domain}" "${PLIST}" 2>&1)"; then
-    if launchctl print "${domain}/${LABEL}" >/dev/null 2>&1; then
-      launchctl kickstart -k "${domain}/${LABEL}" 2>/dev/null || true
-    else
-      echo "${output}"
-      echo "✗  bootstrap 失败，守护进程未启动"
-      echo "   请检查日志: ${LOG}"
-      echo "   手动启动: launchctl bootstrap ${domain} ${PLIST}"
-      exit 1
-    fi
-  fi
-
-  launchctl kickstart -k "${domain}/${LABEL}" 2>/dev/null || true
-  echo -n "等待守护进程就绪"
-  for _ in {1..40}; do
-    [[ -S "${SOCKET}" ]] && { echo ""; break; }
-    echo -n "."
-    sleep 0.25
-  done
-  if [[ ! -S "${SOCKET}" ]]; then
-    echo ""
-    echo "✗  守护进程未就绪，请查看日志: ${LOG}"
-    exit 1
-  fi
-  echo "✓  守护进程已启动"
-}
-
 uninstall_runtime() {
-  launchctl bootout "gui/$(id -u)/${LABEL}" 2>/dev/null || true
-  rm -f "${PLIST}"
+  "${LAUNCHER}" stop 2>/dev/null || true
   rm -f "${LAUNCHER}"
   rm -rf "${HOME}/.local/share/ivox/runtime"
   echo "✓  已卸载（保留 ~/.config/ivox/）"
@@ -174,11 +111,10 @@ case "${1:-help}" in
   init) init_config ;;
   voices) install_voices ;;
   deploy-bin) deploy_bin ;;
-  launchd) start_launchd ;;
   sign) sign_bin ;;
   uninstall) uninstall_runtime ;;
   *)
-    echo "用法: scripts/runtime.sh {check-env|init|voices|deploy-bin|launchd|sign|uninstall}"
+    echo "用法: scripts/runtime.sh {check-env|init|voices|deploy-bin|sign|uninstall}"
     exit 1
     ;;
 esac

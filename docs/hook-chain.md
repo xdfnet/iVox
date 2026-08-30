@@ -23,7 +23,7 @@
                               ▼
                     ┌─────────────────────┐
                     │   iVox Daemon      │
-                    │   (launchd 守护)     │
+                    │   (手动守护)         │
                     │                     │
                     │   ┌───────────────┐ │
                     │   │ TextCleaner   │ │  ← 去代码噪音
@@ -223,7 +223,7 @@ codesign -dv ~/.local/share/ivox/runtime/iVox 2>&1 | grep -E 'flags|Signature|Te
 
 | 症状 | 检查点 |
 |------|--------|
-| 日志空 | daemon 是否在运行？`launchctl list | grep ivox` |
+| 日志空 | daemon 是否在运行？`pgrep -fl "ivox serve"` |
 | 日志有收到但没播放 | 代码签名失效？`codesign -dv ~/.local/share/ivox/runtime/iVox` |
 | 日志有播放但没声音 | AudioPlayer 引擎异常？音量设置？扬声器？ |
 | 播放完音乐没恢复 | iDict 是否运行？`curl http://127.0.0.1:8888/api/ping` |

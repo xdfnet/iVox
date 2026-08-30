@@ -216,10 +216,9 @@ ConnectionHandler.extractVoicePrefix():
 ~/.config/ivox/voices/                     # 参考音频
 ~/.config/ivox/wechat/                     # 微信轮询状态
 ~/.config/ivox/daemon.log                  # 日志（5MB 轮转）
-~/Library/LaunchAgents/com.user.ivox.plist  # launchd 守护
 ```
 
-`make deploy` 构建 → 签名 → 拷贝二进制 → 重启 launchd 服务。
+`make update` 构建 → 签名 → 拷贝二进制 → 重启守护进程（socket 存在时）。
 
 ## 构建系统
 
@@ -230,8 +229,7 @@ ConnectionHandler.extractVoicePrefix():
 | Target | 作用 |
 |--------|------|
 | `make build` | `swift build -c release -Xswiftc -Osize` |
-| `make deploy` | build + voices + deploy-bin + sign |
-| `make update` | deploy + launchd restart |
+| `make update` | build + voices + deploy-bin + 守护进程重启 |
 | `make run` | build + 前台运行（调试） |
 | `make test` | 运行 iVoxKit 测试 |
 

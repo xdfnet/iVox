@@ -128,48 +128,12 @@ else
   done
 fi
 
-# ── 6. 注册 launchd ──
-section "注册 launchd 自启动"
-LABEL="com.user.ivox"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
-LOG="$CONFIG_DIR/daemon.log"
-SOCKET="$CONFIG_DIR/ivox.sock"
-
-cat > "$PLIST" <<PLIST
-<?xml version="1.0" encoding="UTF-8"?>
-<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
-<plist version="1.0"><dict>
-  <key>Label</key><string>${LABEL}</string>
-  <key>ProgramArguments</key><array>
-    <string>${BIN_DIR}/ivox</string>
-    <string>serve</string>
-  </array>
-  <key>RunAtLoad</key><true/>
-  <key>KeepAlive</key><true/>
-  <key>StandardOutPath</key><string>${LOG}</string>
-  <key>StandardErrorPath</key><string>${LOG}</string>
-  <key>EnvironmentVariables</key><dict>
-    <key>HOME</key><string>${HOME}</string>
-  </dict>
-</dict></plist>
-PLIST
-
-launchctl bootout "gui/$(id -u)" "$PLIST" 2>/dev/null || true
-sleep 0.5
-rm -f "$SOCKET"
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
-launchctl kickstart -k "gui/$(id -u)/${LABEL}"
-for _ in {1..40}; do
-  [[ -S "$SOCKET" ]] && break
-  sleep 0.25
-done
-
-if [[ -S "$SOCKET" ]]; then
-  ok "守护进程已启动"
-else
-  echo "✗ 守护进程未就绪，请查看日志: $LOG"
-  exit 1
-fi
+# ── 6. 服务管理 ──
+section "服务管理（不注册 launchd 自启）"
+echo "  ivox 不再注册 launchd 自启动，需要时手动控制:"
+echo "    启动: ${BIN_DIR}/ivox start"
+echo "    停止: ${BIN_DIR}/ivox stop"
+echo "    状态: ${BIN_DIR}/ivox status"
 
 # ── 完成 ──
 echo ""

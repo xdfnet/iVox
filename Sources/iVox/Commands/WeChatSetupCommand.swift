@@ -199,10 +199,12 @@ struct WeChatSetupCommand: AsyncParsableCommand {
     }
 
     private func restartDaemon() {
-        let proc = Process()
-        proc.executableURL = URL(fileURLWithPath: "/bin/launchctl")
-        proc.arguments = ["kickstart", "-k", "gui/\(getuid())/com.user.ivox"]
-        try? proc.run()
-        proc.waitUntilExit()
+        // 无 launchd：停止后重新拉起
+        let socketPath = AppPaths.socketPath
+        if SocketClient.isRunning(path: socketPath) {
+            try? SocketClient.send("__IVOX_STOP__", to: socketPath)
+            Thread.sleep(forTimeInterval: 0.5)
+        }
+        try? StartCommand().run()
     }
 }

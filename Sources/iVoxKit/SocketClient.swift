@@ -6,8 +6,6 @@ public enum AppPaths {
     public static var configDir: String { expandTilde("~/.config/ivox") }
     public static var socketPath: String { configDir + "/ivox.sock" }
     public static var binDir: String { expandTilde("~/.local/bin") }
-    /// launchd LaunchAgent plist 路径（launchctl bootstrap/bootout 用）
-    public static var launchdPlistPath: String { expandTilde("~/Library/LaunchAgents/com.user.ivox.plist") }
 
     static func expandTilde(_ path: String) -> String {
         guard path.hasPrefix("~/") else { return path }

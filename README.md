@@ -66,7 +66,7 @@ ivox wechat status             # 查看配置状态
 ```bash
 make build     # release 编译（自动使用 Swift 6.3.2）
 make run       # 编译 + 前台调试
-make update    # 编译 + 部署 + 重启 launchd 服务
+make update    # 编译 + 部署 + 重启守护进程
 make test      # 运行测试
 make clean     # 清除 .build
 ```
