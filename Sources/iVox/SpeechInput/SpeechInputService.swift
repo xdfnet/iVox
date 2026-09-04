@@ -129,7 +129,7 @@ final class SpeechInputService: @unchecked Sendable {
             case .flagsChanged where keycode == 0x36:
                 let isDown = event.flags.contains(.maskCommand)
                 service.handleKey(isDown: isDown)
-            case .keyDown where keycode == 0x75:
+            case .keyDown:
                 service.handleSkip()
             default:
                 break

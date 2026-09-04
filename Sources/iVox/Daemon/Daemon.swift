@@ -101,9 +101,12 @@ actor Daemon {
             }
 
             if !(await asrEngine.isLoaded) {
-            do { try await asrEngine.load() }
-            catch { Log.error("ASR 模型加载失败: \(error)") }
-        }
+                do { try await asrEngine.load() }
+                catch { Log.error("ASR 模型加载失败: \(error)") }
+            }
+
+            let lang = config.speechInput?.language ?? SpeechInputConfig.default.language
+            await asrEngine.warmup(language: lang)
 
         if config.speechInput?.enabled ?? SpeechInputConfig.default.enabled {
             speechInput?.start()
