@@ -86,7 +86,7 @@ if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
   "playback": { "interruptCurrent": true, "idleReviveSeconds": 600, "drainBaseTimeoutSeconds": 10 },
   "mediaControl": { "enabled": true, "baseURL": "http://127.0.0.1:8888", "pausePath": "/api/pause", "resumePath": "/api/play" },
   "speechInput": { "enabled": true, "language": "zh", "autoEnter": true, "maxRecordingSeconds": 30 },
-  "defaultVoice": "mizai",
+  "defaultVoice": "dayi",
   "sourceVoices": { "claude": "taozi", "codex": "wanwan", "qwen": "mizai", "pi": "dayi" },
   "voices": [
     { "name": "米仔", "id": "mizai", "refText": "大家好，我是米仔。我的声音温暖自然，适合日常播报和语音助手场景。无论是读书、讲故事，还是播报天气新闻，我都能轻松应对。", "refAudio": "~/.config/ivox/voices/ref_mizai.wav", "description": "Qwen Code 音色" },
