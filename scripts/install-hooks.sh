@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 安装 iVox hook 到 Claude / Codex / Qwen Code，已存在则跳过
+# 安装 iVox hook 到 Claude / Codex / Qwen Code / PI，已存在则跳过
 set -euo pipefail
 
 HOOK_SH="${1:?用法: install-hooks.sh <hook-sh-path>}"
@@ -71,4 +71,19 @@ elif write_hook "$QWEN_JSON" "qwen" 60; then
   echo "✓  Qwen Code hook"
 else
   echo "⚠️  需要 jq 或 python3 写入 Qwen Code 配置，请手动添加"
+fi
+
+# ── PI coding agent 扩展 ──
+PI_EXT_DIR="$HOME/.pi/agent/extensions"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PI_EXT_SRC="$SCRIPT_DIR/ivox.ts"
+if [[ -d "$PI_EXT_DIR" && -f "$PI_EXT_SRC" ]]; then
+  if [[ -f "$PI_EXT_DIR/ivox.ts" ]]; then
+    echo "[i] PI 扩展已存在"
+  else
+    cp "$PI_EXT_SRC" "$PI_EXT_DIR/ivox.ts"
+    echo "✓  PI 扩展"
+  fi
+elif [[ -f "$PI_EXT_SRC" ]]; then
+  echo "[i] PI 未安装，跳过扩展安装"
 fi

@@ -87,7 +87,7 @@ if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
   "mediaControl": { "enabled": true, "baseURL": "http://127.0.0.1:8888", "pausePath": "/api/pause", "resumePath": "/api/play" },
   "speechInput": { "enabled": true, "language": "zh", "autoEnter": true, "maxRecordingSeconds": 30 },
   "defaultVoice": "mizai",
-  "sourceVoices": { "claude": "taozi", "codex": "wanwan", "qwen": "mizai" },
+  "sourceVoices": { "claude": "taozi", "codex": "wanwan", "qwen": "mizai", "pi": "dayi" },
   "voices": [
     { "name": "米仔", "id": "mizai", "refText": "大家好，我是米仔。我的声音温暖自然，适合日常播报和语音助手场景。无论是读书、讲故事，还是播报天气新闻，我都能轻松应对。", "refAudio": "~/.config/ivox/voices/ref_mizai.wav", "description": "Qwen Code 音色" },
     { "name": "甜妹桃子", "id": "taozi", "refText": "嗨，我是甜妹桃子。我有着活泼甜美的声线，听起来元气满满。如果你需要一位热情开朗的声音陪伴，选我就对了。", "refAudio": "~/.config/ivox/voices/ref_taozi.wav", "description": "Claude 音色" },
