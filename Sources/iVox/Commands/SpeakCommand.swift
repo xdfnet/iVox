@@ -8,7 +8,7 @@ struct SpeakCommand: AsyncParsableCommand {
         abstract: "一次性播报文本"
     )
 
-    @Option(name: .shortAndLong, help: "来源标识 (claude/codex)")
+    @Option(name: .shortAndLong, help: "来源标识 (claude/codex/qwen)")
     var source: String?
 
     @Option(name: .shortAndLong, help: "音色 ID")
