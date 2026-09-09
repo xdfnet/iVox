@@ -126,8 +126,13 @@ final class SpeechInputService: @unchecked Sendable {
             guard !service.isStopped else { return Unmanaged.passUnretained(event) }
             let keycode = event.getIntegerValueField(.keyboardEventKeycode)
             switch type {
-            case .flagsChanged where keycode == 0x36:
-                let isDown = event.flags.contains(.maskCommand)
+            case .flagsChanged where keycode == 0x36 || keycode == 0x3D:
+                let isDown: Bool
+                if keycode == 0x36 {
+                    isDown = event.flags.contains(.maskCommand)
+                } else {
+                    isDown = event.flags.contains(.maskAlternate)
+                }
                 service.handleKey(isDown: isDown)
             case .keyDown:
                 service.handleSkip()
@@ -152,7 +157,7 @@ final class SpeechInputService: @unchecked Sendable {
 
     private func handleKey(isDown: Bool) {
         if isDown {
-            // 按下 ⌘：检查状态，只有 idle 才能开始录音
+            // 按下 ⌘ 或 right ⌥：检查状态，只有 idle 才能开始录音
             let shouldStart: Bool = stateQueue.sync {
                 if case .idle = state { return true } else { return false }
             }
@@ -165,7 +170,7 @@ final class SpeechInputService: @unchecked Sendable {
             guard let (recorder, url) = startRecording() else { return }
             stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
         } else {
-            // 松开 ⌘：检查状态，只有 recording 才能结束
+            // 松开 ⌘ 或 right ⌥：检查状态，只有 recording 才能结束
             let job = stateQueue.sync { () -> (AVAudioRecorder, URL)? in
                 guard case .recording(let recorder, let audioURL) = state else { return nil }
                 state = .idle
