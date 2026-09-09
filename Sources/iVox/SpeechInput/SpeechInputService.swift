@@ -126,13 +126,8 @@ final class SpeechInputService: @unchecked Sendable {
             guard !service.isStopped else { return Unmanaged.passUnretained(event) }
             let keycode = event.getIntegerValueField(.keyboardEventKeycode)
             switch type {
-            case .flagsChanged where keycode == 0x36 || keycode == 0x3D:
-                let isDown: Bool
-                if keycode == 0x36 {
-                    isDown = event.flags.contains(.maskCommand)
-                } else {
-                    isDown = event.flags.contains(.maskAlternate)
-                }
+            case .flagsChanged where keycode == 0x36:
+                let isDown = event.flags.contains(.maskCommand)
                 service.handleKey(isDown: isDown)
             case .keyDown:
                 service.handleSkip()
