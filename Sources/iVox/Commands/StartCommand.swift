@@ -4,7 +4,7 @@ import iVoxKit
 
 struct StartCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "start",
+        commandName: "on",
         abstract: "启动守护进程（后台运行）"
     )
 

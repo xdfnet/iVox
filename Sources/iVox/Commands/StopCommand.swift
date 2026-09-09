@@ -4,7 +4,7 @@ import iVoxKit
 
 struct StopCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "stop",
+        commandName: "off",
         abstract: "停止运行中的守护进程"
     )
 

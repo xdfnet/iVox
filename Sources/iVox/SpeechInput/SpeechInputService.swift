@@ -175,18 +175,15 @@ final class SpeechInputService: @unchecked Sendable {
 
             Log.debug("语音输入: ⌘ 松开 → 结束录音")
             Task {
-                try? await Task.sleep(for: .seconds(2))
                 await queue.resumeIfIdle()
-            }
-            DispatchQueue.global().async {
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
             }
         }
     }
 
     private func handleSkip() {
-        Log.debug("语音输入: ⌦ 按下 → 跳到下一个")
-        Task { await queue.skipCurrent() }
+        Log.debug("语音输入: 任意按键 → 取消 TTS")
+        Task { await queue.cancelAll() }
     }
 
     // MARK: - Recording
