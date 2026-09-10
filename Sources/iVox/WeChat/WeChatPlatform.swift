@@ -82,37 +82,14 @@ actor WeChatPlatform {
 
     // MARK: - Typing 指示器
 
-    func startTyping(userID: String) async -> Task<Void, Never>? {
-        guard let token = tokens[userID] else { return nil }
-        let ticket: String
+    /// 发 typing 指示器（简化版，直接发 start/stop）
+    func sendTyping(userID: String, status: TypingStatus) async {
+        guard let token = tokens[userID] else { return }
         do {
-            ticket = try await getOrFetchTypingTicket(userID: userID, contextToken: token)
+            let ticket = try await getOrFetchTypingTicket(userID: userID, contextToken: token)
+            try await client.sendTyping(userID: userID, ticket: ticket, status: status)
         } catch {
-            Log.warn("获取 typing_ticket 失败: \(error)")
-            return nil
-        }
-
-        return Task { [weak self] in
-            guard let self else { return }
-            do {
-                try await self.client.sendTyping(userID: userID, ticket: ticket, status: .start)
-            } catch {
-                Log.warn("发送输入状态失败: \(error)")
-                return
-            }
-            // 每 5s 刷新一次
-            while !Task.isCancelled {
-                try? await Task.sleep(nanoseconds: 5_000_000_000)
-                guard !Task.isCancelled else { break }
-                do {
-                    try await self.client.sendTyping(userID: userID, ticket: ticket, status: .start)
-                } catch {
-                    Log.warn("刷新输入状态失败: \(error)")
-                    break
-                }
-            }
-            // 停止
-            try? await self.client.sendTyping(userID: userID, ticket: ticket, status: .stop)
+            Log.warn("发送 typing 失败: \(error)")
         }
     }
 

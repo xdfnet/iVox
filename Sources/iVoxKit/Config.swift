@@ -98,16 +98,22 @@ public struct WeChatConfig: Codable, Sendable {
     public var allowFrom: String
     public var longPollMS: Int
     public var dataDir: String
+    public var claudePath: String?
+    public var askTimeoutSeconds: Int?
 
-    public init(token: String = "", baseURL: String = "https://ilinkai.weixin.qq.com", allowFrom: String = "", longPollMS: Int = 35000, dataDir: String = "") {
+    public init(token: String = "", baseURL: String = "https://ilinkai.weixin.qq.com", allowFrom: String = "", longPollMS: Int = 35000, dataDir: String = "", claudePath: String? = nil, askTimeoutSeconds: Int? = nil) {
         self.token = token
         self.baseURL = baseURL
         self.allowFrom = allowFrom
         self.longPollMS = longPollMS
         self.dataDir = dataDir
+        self.claudePath = claudePath
+        self.askTimeoutSeconds = askTimeoutSeconds
     }
 
     public var enabled: Bool { !token.isEmpty }
+    public var resolvedClaudePath: String { claudePath ?? "/Users/admin/.local/bin/claude" }
+    public var resolvedAskTimeoutSeconds: Int { askTimeoutSeconds ?? 120 }
 
     private enum CodingKeys: String, CodingKey {
         case token
@@ -115,6 +121,8 @@ public struct WeChatConfig: Codable, Sendable {
         case allowFrom = "allow_from"
         case longPollMS = "long_poll_timeout_ms"
         case dataDir = "data_dir"
+        case claudePath = "claude_path"
+        case askTimeoutSeconds = "ask_timeout_seconds"
     }
 }
 

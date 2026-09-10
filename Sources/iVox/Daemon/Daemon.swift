@@ -11,10 +11,12 @@ actor Daemon {
     private let speechInput: SpeechInputService?
     private let mediaController: MediaController
     private var wechat: WeChatPlatform?
+    private var claudeAsk: ClaudeAskService?
     private var mediaHTTPServer: MediaHTTPServer?
     private var shutdownContinuation: CheckedContinuation<Void, Never>?
     private var isShuttingDown = false
 
+    /// 初始化：创建 TTS 引擎、ASR 引擎、播放队列、微信平台等所有子服务。
     init(config: Config) {
         self.config = config
         let asrPath = config.models?.asrPath ?? NSHomeDirectory() + "/.config/ivox/model/Qwen3-ASR-1.7B-4bit"
@@ -39,10 +41,17 @@ actor Daemon {
 
         if let wc = config.wechat, wc.enabled {
             self.wechat = WeChatPlatform(config: wc)
+            self.claudeAsk = ClaudeAskService(
+                dataDir: NSString(string: "~/.config/ivox/wechat").expandingTildeInPath,
+                claudePath: wc.resolvedClaudePath,
+                timeoutSeconds: wc.resolvedAskTimeoutSeconds
+            )
             Log.info("微信平台: 已初始化")
         }
     }
 
+    /// 入口：启动所有服务（信号处理、Unix Socket、微信轮询、TTS/ASR 模型加载），
+    ///      然后住留直到收到 SIGINT/SIGTERM 调用 cleanup() 退出。
     func run() async throws {
         Log.info("iVox 守护进程启动")
         installSignalSource(SIGINT)
@@ -73,6 +82,7 @@ actor Daemon {
         await cleanup()
     }
 
+    /// 注册 POSIX 信号（SIGINT/SIGTERM）监听，收到后触发优雅 shutdown。
     private func installSignalSource(_ sig: Int32) {
         let source = DispatchSource.makeSignalSource(signal: sig, queue: DispatchQueue(label: "com.user.ivox.signals", qos: .userInitiated))
         source.setEventHandler { [weak self] in
@@ -84,6 +94,7 @@ actor Daemon {
         source.activate()
     }
 
+    /// 标记 shutdown 状态，唤醒 run() 中的 continuation 以退出主循环。
     private func initiateShutdown() {
         guard !isShuttingDown else { return }
         isShuttingDown = true
@@ -91,6 +102,7 @@ actor Daemon {
         shutdownContinuation = nil
     }
 
+    /// 后台加载 TTS 和 ASR 模型（异步），并启动语音输入服务。
     private func startModelLoading() {
         Task { [engine, asrEngine, config, speechInput] in
             do {
@@ -114,6 +126,7 @@ actor Daemon {
         }
     }
 
+    /// 启动媒体控制 HTTP 服务器（提供 Web UI），端口由配置指定。
     private func startMediaHTTPServer() {
         let port = UInt16(config.resolvedMediaControl.resolvedHTTPServerPort)
         let httpServer = MediaHTTPServer(port: port)
@@ -127,35 +140,46 @@ actor Daemon {
     }
 
     // MARK: - 微信消息处理
+    //
+    // 流程（微信驱动，非 CLI 驱动）：
+    //   1. 收到微信消息 → 发 start typing（"正在输入"）
+    //   2. 调 claude --print 获取回复
+    //   3. 发 stop typing（"正在输入"消失）
+    //   4. 发消息到微信
+    //   5. claude --print 结束时触发 Stop Hook → hook.sh → ivox speak（TTS 由 Claude Code 统一处理）
+    //
+    // 注意：TTS 不在 daemon 这一层，daemon 只负责消息路由。
 
-    private nonisolated func handleWeChatMessage(_ msg: IncomingMessage) async {
+    private func handleWeChatMessage(_ msg: IncomingMessage) async {
         Log.info("📩 收到微信消息 [来自: \(msg.fromUserID.prefix(20))…]: \(msg.content.prefix(50))")
 
-        // 写 pending_user 到后台执行，避免阻塞事件回调
-        let userID = msg.fromUserID
-        Task.detached(priority: .background) {
-            let pendingFile = NSString(string: "~/.config/ivox/pending_user").expandingTildeInPath
-            try? FileManager.default.createDirectory(atPath: NSString(string: "~/.config/ivox").expandingTildeInPath,
-                                                      withIntermediateDirectories: true)
-            try? userID.write(toFile: pendingFile, atomically: true, encoding: .utf8)
+        guard let claudeAsk else {
+            Log.error("ClaudeAskService 未初始化")
+            return
         }
 
-        // 剪贴板注入
+        // ① 发 start typing
+        await wechat?.sendTyping(userID: msg.fromUserID, status: .start)
+
         do {
-            try ClipboardInjector.inject(msg.content)
-            let shortID = msg.fromUserID.prefix(20)
-            Log.info("📋 已注入 Claude Code [来自: \(shortID)] (\(msg.content.count) 字符)")
+            // ② 调 Claude CLI 获取回复
+            let response = try await claudeAsk.ask(userID: msg.fromUserID, text: msg.content)
+
+            // ③ 发 stop typing（"正在输入"先消失，再出现消息）
+            await wechat?.sendTyping(userID: msg.fromUserID, status: .stop)
+
+            // ④ 发微信回复
+            try await wechat?.sendMessage(to: msg.fromUserID, text: response)
+            Log.info("📤 已发送 \(response.count) 字符 → \(msg.fromUserID.prefix(20))…")
+            //   TTS 由 claude --print 完成后的 Stop Hook 触发，不在这里处理
         } catch {
-            // fallback 到 osascript
-            if case InjectError.clipboardFailed = error {
-                try? ClipboardInjector.injectViaAppleScript(msg.content)
-                Log.info("📋 已通过 AppleScript 注入")
-            } else {
-                Log.error("❌ 注入失败: \(error)")
-            }
+            // 异常时也要发 stop typing，避免"正在输入"一直显示
+            await wechat?.sendTyping(userID: msg.fromUserID, status: .stop)
+            Log.error("❌ Claude 请求失败: \(error)")
         }
     }
 
+    /// 退出时清理：停止微信轮询、语音输入、HTTP 服务器、Socket 服务器、播放队列，然后 exit(0)。
     private func cleanup() async {
         Log.info("守护进程退出清理")
         await wechat?.stop()
