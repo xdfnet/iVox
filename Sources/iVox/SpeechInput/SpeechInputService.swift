@@ -109,7 +109,7 @@ final class SpeechInputService: @unchecked Sendable {
             runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         }
-        Log.info("语音输入已启动 (⌘→说话→松开→粘贴)")
+        Log.info("语音输入已启动 (right ⌘→说话→松开→粘贴，↓=下一段，其他键=取消)")
 
         CFRunLoopRun()
         stateQueue.sync { runLoop = nil }
@@ -154,7 +154,7 @@ final class SpeechInputService: @unchecked Sendable {
 
     private func handleKey(isDown: Bool) {
         if isDown {
-            // 按下 ⌘ 或 right ⌥：检查状态，只有 idle 才能开始录音
+            // 按下 right ⌘：检查状态，只有 idle 才能开始录音
             let shouldStart: Bool = stateQueue.sync {
                 if case .idle = state { return true } else { return false }
             }
@@ -167,7 +167,7 @@ final class SpeechInputService: @unchecked Sendable {
             guard let (recorder, url) = startRecording() else { return }
             stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
         } else {
-            // 松开 ⌘ 或 right ⌥：检查状态，只有 recording 才能结束
+            // 松开 right ⌘：检查状态，只有 recording 才能结束
             let job = stateQueue.sync { () -> (AVAudioRecorder, URL)? in
                 guard case .recording(let recorder, let audioURL) = state else { return nil }
                 state = .idle
