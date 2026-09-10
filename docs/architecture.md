@@ -64,7 +64,7 @@ await ws; await sock; await mic
 - Typing 指示器（10 分钟 ticket 缓存，每 5 秒刷新）
 - 状态持久化：`get_updates.buf` 和 `context_tokens.json` 到 `~/.config/ivox/wechat/`
 
-收到消息 → 写 `pending_user` 文件 → `ClipboardInjector`（`osascript` Cmd+V）注入 Claude Code。
+收到消息 → Daemon.handleWeChatMessage → claude --print → WeChatPlatform.sendMessage 发回微信。
 
 ### SocketServer — Unix Domain Socket IPC
 
@@ -180,8 +180,9 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 1. WeChatPlatform 长轮询 getupdates（每 ~35 秒）
 2. 收到消息 → 去重 → 白名单过滤 → 提取文本
 3. Daemon.handleWeChatMessage()
-   → 写 pending_user → ClipboardInjector Cmd+V 注入
-4. Claude Code Stop Hook → ivox speak --source claude
+   → ClaudeAskService.ask() 调用 claude --print
+   → WeChatPlatform.sendMessage() 发回微信
+4. claude --print 结束 → Stop Hook → hook.sh → ivox speak TTS
 ```
 
 ## 文本过滤
@@ -243,4 +244,4 @@ ConnectionHandler.extractVoicePrefix():
 | Claude Code | `~/.claude/settings.json` | Stop Hook → hook.sh |
 | Codex | `~/.codex/hooks.json` | Stop Hook → hook.sh |
 
-`hook.sh` 提取 `last_assistant_message`，调用 `ivox wechat text` 和 `ivox speak`。
+`hook.sh` 提取 `last_assistant_message`，只调用 `ivox speak`（TTS 由 Claude Code 统一处理）。

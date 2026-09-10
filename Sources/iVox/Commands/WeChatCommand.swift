@@ -6,7 +6,6 @@ struct WeChatCommand: AsyncParsableCommand {
         commandName: "wechat",
         abstract: "微信消息桥接",
         subcommands: [
-            WeChatTextCommand.self,
             WeChatSetupCommand.self,
             WeChatStatusCommand.self,
         ],
