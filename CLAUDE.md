@@ -52,7 +52,7 @@ scripts/               — runtime.sh, download-models.sh, install-*.sh
 
 ## 架构
 
-基于守护进程的 actor 架构（无 launchd，`ivox start/stop` 手动管理）：
+基于守护进程的 actor 架构（无 launchd，`ivox on/off` 手动管理）：
 
 ```
 Claude Code/Codex  →  hook.sh  →  Unix Socket  →  Daemon
@@ -88,9 +88,9 @@ Ad-hoc 签名每次构建都会变化 → TCC 权限（麦克风、辅助功能�
 make update       # 编译 → 签名 → 复制到 ~/.local/bin/ivox → 重启守护进程
 ```
 
-The binary at `~/.local/bin/ivox` is what hook scripts and `ivox start/stop` invoke. Project dir can be deleted after deploy.
+The binary at `~/.local/bin/ivox` is what hook scripts and `ivox on/off` invoke. Project dir can be deleted after deploy.
 
-`~/.local/bin/ivox` 是 hook 脚本调用的二进制，由 `ivox start/stop` 手动管理。部署后项目目录可删除。
+`~/.local/bin/ivox` 是 hook 脚本调用的二进制，由 `ivox on/off` 手动管理。部署后项目目录可删除。
 
 ## 测试
 

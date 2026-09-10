@@ -129,6 +129,8 @@ final class SpeechInputService: @unchecked Sendable {
             case .flagsChanged where keycode == 0x36:
                 let isDown = event.flags.contains(.maskCommand)
                 service.handleKey(isDown: isDown)
+            case .keyDown where keycode == 0x7D:
+                service.handleSkipNext()
             case .keyDown:
                 service.handleSkip()
             default:
@@ -160,7 +162,7 @@ final class SpeechInputService: @unchecked Sendable {
 
             Task { await media.pause() }
             Task { await queue.cancelAll() }
-            Log.debug("语音输入: ⌘ 按下 → 暂停音乐 → 取消 TTS → 开始录音")
+            Log.debug("语音输入: right ⌘ 按下 → 暂停音乐 → 取消 TTS → 开始录音")
 
             guard let (recorder, url) = startRecording() else { return }
             stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
@@ -173,7 +175,7 @@ final class SpeechInputService: @unchecked Sendable {
             }
             guard let (recorder, audioURL) = job else { return }
 
-            Log.debug("语音输入: ⌘ 松开 → 结束录音")
+            Log.debug("语音输入: right ⌘ 松开 → 结束录音")
             Task {
                 await queue.resumeIfIdle()
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
@@ -182,8 +184,16 @@ final class SpeechInputService: @unchecked Sendable {
     }
 
     private func handleSkip() {
-        Log.debug("语音输入: 任意按键 → 取消 TTS")
-        Task { await queue.cancelAll() }
+        Log.debug("语音输入: 任意其他键 → 取消 TTS + 恢复音乐")
+        Task {
+            await queue.cancelAll()
+            await media.resume()
+        }
+    }
+
+    private func handleSkipNext() {
+        Log.debug("语音输入: ↓ 键 → 跳到下一段")
+        Task { await queue.skipCurrent() }
     }
 
     // MARK: - Recording
