@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 修复
+
+- **TTS 播放开头几个字听不见** — 空闲一段时间后首段播放出现此问题，根因是 macOS 电源管理让 audio engine 休眠，`node.play()` 返回成功但硬件未真正就绪，首个 buffer 被跳过。修复：每个播放段写入前调度 50ms 前导静音 buffer 唤醒 player node；`init()`、`cancelPendingPlayback()`、`ensureHealthy()` 三处 `node.play()` 后等待最多 50ms 确认 `isPlaying`
+
 ### 变更
 
 - **支持 PI coding agent** — 新增 TypeScript 扩展 `ivox.ts`，订阅 `agent_settled` 事件播报最后一条 assistant message，默认音色 dayi（PI 音色）；通过 `install-hooks.sh` 自动安装到 `~/.pi/agent/extensions/`

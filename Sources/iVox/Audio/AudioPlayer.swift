@@ -13,6 +13,7 @@ final class AudioPlayer: @unchecked Sendable {
     private var started = false
     private var drainedContinuation: CheckedContinuation<Void, Never>?
     private static let drainSlack: TimeInterval = 2.0   // drain 超时余量（秒）
+    private var needsPrime = true  // 是否需要先调度前导静音 buffer 唤醒 player node
 
     deinit {
         serialQueue.sync {
@@ -39,6 +40,11 @@ final class AudioPlayer: @unchecked Sendable {
         }
         guard ok else { return }
         node.play()
+        // 等待 node 真正进入播放状态，避免首个 buffer 被跳过
+        let deadline = DispatchTime.now() + .milliseconds(50)
+        while !node.isPlaying && DispatchTime.now() < deadline {
+            Thread.sleep(forTimeInterval: 0.005)
+        }
         started = true
     }
 
@@ -47,6 +53,23 @@ final class AudioPlayer: @unchecked Sendable {
         let frames = AVAudioFrameCount(pcm.count / 2)
         serialQueue.sync {
             if !ensureHealthy() { return }
+
+            // 前导静音：唤醒休眠的 player node，避免首个 audio chunk 被跳过
+            // macOS 电源管理会让 audio engine 空闲后进入低功耗状态，
+            // 此时 node.play() 返回成功但 buffer 调度可能延迟或丢失
+            if needsPrime {
+                needsPrime = false
+                let primeFrames = AVAudioFrameCount(format.sampleRate / 20)  // 50ms 静音
+                if let primeBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: primeFrames) {
+                    primeBuf.frameLength = primeFrames
+                    if let dst = primeBuf.int16ChannelData?.pointee {
+                        dst.initialize(repeating: 0, count: Int(primeFrames))
+                    }
+                    node.scheduleBuffer(primeBuf, completionHandler: { })
+                    Log.debug("前导静音已调度唤醒 player node")
+                }
+            }
+
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
             buffer.frameLength = frames
             pcm.withUnsafeBytes { src in
@@ -110,9 +133,15 @@ final class AudioPlayer: @unchecked Sendable {
             pendingFrames = 0
             drainedContinuation?.resume()
             drainedContinuation = nil
+            needsPrime = true      // 取消后新播放段需要重新唤醒
             node.stop()
             if engine.isRunning {
                 node.play()
+                // 等待 node 真正进入播放状态，避免取消后首个 buffer 被跳过
+                let deadline = DispatchTime.now() + .milliseconds(50)
+                while !node.isPlaying && DispatchTime.now() < deadline {
+                    Thread.sleep(forTimeInterval: 0.005)
+                }
             }
         }
     }
@@ -142,6 +171,11 @@ final class AudioPlayer: @unchecked Sendable {
         do {
             try engine.start()
             node.play()
+            // 等待 node 真正进入播放状态，避免重建后第一个 buffer 被跳过
+            let deadline = DispatchTime.now() + .milliseconds(50)
+            while !node.isPlaying && DispatchTime.now() < deadline {
+                Thread.sleep(forTimeInterval: 0.005)
+            }
             Log.info("AudioEngine 重建成功")
             return true
         } catch {
