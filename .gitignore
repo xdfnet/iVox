@@ -2,6 +2,7 @@
 DerivedData/
 *.xcodeproj
 .DS_Store
+.vscode/
 *.profraw
 *.xcuserstate
 install
