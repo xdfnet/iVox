@@ -15,6 +15,7 @@
   },
   "mediaControl": {
     "enabled": true,
+    "httpServerEnabled": true,
     "baseURL": "http://127.0.0.1:8888",
     "pausePath": "/api/pause",
     "resumePath": "/api/play"

@@ -60,7 +60,7 @@ public struct MediaControlConfig: Codable, Sendable {
     /// 非空 baseURL = 远程模式（调外部 API，向后兼容）
     public var isRemote: Bool { enabled && !baseURL.isEmpty }
 
-    public var resolvedHTTPServerEnabled: Bool { httpServerEnabled ?? false }
+    public var resolvedHTTPServerEnabled: Bool { httpServerEnabled ?? true }
     public var resolvedHTTPServerPort: Int { httpServerPort ?? 8888 }
 
     public static let `default` = MediaControlConfig(

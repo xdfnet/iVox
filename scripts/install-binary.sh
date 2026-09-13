@@ -84,7 +84,7 @@ if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
   },
   "tts": { "language": "Chinese", "streamingInterval": 0.08, "maxRetries": 2, "retryDelayMs": 500, "outputSampleRate": 48000 },
   "playback": { "interruptCurrent": true, "idleReviveSeconds": 600, "drainBaseTimeoutSeconds": 10 },
-  "mediaControl": { "enabled": true, "baseURL": "http://127.0.0.1:8888", "pausePath": "/api/pause", "resumePath": "/api/play" },
+  "mediaControl": { "enabled": true, "httpServerEnabled": true, "baseURL": "http://127.0.0.1:8888", "pausePath": "/api/pause", "resumePath": "/api/play" },
   "speechInput": { "enabled": true, "language": "zh", "autoEnter": true, "maxRecordingSeconds": 30 },
   "defaultVoice": "dayi",
   "sourceVoices": { "claude": "taozi", "codex": "wanwan", "qwen": "mizai", "pi": "dayi" },
