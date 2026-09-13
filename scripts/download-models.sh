@@ -3,6 +3,8 @@ set -euo pipefail
 
 MODEL_ROOT="${1:-$HOME/.config/ivox/model}"
 HF_BASE="https://huggingface.co"
+HF_MIRROR="https://hf-mirror.com"
+MS_BASE="https://www.modelscope.cn"
 
 # 模型列表：(HF模型ID, 本地目录名)
 MODELS=(
@@ -28,7 +30,15 @@ for entry in "${MODELS[@]}"; do
   echo "↓  下载 $model_id -> $target"
   rm -rf "$target"
   git lfs install --skip-repo 2>/dev/null
-  GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$HF_BASE/$model_id" "$target" 2>&1
+  if ! GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$HF_BASE/$model_id" "$target" 2>&1; then
+    echo "[!] HF 失败，切换 hf-mirror: $model_id"
+    rm -rf "$target"
+    if ! GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$HF_MIRROR/$model_id" "$target" 2>&1; then
+      echo "[!] hf-mirror 失败，切换 ModelScope: $model_id"
+      rm -rf "$target"
+      GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$MS_BASE/$model_id.git" "$target" 2>&1
+    fi
+  fi
 
   if ! is_complete "$target"; then
     echo "✗  模型下载不完整: $target"

@@ -20,6 +20,12 @@
 
 - `ivox start` → socket 就绪、进程运行（PID 63354）；`ivox stop` → 进程退出；`ivox restart` → PID 轮换（63722）
 
+### 新增
+
+- **模型下载三级 fallback** — `scripts/download-models.sh` 优先 HuggingFace，失败后自动切换 `hf-mirror.com`（国内镜像），再次失败回退 ModelScope。HuggingFace 在国内经常 SSL 握手失败，新链路显著提升安装成功率
+- **`scripts/fetch-mlx-submodules.sh`** — 新增 mlx-swift 子模块兜底脚本，使用 GitHub tarball API 把 `mlx` + `mlx-c` 预填到 `.build/checkouts/mlx-swift/Source/Cmlx/`，并 touch `.git` 占位文件让 git 跳过 submodule fetch。HTTP/2 截断场景下 `make build` 不再因子模块 clone 失败而中断
+- **`make install` 网络层文档** — `docs/release.md` 增补：先 `xcodebuild -downloadComponent MetalToolchain`（首次需要 ~838MB），SwiftPM 走 `swift build --skip-update`，子模块走新脚本兜底
+
 ## v2.9.0 — 2026-08-04
 
 ### 新增
