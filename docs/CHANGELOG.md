@@ -11,16 +11,16 @@
 ### 变更
 
 - **支持 PI coding agent** — 新增 TypeScript 扩展 `ivox.ts`，订阅 `agent_settled` 事件播报最后一条 assistant message，默认音色 dayi（PI 音色）；通过 `install-hooks.sh` 自动安装到 `~/.pi/agent/extensions/`
-- **彻底移除 launchd 自启** — 删除 LaunchAgent 机制（`com.user.ivox.plist`、`launchctl bootstrap/bootout`），服务改为手动控制：`ivox start`（nohup 拉起守护进程）/ `ivox stop`（socket 停止信号）/ `ivox restart`
-- **`ivox start` 重写** — nohup 脱离终端拉起 `ivox serve`，轮询 socket 就绪后返回；幂等（已在运行直接返回），启动前清理残留 socket
-- **`ivox stop` 重写** — 以 `__IVOX_STOP__` socket 信号为主路径（不再依赖 bootout），轮询确认进程退出
+- **彻底移除 launchd 自启** — 删除 LaunchAgent 机制（`com.user.ivox.plist`、`launchctl bootstrap/bootout`），服务改为手动控制：`ivox on`（nohup 拉起守护进程）/ `ivox off`（socket 停止信号）/ `ivox restart`
+- **`ivox on` 重写** — nohup 脱离终端拉起 `ivox serve`，轮询 socket 就绪后返回；幂等（已在运行直接返回），启动前清理残留 socket
+- **`ivox off` 重写** — 以 `__IVOX_STOP__` socket 信号为主路径（不再依赖 bootout），轮询确认进程退出
 - **`AppPaths.launchdPlistPath` 移除** — iVoxKit 不再引用 launchd plist 路径
 - **构建/安装脚本** — `runtime.sh` / `Makefile` / `install-binary.sh` 移除 launchd 注册；`make update` 改为 socket 存在时条件重启
 - **本机清理** — 删除 `~/Library/LaunchAgents/com.user.ivox.plist`，`launchctl list` 已无 ivox 注册
 
 ### 验证
 
-- `ivox start` → socket 就绪、进程运行（PID 63354）；`ivox stop` → 进程退出；`ivox restart` → PID 轮换（63722）
+- `ivox on` → socket 就绪、进程运行（PID 63354）；`ivox off` → 进程退出；`ivox restart` → PID 轮换（63722）
 
 ### 依赖
 
