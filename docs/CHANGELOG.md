@@ -20,6 +20,14 @@
 
 - `ivox start` → socket 就绪、进程运行（PID 63354）；`ivox stop` → 进程退出；`ivox restart` → PID 轮换（63722）
 
+### 依赖
+
+- **mlx-audio-swift 更新** — 同步最新 main (`3f6b055` → `3e97855`，跨 32 commit / 3 个月)
+  - **ASR 更准** — Qwen3-ASR mel frontend 改用 Slaney mel scale + periodic Hann 窗（[上游 PR #247](https://github.com/Blaizzy/mlx-audio-swift/pull/247)），对齐 HF 参考实现
+  - **TTS 更快更省内存** — Qwen3 text attention 改走 `attentionWithCacheUpdate`，把 per-layer-invariant 输入 hoist 到循环外，长文本流式合成受益
+  - **本地 patch 1 行** — 上游 main 引入的 BreezeTTS 2 调了不存在的 `GenerateParameters.seed`（[BreezeTTSModel.swift:186](.build/checkouts/mlx-audio-swift/Sources/MLXAudioTTS/Models/BreezeTTS/BreezeTTSModel.swift#L186)），删掉该参数不影响功能（我们不用 BreezeTTS）；下次 `swift package update` 会被上游修复覆盖
+- 验证：`make test` 34/34 通过；`make update` release 编译 + 签名 + 部署 + 守护进程重启成功；`ivox speak "测试新引擎"` 烟测 TTS 流式 13 chunks / 1.3s 播完
+
 ### 新增
 
 - **模型下载三级 fallback** — `scripts/download-models.sh` 优先 HuggingFace，失败后自动切换 `hf-mirror.com`（国内镜像），再次失败回退 ModelScope。HuggingFace 在国内经常 SSL 握手失败，新链路显著提升安装成功率
