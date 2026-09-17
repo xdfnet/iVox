@@ -9,6 +9,12 @@ struct ServeCommand: AsyncParsableCommand {
     )
 
     func run() async throws {
+        let socketPath = AppPaths.socketPath
+        if SocketClient.isRunning(path: socketPath) {
+            print("[✗] 守护进程已在运行，使用 'ivox off' 停止后再启动前台进程")
+            throw ExitCode.failure
+        }
+
         let config: Config
         do {
             config = try loadConfig()

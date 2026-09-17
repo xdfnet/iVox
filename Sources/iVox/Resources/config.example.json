@@ -20,11 +20,12 @@
     "pausePath": "/api/pause",
     "resumePath": "/api/play"
   },
-  "defaultVoice": "mizai",
+  "defaultVoice": "dayi",
   "sourceVoices": {
     "claude": "taozi",
     "codex": "wanwan",
-    "qwen": "dayi"
+    "qwen": "mizai",
+    "pi": "dayi"
   },
   "speechInput": {
     "enabled": true,
