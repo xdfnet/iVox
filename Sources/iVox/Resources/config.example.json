@@ -39,7 +39,7 @@
       "name": "米仔",
       "refAudio": "~/.config/ivox/voices/ref_mizai.wav",
       "refText": "大家好，我是米仔。我的声音温暖自然，适合日常播报和语音助手场景。无论是读书、讲故事，还是播报天气新闻，我都能轻松应对。",
-      "description": "默认音色"
+      "description": "Qwen Code 音色"
     },
     {
       "id": "taozi",
@@ -60,7 +60,7 @@
       "name": "大易",
       "refAudio": "~/.config/ivox/voices/ref_dayi.wav",
       "refText": "大家好，我是大易。我有着沉稳可靠的男声，听起来踏实有力量。需要播报重要通知或者讲述深度内容，交给我就好。",
-      "description": "Qwen Code 音色"
+      "description": "PI 音色"
     }
   ]
 }
