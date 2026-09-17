@@ -28,7 +28,7 @@ final class ConfigTests: XCTestCase {
     func testValidationPassesOnValidConfig() {
         let config = Config(
             models: ModelConfig(
-                asrPath: "~/.config/ivox/model/Qwen3-ASR-1.7B-4bit",
+                asrPath: "~/.config/ivox/model/Qwen3-ASR-1.7B-8bit",
                 ttsPath: "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
             ),
             defaultVoice: "v1",

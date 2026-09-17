@@ -3,8 +3,22 @@
 # 让 SwiftPM 跳过 git submodule fetch
 set -euo pipefail
 
-MLX_SWIFT_CHECKOUT="${1:-/Users/admin/iCode/iVox/.build/checkouts/mlx-swift}"
+# 默认从 git 仓库根目录推导 checkout 路径，避免硬编码特定用户名/位置
+if [[ -n "${1:-}" ]]; then
+  MLX_SWIFT_CHECKOUT="$1"
+elif git_root=$(git rev-parse --show-toplevel 2>/dev/null); then
+  MLX_SWIFT_CHECKOUT="$git_root/.build/checkouts/mlx-swift"
+else
+  echo "✗ 需要传入 MLX_SWIFT_CHECKOUT 路径，或在 git 仓库内运行" >&2
+  exit 1
+fi
 CMLX_DIR="$MLX_SWIFT_CHECKOUT/Source/Cmlx"
+
+# 防御性检查：避免在意外路径（如其他用户的目录）写入文件
+if [[ ! -d "$MLX_SWIFT_CHECKOUT" ]]; then
+  echo "✗ checkout 目录不存在: $MLX_SWIFT_CHECKOUT（SwiftPM 还没拉过 mlx-swift？）" >&2
+  exit 1
+fi
 
 SUBMODULES="mlx:https://github.com/ml-explore/mlx
 mlx-c:https://github.com/ml-explore/mlx-c"

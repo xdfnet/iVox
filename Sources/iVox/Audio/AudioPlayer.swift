@@ -40,11 +40,7 @@ final class AudioPlayer: @unchecked Sendable {
         }
         guard ok else { return }
         node.play()
-        // 等待 node 真正进入播放状态，避免首个 buffer 被跳过
-        let deadline = DispatchTime.now() + .milliseconds(50)
-        while !node.isPlaying && DispatchTime.now() < deadline {
-            Thread.sleep(forTimeInterval: 0.005)
-        }
+        waitForNodePlaying()
         started = true
     }
 
@@ -57,17 +53,31 @@ final class AudioPlayer: @unchecked Sendable {
             // 前导静音：唤醒休眠的 player node，避免首个 audio chunk 被跳过
             // macOS 电源管理会让 audio engine 空闲后进入低功耗状态，
             // 此时 node.play() 返回成功但 buffer 调度可能延迟或丢失
+            // 取消后或上一段播完都会重置 needsPrime=true，保证每个新播放段都唤醒一次
             if needsPrime {
-                needsPrime = false
                 let primeFrames = AVAudioFrameCount(format.sampleRate / 20)  // 50ms 静音
-                if let primeBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: primeFrames) {
-                    primeBuf.frameLength = primeFrames
-                    if let dst = primeBuf.int16ChannelData?.pointee {
-                        dst.initialize(repeating: 0, count: Int(primeFrames))
-                    }
-                    node.scheduleBuffer(primeBuf, completionHandler: { })
-                    Log.debug("前导静音已调度唤醒 player node")
+                // 先分配再清标志，alloc 失败时本段后续 write 还能再试
+                guard let primeBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: primeFrames) else {
+                    Log.warn("前导静音 buffer 分配失败，跳过唤醒")
+                    return
                 }
+                primeBuf.frameLength = primeFrames
+                if let dst = primeBuf.int16ChannelData?.pointee {
+                    dst.initialize(repeating: 0, count: Int(primeFrames))
+                }
+                let gen = generation
+                pendingCount += 1
+                pendingFrames += Int(primeFrames)   // 计入 drain deadline，避免下一段抢占 prime
+                node.scheduleBuffer(primeBuf, completionCallbackType: .dataConsumed) { [weak self] _ in
+                    guard let self else { return }
+                    self.serialQueue.async {
+                        guard self.generation == gen else { return }
+                        self.pendingCount -= 1
+                        self.tryResumeDrained()
+                    }
+                }
+                Log.debug("前导静音已调度唤醒 player node")
+                needsPrime = false
             }
 
             guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
@@ -88,10 +98,7 @@ final class AudioPlayer: @unchecked Sendable {
                 self.serialQueue.async {
                     guard self.generation == gen else { return }   // 已被取消的旧世代回调直接丢弃
                     self.pendingCount -= 1
-                    if self.pendingCount == 0, let cont = self.drainedContinuation {
-                        self.drainedContinuation = nil
-                        cont.resume()
-                    }
+                    self.tryResumeDrained()
                 }
             }
         }
@@ -137,11 +144,7 @@ final class AudioPlayer: @unchecked Sendable {
             node.stop()
             if engine.isRunning {
                 node.play()
-                // 等待 node 真正进入播放状态，避免取消后首个 buffer 被跳过
-                let deadline = DispatchTime.now() + .milliseconds(50)
-                while !node.isPlaying && DispatchTime.now() < deadline {
-                    Thread.sleep(forTimeInterval: 0.005)
-                }
+                waitForNodePlaying()
             }
         }
     }
@@ -171,17 +174,35 @@ final class AudioPlayer: @unchecked Sendable {
         do {
             try engine.start()
             node.play()
-            // 等待 node 真正进入播放状态，避免重建后第一个 buffer 被跳过
-            let deadline = DispatchTime.now() + .milliseconds(50)
-            while !node.isPlaying && DispatchTime.now() < deadline {
-                Thread.sleep(forTimeInterval: 0.005)
-            }
+            waitForNodePlaying()
             Log.info("AudioEngine 重建成功")
             return true
         } catch {
             Log.error("AudioEngine 重建失败: \(error)")
             started = false
             return false
+        }
+    }
+
+    /// 等待 player node 真正进入播放状态，最多 50ms。必须在 serialQueue 内调用。
+    /// 三处复用：init / cancelPendingPlayback / ensureHealthy。
+    private func waitForNodePlaying(timeoutMs: Int = 50) {
+        let deadline = DispatchTime.now() + .milliseconds(timeoutMs)
+        while !node.isPlaying && DispatchTime.now() < deadline {
+            Thread.sleep(forTimeInterval: 0.005)
+        }
+    }
+
+    /// buffer 播放完成回调：pendingCount 归零则恢复 drain continuation，
+    /// 并标记下一段需要重新 prime（覆盖 macOS 电源管理让 audio engine 空闲后休眠的情况）。
+    /// 必须在 serialQueue 内调用。
+    private func tryResumeDrained() {
+        if pendingCount == 0 {
+            needsPrime = true
+            if let cont = drainedContinuation {
+                drainedContinuation = nil
+                cont.resume()
+            }
         }
     }
 }

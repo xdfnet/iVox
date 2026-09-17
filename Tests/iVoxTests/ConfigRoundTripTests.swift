@@ -6,7 +6,7 @@ final class ConfigRoundTripTests: XCTestCase {
     func testSaveAndLoadRoundTrip() throws {
         let original = Config(
             models: ModelConfig(
-                asrPath: "~/.config/ivox/model/Qwen3-ASR-1.7B-4bit",
+                asrPath: "~/.config/ivox/model/Qwen3-ASR-1.7B-8bit",
                 ttsPath: "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
             ),
             defaultVoice: "v1",
@@ -23,7 +23,7 @@ final class ConfigRoundTripTests: XCTestCase {
         let loaded = try loadConfig(from: tmpPath)
 
         XCTAssertEqual(loaded.defaultVoice, "v1")
-        XCTAssertEqual(loaded.models?.asrPath, "~/.config/ivox/model/Qwen3-ASR-1.7B-4bit")
+        XCTAssertEqual(loaded.models?.asrPath, "~/.config/ivox/model/Qwen3-ASR-1.7B-8bit")
         XCTAssertEqual(loaded.models?.ttsPath, "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit")
         XCTAssertEqual(loaded.sourceVoices["s"], "v1")
         let v = try XCTUnwrap(loaded.voice(id: "v1"))

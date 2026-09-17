@@ -79,7 +79,7 @@ if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
   cat > "$CONFIG_DIR/config.json" <<JSON
 {
   "models": {
-    "asrPath": "${HOME}/.config/ivox/model/Qwen3-ASR-1.7B-4bit",
+    "asrPath": "${HOME}/.config/ivox/model/Qwen3-ASR-1.7B-8bit",
     "ttsPath": "${HOME}/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
   },
   "tts": { "language": "Chinese", "streamingInterval": 0.08, "maxRetries": 2, "retryDelayMs": 500, "outputSampleRate": 48000 },
@@ -111,12 +111,21 @@ SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 if [[ -f "$SCRIPT_DIR/download-models.sh" ]]; then
   bash "$SCRIPT_DIR/download-models.sh" "$MODEL_DIR"
 else
-  # 独立安装时，内联模型下载逻辑
+  # 独立安装时（curl | bash 走这条路径），内联下载 + 三级 fallback
   HF_BASE="https://huggingface.co"
+  HF_MIRROR="https://hf-mirror.com"
+  MS_BASE="https://www.modelscope.cn"
+  # ModelScope 上的 Qwen 模型 namespace 与 HF 不同（mlx-community 命名空间不存在），
+  # 这里只放确认存在的原始权重映射，未命中则跳过 ModelScope 直接报错
+  declare -A MS_MAPPING=(
+    ["mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"]="qwen/Qwen3-TTS-12Hz-1.7B-Base"
+    ["mlx-community/Qwen3-ASR-1.7B-8bit"]="qwen/Qwen3-ASR-1.7B"
+  )
   MODELS=(
     "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit:Qwen3-TTS-12Hz-1.7B-Base-8bit"
-    "mlx-community/Qwen3-ASR-1.7B-4bit:Qwen3-ASR-1.7B-4bit"
+    "mlx-community/Qwen3-ASR-1.7B-8bit:Qwen3-ASR-1.7B-8bit"
   )
+  git lfs install --skip-repo 2>/dev/null || true
   for entry in "${MODELS[@]}"; do
     model_id="${entry%%:*}"
     dirname="${entry##*:}"
@@ -127,8 +136,37 @@ else
     fi
     echo "  ↓ 下载 $model_id"
     mkdir -p "$target"
-    git lfs install --skip-repo 2>/dev/null || true
-    GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$HF_BASE/$model_id" "$target" 2>&1
+    ok=false
+    if GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$HF_BASE/$model_id" "$target" 2>&1; then
+      ok=true
+    else
+      echo "  [!] HF 失败，尝试 hf-mirror: $model_id"
+      rm -rf "$target" && mkdir -p "$target"
+      if GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$HF_MIRROR/$model_id" "$target" 2>&1; then
+        ok=true
+      else
+        ms_id="${MS_MAPPING[$model_id]:-}"
+        if [[ -n "$ms_id" ]]; then
+          echo "  [!] hf-mirror 失败，尝试 ModelScope: $ms_id"
+          rm -rf "$target" && mkdir -p "$target"
+          if GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$MS_BASE/$ms_id.git" "$target" 2>&1; then
+            ok=true
+          fi
+        else
+          echo "  [!] ModelScope 无对应 namespace，跳过第三层 fallback"
+        fi
+      fi
+    fi
+    if ! $ok; then
+      echo "  ✗ 模型下载失败: $model_id"
+      rm -rf "$target"
+      exit 1
+    fi
+    if [[ ! -f "$target/config.json" ]] || ! ls "$target"/*.safetensors 1>/dev/null 2>&1; then
+      echo "  ✗ 模型下载不完整: $dirname"
+      rm -rf "$target"
+      exit 1
+    fi
     ok "$dirname ($(du -sh "$target" | cut -f1))"
   done
 fi

@@ -19,7 +19,7 @@ actor Daemon {
     /// 初始化：创建 TTS 引擎、ASR 引擎、播放队列、微信平台等所有子服务。
     init(config: Config) {
         self.config = config
-        let asrPath = config.models?.asrPath ?? NSHomeDirectory() + "/.config/ivox/model/Qwen3-ASR-1.7B-4bit"
+        let asrPath = config.models?.asrPath ?? NSHomeDirectory() + "/.config/ivox/model/Qwen3-ASR-1.7B-8bit"
 
         let ttsEngine = TTSEngine(config: config)
         self.engine = ttsEngine
