@@ -115,12 +115,6 @@ else
   HF_BASE="https://huggingface.co"
   HF_MIRROR="https://hf-mirror.com"
   MS_BASE="https://www.modelscope.cn"
-  # ModelScope 上的 Qwen 模型 namespace 与 HF 不同（mlx-community 命名空间不存在），
-  # 这里只放确认存在的原始权重映射，未命中则跳过 ModelScope 直接报错
-  declare -A MS_MAPPING=(
-    ["mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"]="qwen/Qwen3-TTS-12Hz-1.7B-Base"
-    ["mlx-community/Qwen3-ASR-1.7B-8bit"]="qwen/Qwen3-ASR-1.7B"
-  )
   MODELS=(
     "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit:Qwen3-TTS-12Hz-1.7B-Base-8bit"
     "mlx-community/Qwen3-ASR-1.7B-8bit:Qwen3-ASR-1.7B-8bit"
@@ -134,6 +128,13 @@ else
       info "模型已存在: $dirname"
       continue
     fi
+    # ModelScope namespace 映射（mlx-community 在 ModelScope 不存在）
+    # 用 case 替代关联数组，兼容 macOS bash 3.2 + set -u
+    ms_id=""
+    case "$model_id" in
+      "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit") ms_id="qwen/Qwen3-TTS-12Hz-1.7B-Base" ;;
+      "mlx-community/Qwen3-ASR-1.7B-8bit") ms_id="qwen/Qwen3-ASR-1.7B" ;;
+    esac
     echo "  ↓ 下载 $model_id"
     mkdir -p "$target"
     ok=false
@@ -145,7 +146,6 @@ else
       if GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$HF_MIRROR/$model_id" "$target" 2>&1; then
         ok=true
       else
-        ms_id="${MS_MAPPING[$model_id]:-}"
         if [[ -n "$ms_id" ]]; then
           echo "  [!] hf-mirror 失败，尝试 ModelScope: $ms_id"
           rm -rf "$target" && mkdir -p "$target"

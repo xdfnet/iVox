@@ -14,10 +14,7 @@ MODELS=(
 
 # ModelScope namespace 与 HF 不同：mlx-community 在 ModelScope 上不存在，
 # 这里只放已确认存在的原始权重映射，未命中则跳过 ModelScope 直接报错
-declare -A MS_MAPPING=(
-  ["mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit"]="qwen/Qwen3-TTS-12Hz-1.7B-Base"
-  ["mlx-community/Qwen3-ASR-1.7B-8bit"]="qwen/Qwen3-ASR-1.7B"
-)
+# 用 case 替代关联数组，兼容 macOS bash 3.2 + set -u
 
 is_complete() {
   local dir="$1"
@@ -34,6 +31,13 @@ for entry in "${MODELS[@]}"; do
     continue
   fi
 
+  # ModelScope namespace 映射（mlx-community 在 ModelScope 不存在）
+  ms_id=""
+  case "$model_id" in
+    "mlx-community/Qwen3-TTS-12Hz-1.7B-Base-8bit") ms_id="qwen/Qwen3-TTS-12Hz-1.7B-Base" ;;
+    "mlx-community/Qwen3-ASR-1.7B-8bit") ms_id="qwen/Qwen3-ASR-1.7B" ;;
+  esac
+
   echo "↓ 下载 $model_id -> $target"
   rm -rf "$target"
   mkdir -p "$target"
@@ -47,7 +51,6 @@ for entry in "${MODELS[@]}"; do
     if GIT_LFS_SKIP_SMUDGE=0 git clone --depth=1 "$HF_MIRROR/$model_id" "$target" 2>&1; then
       ok=true
     else
-      ms_id="${MS_MAPPING[$model_id]:-}"
       if [[ -n "$ms_id" ]]; then
         echo "[!] hf-mirror 失败，切换 ModelScope: $ms_id"
         rm -rf "$target" && mkdir -p "$target"
