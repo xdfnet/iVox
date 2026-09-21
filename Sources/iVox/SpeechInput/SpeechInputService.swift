@@ -21,6 +21,8 @@ final class SpeechInputService: @unchecked Sendable {
     }
     private var state: State = .idle
     private let stateQueue = DispatchQueue(label: "com.user.ivox.speechinput.state")
+    private let overlay = OverlayPanel()
+    private var levelTask: Task<Void, Never>?
 
     init(config: SpeechInputConfig, mediaController: MediaController, playbackQueue: PlaybackQueue, asrEngine: ASREngine) {
         self.config = config
@@ -66,7 +68,10 @@ final class SpeechInputService: @unchecked Sendable {
             runLoop = nil
             thread?.cancel()
             thread = nil
+            levelTask?.cancel()
+            levelTask = nil
         }
+        Task { @MainActor in overlay.dismiss() }
         // 在事件线程自己的 runloop 上唤醒，让它退出 CFRunLoopRun
         if let loopToStop {
             CFRunLoopStop(loopToStop)
@@ -166,6 +171,8 @@ final class SpeechInputService: @unchecked Sendable {
 
             guard let (recorder, url) = startRecording() else { return }
             stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
+            showOverlay(.listening)
+            startLevelMetering()
         } else {
             // 松开 right ⌘：检查状态，只有 recording 才能结束
             let job = stateQueue.sync { () -> (AVAudioRecorder, URL)? in
@@ -175,6 +182,7 @@ final class SpeechInputService: @unchecked Sendable {
             }
             guard let (recorder, audioURL) = job else { return }
 
+            stopLevelMetering()
             Log.debug("语音输入: right ⌘ 松开 → 结束录音")
             Task {
                 await queue.resumeIfIdle()
@@ -185,6 +193,11 @@ final class SpeechInputService: @unchecked Sendable {
 
     private func handleSkip() {
         Log.debug("语音输入: 任意其他键 → 取消 TTS + 恢复音乐")
+        // 录音中按其他键不打断录音，浮窗保留
+        let isRecording: Bool = stateQueue.sync {
+            if case .recording = state { return true } else { return false }
+        }
+        if !isRecording { dismissOverlay() }
         Task {
             await queue.cancelAll()
             await media.resume()
@@ -231,27 +244,74 @@ final class SpeechInputService: @unchecked Sendable {
         guard let attrs = try? FileManager.default.attributesOfItem(atPath: audioURL.path),
               let size = attrs[.size] as? Int, size > 1024 else {
             Log.debug("语音输入: 录音太短，已忽略")
+            dismissOverlay()
             return
         }
 
         let wavData: Data
         do { wavData = try Data(contentsOf: audioURL) }
-        catch { return }
+        catch { dismissOverlay(); return }
 
         Log.info("语音输入: ASR 请求 \(audioURL.lastPathComponent) \(wavData.count) bytes")
+        showOverlay(.transcribing)
         Task {
             defer { Self.cleanupRecordings(recordDir: self.recordDir) }
             do {
                 let text = try await asrEngine.transcribe(audioData: wavData, language: config.language)
                 guard !text.isEmpty else {
                     Log.info("语音输入: 识别结果为空")
+                    showOverlayThenDismiss(.error("结果为空"), after: 1.5)
                     return
                 }
                 Log.info("语音输入: 识别结果 [\(text.prefix(60))]")
                 pasteText(text)
+                showOverlayThenDismiss(.done, after: 0.6)
             } catch {
                 Log.error("语音输入: ASR 失败 \(error)")
+                showOverlayThenDismiss(.error("识别失败"), after: 1.5)
             }
+        }
+    }
+
+    // MARK: - Overlay
+
+    private func showOverlay(_ state: OverlayState) {
+        Task { @MainActor in overlay.show(state: state) }
+    }
+
+    private func showOverlayThenDismiss(_ state: OverlayState, after seconds: TimeInterval) {
+        Task { @MainActor in
+            overlay.show(state: state)
+            try? await Task.sleep(for: .seconds(seconds))
+            overlay.dismiss()
+        }
+    }
+
+    private func dismissOverlay() {
+        Task { @MainActor in overlay.dismiss() }
+    }
+
+    private func startLevelMetering() {
+        let task = Task { @MainActor in
+            while !Task.isCancelled {
+                let recorder: AVAudioRecorder? = stateQueue.sync {
+                    guard case .recording(let recorder, _) = state else { return nil }
+                    return recorder
+                }
+                guard let recorder else { return }
+                recorder.updateMeters()
+                let db = recorder.averagePower(forChannel: 0)
+                overlay.updateAudioLevel(pow(10, db / 20))
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        stateQueue.sync { levelTask = task }
+    }
+
+    private func stopLevelMetering() {
+        stateQueue.sync {
+            levelTask?.cancel()
+            levelTask = nil
         }
     }
 

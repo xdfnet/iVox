@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+### 新增
+
+- **语音输入屏幕状态浮窗** — 按住右 ⌘ 时屏幕底部居中显示药丸浮窗：22 根声波柱跟随真实音量跳动，状态依次为「聆听中… → 识别中… → 已粘贴」；空结果/失败显示橙色提示。基于 [OpenWritr](https://github.com/trsdn/OpenWritr) 的 NSPanel + SwiftUI TimelineView 实现（MIT 协议，已署名）
+
 ## v3.0.0 — 2026-09-17
 
 ### 修复
