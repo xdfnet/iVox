@@ -82,6 +82,10 @@ actor ClaudeAskService {
             proc.executableURL = URL(fileURLWithPath: claudePath)
             proc.arguments = args
             proc.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
+            var env = ProcessInfo.processInfo.environment
+            env["CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT"] = "1"
+            env["ANTHROPIC_MODEL"] = "doubao-seed-2.0-mini"
+            proc.environment = env
 
             let pipe = Pipe()
             proc.standardOutput = pipe
