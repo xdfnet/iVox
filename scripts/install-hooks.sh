@@ -73,6 +73,35 @@ else
   echo "⚠️  需要 jq 或 python3 写入 Qwen Code 配置，请手动添加"
 fi
 
+# ── DeepSeek Harness ──
+DSH_JSON="$HOME/.dsh/hooks.json"
+DSH_PATCH="$HOME/.dsh/profiles/desktop/cordis.patch.yml"
+mkdir -p "$(dirname "$DSH_JSON")"
+[[ -f "$DSH_JSON" ]] || echo '{}' > "$DSH_JSON"
+
+if grep -q 'hook.sh' "$DSH_JSON" 2>/dev/null; then
+  echo "[i] DSH hook 已存在"
+elif write_hook "$DSH_JSON" "dsh" 10; then
+  echo "✓  DSH hook（$DSH_JSON）"
+else
+  echo "⚠️  需要 jq 或 python3 写入 DSH 配置，请手动添加"
+fi
+
+if [[ -f "$DSH_PATCH" ]]; then
+  if grep -q 'ivox-hooks' "$DSH_PATCH"; then
+    echo "[i] DSH profile 挂载已存在"
+  else
+    cat >> "$DSH_PATCH" <<PATCH
+- insert:
+    - id: ivox-hooks
+      name: "@deepseek-ai/dsh-hooks-claude-code"
+      config:
+        configPath: $DSH_JSON
+PATCH
+    echo "✓  DSH profile 已挂桥接插件（$DSH_PATCH）"
+  fi
+fi
+
 # ── PI coding agent 扩展 ──
 PI_EXT_DIR="$HOME/.pi/agent/extensions"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"

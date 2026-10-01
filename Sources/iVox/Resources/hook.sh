@@ -17,20 +17,37 @@ sid=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('session_id
 cwd=$(python3 -c "import json,sys; print(json.loads(sys.argv[1]).get('cwd',''))" "$payload" 2>/dev/null)
 enc=$(python3 -c "import sys; print('-' + (sys.argv[1] + '/').replace('/', '-') + '-')" "$cwd")
 log="$HOME/.dsh/sessions/$enc/$sid/session.v4.jsonl.zstd"
-text=$(zstd -dc "$log" 2>/dev/null | python3 -c "
-import json, sys, re
-last = ''
-for line in sys.stdin:
-    try: e = json.loads(line)
-    except ValueError: continue
-    if e.get('type') == 'assistant/message':
-        msg = e.get('data', {}).get('message', {})
-        last = ''.join(b.get('text', '') for b in msg.get('content', []) if b.get('type') == 'text')
+text=$(python3 -c "
+import json, subprocess, sys, re, time
+log = sys.argv[1]
+def last_text():
+    try:
+        out = subprocess.run(['zstd', '-dc', log], capture_output=True).stdout
+    except Exception:
+        return ''
+    last = ''
+    for line in out.splitlines():
+        try: e = json.loads(line)
+        except ValueError: continue
+        if e.get('type') == 'assistant/message':
+            msg = e.get('data', {}).get('message', {})
+            last = ''.join(b.get('text', '') for b in msg.get('content', []) if b.get('type') == 'text')
+    return last
+# Stop 触发时本轮回复可能尚未刷盘，轮询到连续两次一致（最多约 2 秒）
+prev = ''
+deadline = time.time() + 2
+while True:
+    cur = last_text()
+    if cur == prev or time.time() >= deadline:
+        break
+    prev = cur
+    time.sleep(0.25)
+last = cur
 # 过短的纯西文确认（如 true/ok/done）不播报
 if last and len(last) <= 5 and not re.search(r'[一-鿿]', last):
     last = ''
 print(last[:5000])
-")
+" "$log")
 else
 text=$(python3 -c "
 import json, sys, re

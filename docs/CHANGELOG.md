@@ -4,7 +4,7 @@
 
 ### 新增
 
-- **支持 DeepSeek Harness 语音播报** — dsh desktop profile 用官方 `@deepseek-ai/dsh-hooks-claude-code` 桥接插件（0.2.0-rc.2，从 app.asar 解出实体复制进 profile node_modules，软链安装会因 peer 依赖解析失败），在 `cordis.patch.yml` 以 `- insert:` 条目挂载；Stop 事件触发 `hook.sh dsh`，因桥接 payload 不含回复文本，hook 从本地 `~/.dsh/sessions/<编码cwd>/<sid>/session.v4.jsonl.zstd`（zstd 解码）取最后一条 `assistant/message`。默认音色湾湾（wanwan），配置文件 `~/.config/ivox/dsh-hooks.json`
+- **支持 DeepSeek Harness 语音播报** — dsh desktop profile 在 `cordis.patch.yml` 以 `- insert:` 条目挂载桥接插件 `@deepseek-ai/dsh-hooks-claude-code`；该插件随 app 内置（app.asar，0.2.0-rc.2），桌面是 Electron 进程可直接读取，**无需解包或复制进 profile**（`dsh plugin add` 软链装反而会因 peer 依赖解析失败）。Stop 事件触发 `hook.sh dsh`，因桥接 payload 不含回复文本，hook 从本地 `~/.dsh/sessions/<编码cwd>/<sid>/session.v4.jsonl.zstd`（zstd 解码）取最后一条 `assistant/message`；读取后轮询到文本稳定（最多 2 秒），避免回复未刷盘时播到上一轮旧内容。默认音色湾湾（wanwan），hook 配置 `~/.dsh/hooks.json`（放在 dsh 自己的目录，与 claude/codex 一致）
 
 ## v3.1.0 — 2026-09-22
 
