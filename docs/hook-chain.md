@@ -63,8 +63,9 @@
 |------|----------|----------|
 | Claude Code | Stop Hook | `~/.claude/settings.json` |
 | Codex | Stop Hook | `~/.codex/hooks.json` |
+| DeepSeek Harness | Stop Hook（经 `dsh-hooks-claude-code` 桥接插件） | `~/.config/ivox/dsh-hooks.json`，desktop profile `cordis.patch.yml` 挂载 |
 
-Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发。
+Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发。DeepSeek Harness 的桥接 payload 不含回复文本，`hook.sh dsh` 分支从本地 zstd 会话日志（`~/.dsh/sessions/...`）提取最后一条 assistant 消息。
 
 ### 2. Hook 脚本
 
