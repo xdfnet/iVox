@@ -24,6 +24,7 @@
   "sourceVoices": {
     "claude": "taozi",
     "codex": "wanwan",
+    "dsh": "wanwan",
     "qwen": "mizai",
     "pi": "dayi"
   },
@@ -34,13 +35,6 @@
     "maxRecordingSeconds": 30
   },
   "voices": [
-    {
-      "id": "mizai",
-      "name": "米仔",
-      "refAudio": "~/.config/ivox/voices/ref_mizai.wav",
-      "refText": "大家好，我是米仔。我的声音温暖自然，适合日常播报和语音助手场景。无论是读书、讲故事，还是播报天气新闻，我都能轻松应对。",
-      "description": "Qwen Code 音色"
-    },
     {
       "id": "taozi",
       "name": "甜妹桃子",
@@ -54,6 +48,13 @@
       "refAudio": "~/.config/ivox/voices/ref_wanwan.wav",
       "refText": "你好，我是湾湾小何。我的声音温柔知性。",
       "description": "Codex 音色"
+    },
+    {
+      "id": "mizai",
+      "name": "米仔",
+      "refAudio": "~/.config/ivox/voices/ref_mizai.wav",
+      "refText": "大家好，我是米仔。我的声音温暖自然，适合日常播报和语音助手场景。无论是读书、讲故事，还是播报天气新闻，我都能轻松应对。",
+      "description": "Qwen Code 音色"
     },
     {
       "id": "dayi",
