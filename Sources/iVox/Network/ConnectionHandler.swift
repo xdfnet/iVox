@@ -64,7 +64,7 @@ actor ConnectionHandler {
 
         let (source, voiceID, content) = extractVoicePrefix(text, config: config)
         Log.info("请求解析: source=\(source) voice=\(voiceID) raw_chars=\(content.count)")
-        Log.debug("请求原始内容: source=\(source) raw=\(oneLine(content))")
+        Log.debug("请求原始内容: source=\(source) raw=\(logPreview(content))")
         let cleaned = cleanText(content)
         if cleaned.isEmpty {
             Log.info("清洗后为空，跳过")
@@ -75,7 +75,7 @@ actor ConnectionHandler {
         if olen > 0 {
             Log.info("清洗: [\(source)] \(olen)字 → \(clen)字 (减少 \((100*(olen-clen))/olen)%)")
         }
-        Log.debug("清洗后内容: source=\(source) cleaned=\(oneLine(cleaned))")
+        Log.debug("清洗后内容: source=\(source) cleaned=\(logPreview(cleaned))")
 
         let job = PlaybackJob(text: cleaned, voiceID: voiceID, source: source)
         Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(cleaned.count)")
@@ -190,5 +190,12 @@ actor ConnectionHandler {
     nonisolated private func oneLine(_ value: String) -> String {
         value.replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")
+    }
+
+    /// 日志里只回显前 2000 字：TTS 仍拿全文，但超长回复不再往日志里灌几十万字符的 DEBUG 行
+    nonisolated private func logPreview(_ value: String) -> String {
+        let limit = 2000
+        guard value.count > limit else { return oneLine(value) }
+        return oneLine(String(value.prefix(limit))) + "…（共 \(value.count) 字，日志已截断）"
     }
 }

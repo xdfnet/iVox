@@ -21,6 +21,10 @@ public enum SocketClient {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw POSIXError(.ENOTSOCK) }
 
+        // daemon 中途退出时靠 EPIPE 报错，别让进程被 SIGPIPE 杀掉
+        var on: Int32 = 1
+        setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
+
         var addr = sockaddr_un()
         addr.sun_family = sa_family_t(AF_UNIX)
         path.withCString { ptr in
@@ -46,12 +50,25 @@ public enum SocketClient {
     }
 
     /// 发送文本消息（单向，不等待回复）
+    /// 大 payload 单次 write 可能只写出一部分（超时被截断），必须循环补齐，
+    /// 否则长回复会被静默丢弃。
     public static func send(_ message: String, to path: String) throws {
         let fd = try connect(to: path)
         defer { Darwin.close(fd) }
         let data = Data(message.utf8)
-        let sent = data.withUnsafeBytes { Darwin.write(fd, $0.baseAddress, $0.count) }
-        guard sent == data.count else { throw POSIXError(.EIO) }
+        var offset = 0
+        while offset < data.count {
+            let sent = data.withUnsafeBytes { buffer -> Int in
+                guard let base = buffer.baseAddress else { return 0 }
+                return Darwin.write(fd, base.advanced(by: offset), buffer.count - offset)
+            }
+            if sent > 0 {
+                offset += sent
+                continue
+            }
+            if errno == EINTR { continue }
+            throw POSIXError(.EIO)
+        }
     }
 
     /// 发送二进制消息 + 读取回复

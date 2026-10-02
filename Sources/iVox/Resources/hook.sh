@@ -20,7 +20,7 @@ text = d.get('last_assistant_message', '')
 # 过短的纯西文确认（如 true/ok/done）不播报
 if text and len(text) <= 5 and not re.search(r'[一-鿿]', text):
     text = ''
-print(text[:5000] if text else '')
+print(text if text else '')
 " "$payload" 2>/dev/null)
 
 [[ -z "${text// }" ]] && echo '{"continue": true}' >&3 && exit 0
