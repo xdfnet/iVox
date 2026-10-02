@@ -8,6 +8,8 @@
 - **dsh 插件缺流式兜底** — 选取规则对齐 DSH 官方的 `AssistantOutputFold` / `finalAssistantOutput`：取最后一条**内容非空**的 `assistant/message`（判据是 `content.length > 0`，空消息不覆盖前一条），并补上原先缺失的第三档——若始终没有非空消息，退回 `assistant/attempt` / `assistant/message` 累积的流式文本。副作用：一轮以「只有 tool-call、无文本块」的消息收尾时不再回放上一段旁白，按官方语义就是「无文本输出」
 - **长回复被静默截断** — `hook.sh` 的 `text[:5000]` 硬截断删除，长回答不再念一半就停。配套把 `daemon.log` 的两条 DEBUG 回显限制为前 2000 字（TTS 仍取全文），否则一条超长回复就会往日志里灌几十万字符并触发日志轮转
 - **大 payload 可能被单次 `write` 丢弃** — `SocketClient.send` 原先只 `write` 一次并要求写满，一旦被截断就抛 `EIO`（而 `hook.sh` 把 stderr 吞了，表现为无声）。改为循环补齐；同时给客户端 fd 加 `SO_NOSIGPIPE`，daemon 中途退出时报 `EPIPE` 而不是被信号杀掉
+- **PI 扩展同样有 5000 字截断，且只读第一个文本块** — `scripts/ivox.ts` 去掉 `slice(0, 5000)`；并把「取第一个 text 块」改为拼接该条消息的**全部** text 块（一条 assistant 消息可以在工具调用前后各带一段文本，原先后半段被静默丢掉）
+- **PI 扩展升级后装不上去** — `install-hooks.sh` 的 PI 分支原先「已存在则跳过」，仓库里改了扩展也永远同步不到 `~/.pi/agent/extensions/`。改为无条件覆盖，与 dsh 插件分支一致
 - **短文本无标点换行导致 TTS 连读** — 短回复（<80 字符、无 Markdown）走快捷路径时只 trim 首尾，内部换行行被 TTS 当空白吞掉，两句零停顿。新增换行归一化：换行处行末无停顿标点则补句号（中文「。」/ 英文 `.` 按行末字符区分），已有 `。！？!?：，；…—` 不重复补，换行换空格兼容英文单词
 - **表格各行间平读** — 整张表只在末尾补一次句号，单元格间仅空格。改为每行结束补句号停顿
 - **短文本 emoji / URL 漏过滤** — 快捷路径未过 emoji 和 URL（「😄」「https://…」原样进 TTS），补齐；同时修正处理顺序为**先删 URL 再清符号**，否则符号清理会删掉 URL 冒号导致链接漏删（旧顺序下 `https://` 残留成 `https//` 的老问题一并解决）

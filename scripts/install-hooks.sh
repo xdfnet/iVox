@@ -132,12 +132,9 @@ PI_EXT_DIR="$HOME/.pi/agent/extensions"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PI_EXT_SRC="$SCRIPT_DIR/ivox.ts"
 if [[ -d "$PI_EXT_DIR" && -f "$PI_EXT_SRC" ]]; then
-  if [[ -f "$PI_EXT_DIR/ivox.ts" ]]; then
-    echo "[i] PI 扩展已存在"
-  else
-    cp "$PI_EXT_SRC" "$PI_EXT_DIR/ivox.ts"
-    echo "✓  PI 扩展"
-  fi
+  # 无条件覆盖：与 dsh 插件一致，否则仓库里更新了扩展也永远装不上去
+  cp "$PI_EXT_SRC" "$PI_EXT_DIR/ivox.ts"
+  echo "✓  PI 扩展"
 elif [[ -f "$PI_EXT_SRC" ]]; then
   echo "[i] PI 未安装，跳过扩展安装"
 fi
