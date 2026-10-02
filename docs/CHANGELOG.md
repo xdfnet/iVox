@@ -1,6 +1,6 @@
 # iVox 开发日志
 
-## Unreleased
+## v3.2.0 — 2026-10-02
 
 ### 修复
 - **DSH 播报从未生效** — 旧实现「Stop 触发后回头读 `~/.dsh/sessions/**.zstd`」有两处硬伤：会话目录实际是 `session-<uuid>`，脚本按 `<uuid>` 拼路径必然 miss（文本恒空、静默退出）；且 dsh 内置桥接插件的 Stop payload 根本不含回复文本（claude-code 版无此字段、codex 版写死 `null`）。改为本地 cordis 插件在轮结束时直投文本，`hook.sh` 里整段 zstd/轮询逻辑删除
@@ -21,6 +21,11 @@
 ### 新增
 
 - **支持 DeepSeek Harness 语音播报（插件直投）** — desktop profile 以 `- insert:` 挂载本地插件 `./plugins/ivox-tts.mjs`（`name` 以 `.` 开头时按 profile 目录解析，无需改 app.asar、无需 pnpm）；插件在 `session/event` 缓存候选消息（规则见 [`docs/dsh-tts.md`](dsh-tts.md#2-选取规则对齐-dsh-官方定义)），`agent/turn-stopping` 时 spawn `hook.sh dsh` 把原文写进 `last_assistant_message`。默认音色湾湾。详见 [`docs/dsh-tts.md`](dsh-tts.md)
+
+### 文档
+
+- **文档目录整理与命名规范** — 历史复盘/调研/过时文档（7 篇）挪入 `docs/archive/`，文件名加类型前缀（`incident-` 事故复盘、`guide-` 手册流程、`research-` 调研、`review-` 评估快照）；`api.md` 更名为 `socket-api.md`；新增 `docs/README.md` 索引
+- **修正过时声明** — 文档中 Swift 6.3.2 统一更正为 6.4 开发快照（`2026-06-15-a`）；编译器崩溃措辞改为历史陈述；修正 architecture.md 中 Makefile 实际调用方式；安装脚本 URL 分支 `master` → `main`；修掉 README 配置说明的错误链接
 
 ## v3.1.0 — 2026-09-22
 
