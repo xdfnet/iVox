@@ -56,6 +56,8 @@ final class TextCleanerTests: XCTestCase {
         let got = cleanText(input)
         XCTAssertTrue(got.contains("第一段"))
         XCTAssertTrue(got.contains("第二段"))
+        // 无标点换行要补停顿，避免 TTS 连读
+        XCTAssertTrue(got.contains("第一段。"))
     }
 
     func testListItems() {

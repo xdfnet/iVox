@@ -8,7 +8,9 @@ public func cleanText(_ text: String) -> String {
     if text.count < 80 {
         let markdownChars: Set<Character> = ["#", "*", "_", "`", "[", "]", "(", ")", "{", "}", ">", "|", "-"]
         if !text.contains(where: { markdownChars.contains($0) }) {
-            return text.trimmingCharacters(in: .whitespacesAndNewlines)
+            // 先删 URL 再清符号：removingEmoji 会删掉冒号，破坏 URL 结构导致漏删
+            return text.normalizedNewlinesForTTS.removingURLs.removingEmoji
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
     }
     let doc = Document(parsing: text)
@@ -27,7 +29,7 @@ private struct TextCollector: MarkupWalker {
     }
 
     mutating func visitText(_ node: Text) {
-        let t = node.string.trimmingCharacters(in: .whitespacesAndNewlines).removingEmoji.removingURLs
+        let t = node.string.trimmingCharacters(in: .whitespacesAndNewlines).removingURLs.removingEmoji
         if t.isEmpty { return }
         appendSpace()
         output.append(t)
@@ -59,6 +61,7 @@ private struct TextCollector: MarkupWalker {
 
     mutating func visitImage(_ node: Image) { descendInto(node) }  // 提取 alt 文字
     mutating func visitTable(_ node: Table) { descendInto(node); endBlock() }  // 提取单元格文字
+    mutating func visitTableRow(_ node: Table.Row) { descendInto(node); endBlock() }  // 行间补句号停顿
     mutating func visitHTMLBlock(_: HTMLBlock) {}   // HTML 对 TTS 无意义，跳过
     mutating func visitInlineHTML(_: InlineHTML) {} // 同上
     mutating func visitThematicBreak(_: ThematicBreak) {}
@@ -77,8 +80,41 @@ private struct TextCollector: MarkupWalker {
     }
 }
 
+private extension Character {
+    var isEmojiLike: Bool { unicodeScalars.contains { $0.properties.isEmoji } }
+}
+
 private extension String {
     private static let urlDetector = try? NSDataDetector(types: NSTextCheckingResult.CheckingType.link.rawValue)
+    // NSDataDetector 常把 scheme 的 https: 剩在匹配外，先整体剥掉带 scheme 的 URL
+    private static let schemeURL = try? NSRegularExpression(pattern: "https?://\\S+")
+
+    /// 纯文本换行归一化：换行是段落/折行边界，TTS 需要停顿信号。
+    /// 行末无句末标点时补「。」，换行换成空格（兼容英文单词分隔，中文空格无害）。
+    var normalizedNewlinesForTTS: String {
+        // 行末已有停顿标点时不补句号（冒号/逗号/分号本身带停顿）
+        let pauseMarks = Set<Character>("。！？!?：:，,；;…—")
+        var result = ""
+        result.reserveCapacity(count)
+        var pendingNewline = false
+        for ch in self {
+            if ch == "\n" || ch == "\r" {
+                pendingNewline = true
+                continue
+            }
+            if pendingNewline {
+                // 行末参考最后一个非空白、非 emoji 字符（emoji 后续才会被移除）
+                if let anchor = result.last(where: { $0 != " " && !$0.isEmojiLike }),
+                   !pauseMarks.contains(anchor) {
+                    result.append(anchor.isASCII ? "." : "。")
+                }
+                if let last = result.last, last != " " { result.append(" ") }
+                pendingNewline = false
+            }
+            result.append(ch)
+        }
+        return result.trimmingCharacters(in: .whitespacesAndNewlines)
+    }
 
     /// 过滤 emoji + 非文字符号，只保留文字（字母/数字/中文）+ 语气标点。
     /// Tab / 不间断空格 / 全角空格 → 当空格合并；emoji 修饰符 → 砍。
@@ -117,11 +153,17 @@ private extension String {
     }
 
     var removingURLs: String {
-        let ns = self as NSString
+        var stripped = self
+        if let re = Self.schemeURL {
+            let ns = stripped as NSString
+            stripped = re.stringByReplacingMatches(
+                in: stripped, range: NSRange(location: 0, length: ns.length), withTemplate: "")
+        }
+        let ns = stripped as NSString
         let range = NSRange(location: 0, length: ns.length)
-        guard let urlDetector = Self.urlDetector else { return self }
-        let matches = urlDetector.matches(in: self, range: range)
-        guard !matches.isEmpty else { return self }
+        guard let urlDetector = Self.urlDetector else { return stripped }
+        let matches = urlDetector.matches(in: stripped, range: range)
+        guard !matches.isEmpty else { return stripped }
         var result = ""
         var pos = 0
         var lastWasSpace = false
