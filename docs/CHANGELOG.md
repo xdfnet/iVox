@@ -5,6 +5,9 @@
 ### 修复
 - **DSH 播报从未生效** — 旧实现「Stop 触发后回头读 `~/.dsh/sessions/**.zstd`」有两处硬伤：会话目录实际是 `session-<uuid>`，脚本按 `<uuid>` 拼路径必然 miss（文本恒空、静默退出）；且 dsh 内置桥接插件的 Stop payload 根本不含回复文本（claude-code 版无此字段、codex 版写死 `null`）。改为本地 cordis 插件在轮结束时直投文本，`hook.sh` 里整段 zstd/轮询逻辑删除
 - **本地 dsh 插件会撞插件清单校验** — profile 根 `package.json` 有 `name` 无 `version`，插件清单校验向上命中它并抛错，导致每次请求（含 auto-review）在 prepare 阶段失败（`REQUEST_EXTENSION`）。修法：在 `plugins/package.json` 放匿名包（`{"private": true}`）
+- **dsh 插件缺流式兜底** — 选取规则对齐 DSH 官方的 `AssistantOutputFold` / `finalAssistantOutput`：取最后一条**内容非空**的 `assistant/message`（判据是 `content.length > 0`，空消息不覆盖前一条），并补上原先缺失的第三档——若始终没有非空消息，退回 `assistant/attempt` / `assistant/message` 累积的流式文本。副作用：一轮以「只有 tool-call、无文本块」的消息收尾时不再回放上一段旁白，按官方语义就是「无文本输出」
+- **长回复被静默截断** — `hook.sh` 的 `text[:5000]` 硬截断删除，长回答不再念一半就停。配套把 `daemon.log` 的两条 DEBUG 回显限制为前 2000 字（TTS 仍取全文），否则一条超长回复就会往日志里灌几十万字符并触发日志轮转
+- **大 payload 可能被单次 `write` 丢弃** — `SocketClient.send` 原先只 `write` 一次并要求写满，一旦被截断就抛 `EIO`（而 `hook.sh` 把 stderr 吞了，表现为无声）。改为循环补齐；同时给客户端 fd 加 `SO_NOSIGPIPE`，daemon 中途退出时报 `EPIPE` 而不是被信号杀掉
 - **短文本无标点换行导致 TTS 连读** — 短回复（<80 字符、无 Markdown）走快捷路径时只 trim 首尾，内部换行行被 TTS 当空白吞掉，两句零停顿。新增换行归一化：换行处行末无停顿标点则补句号（中文「。」/ 英文 `.` 按行末字符区分），已有 `。！？!?：，；…—` 不重复补，换行换空格兼容英文单词
 - **表格各行间平读** — 整张表只在末尾补一次句号，单元格间仅空格。改为每行结束补句号停顿
 - **短文本 emoji / URL 漏过滤** — 快捷路径未过 emoji 和 URL（「😄」「https://…」原样进 TTS），补齐；同时修正处理顺序为**先删 URL 再清符号**，否则符号清理会删掉 URL 冒号导致链接漏删（旧顺序下 `https://` 残留成 `https//` 的老问题一并解决）
@@ -15,7 +18,7 @@
 
 ### 新增
 
-- **支持 DeepSeek Harness 语音播报（插件直投）** — desktop profile 以 `- insert:` 挂载本地插件 `./plugins/ivox-tts.mjs`（`name` 以 `.` 开头时按 profile 目录解析，无需改 app.asar、无需 pnpm）；插件在 `session/event` 缓存每轮最后一条 `assistant/message`，`agent/turn-stopping` 时 spawn `hook.sh dsh` 把原文写进 `last_assistant_message`。默认音色湾湾。详见 [`docs/dsh-tts.md`](dsh-tts.md)
+- **支持 DeepSeek Harness 语音播报（插件直投）** — desktop profile 以 `- insert:` 挂载本地插件 `./plugins/ivox-tts.mjs`（`name` 以 `.` 开头时按 profile 目录解析，无需改 app.asar、无需 pnpm）；插件在 `session/event` 缓存候选消息（规则见 [`docs/dsh-tts.md`](dsh-tts.md#2-选取规则对齐-dsh-官方定义)），`agent/turn-stopping` 时 spawn `hook.sh dsh` 把原文写进 `last_assistant_message`。默认音色湾湾。详见 [`docs/dsh-tts.md`](dsh-tts.md)
 
 ## v3.1.0 — 2026-09-22
 

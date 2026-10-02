@@ -6,8 +6,8 @@
 
 ```
 DSH 一轮结束
-  ├─ session/event  (type=assistant/message)   缓存该轮最后一条 assistant 文本
-  └─ agent/turn-stopping                        轮结束，spawn hook.sh
+  ├─ session/event  (assistant/message / assistant/attempt)  缓存候选最终消息 + 流式兜底
+  └─ agent/turn-stopping                        轮结束，按官方规则选取文本，spawn hook.sh
         stdin: {session_id, cwd, hook_event_name:"Stop",
                 last_assistant_message:"<回复原文>"}
   └─ ~/.config/ivox/hook.sh dsh                 通用分支读 last_assistant_message
@@ -40,14 +40,24 @@ DSH 自带两个「Claude Code / Codex hook 兼容」桥接插件，但它们的
 
 | 扩展点 | 时机 | 用途 |
 |---|---|---|
-| `session/event` | 任一 session 日志事件落盘 | 过滤 `event.type === "assistant/message"`，从 `event.data.message.content` 取 `type === "text"` 的块 |
-| `agent/turn-stopping` | 一轮结束（Stop 的对应点） | 取该轮最后一条文本并投递 |
+| `session/event` | 任一 session 日志事件落盘 | 过滤 `assistant/message`（登记该轮候选最终消息）与 `assistant/attempt`（累积流式兜底文本） |
+| `agent/turn-stopping` | 一轮结束（Stop 的对应点） | 按官方规则选出该轮文本并投递 |
 | `subagent/start` / `subagent/end` | 子代理起止 | 登记子代理会话，避免一次提问念多遍 |
 | `session/disposed` | 会话销毁 | 清理缓存 |
 
 **注意**：每个 step 都会落一条 `assistant/message`（包括带工具调用的中间回复）。若在 `assistant/message` 上直接播，会把过程话全念出来。所以必须「缓存 + 整轮结束取最后一条」。
 
-### 2. 插件怎么被加载
+### 2. 选取规则对齐 DSH 官方定义
+
+插件复刻的是 `dsh-subagent` 的 `AssistantOutputFold` / `finalAssistantOutput`（DSH 对「子代理最终输出」的规范选取）：
+
+1. 取**最后一条内容非空**的 `assistant/message`（判据是 `content.length > 0`，不是"有没有文本块"）；
+2. 内容为空的消息（`max-tokens` 且无可执行块时才会落一条）**不覆盖**前一条；
+3. 若始终没有非空消息，**退回**该会话累积的流式文本（`assistant/message` / `assistant/attempt` 的 `event.data.stream`，按 `dsh-llm` 的 `joinAssistantStreamText` 取 `chunk.type === "text-delta"` 与 `text-chunks`）。
+
+第 1 条的判据看着别扭，但必须照抄：一轮以「只有 tool-call、无文本块」的消息收尾时（`concludesTurn` 类工具），官方语义就是「没有文本输出」——此时**不播**，而不是回放上一步的旁白。
+
+### 3. 插件怎么被加载
 
 `~/.dsh/profiles/desktop/cordis.patch.yml` 里加：
 
@@ -62,7 +72,7 @@ DSH 自带两个「Claude Code / Codex hook 兼容」桥接插件，但它们的
 - 加载器（`cordis-plugin-loader`）对以 `.` 开头的 `name` 走 `new URL(name, ctx.baseUrl)`，而 `baseUrl` 由 `cordis-plugin-include` 设成**配置文件所在目录**（即 profile 目录），所以放本地文件即可
 - 因此**不用改 app.asar，也不用 pnpm 安装**
 
-### 3. 插件文件的三条硬约束
+### 4. 插件文件的三条硬约束
 
 | 约束 | 原因 |
 |---|---|
@@ -70,7 +80,7 @@ DSH 自带两个「Claude Code / Codex hook 兼容」桥接插件，但它们的
 | 只能 import `node:` 内置模块 | profile 的 `node_modules` 是空的，import 不到 dsh 内部包（如 schemastery） |
 | 必须导出 `name` 与 `apply(ctx, config)` | cordis 插件契约（`inject` 可选） |
 
-### 4. 匿名 package.json（必读，漏了整台 dsh 都不可用）
+### 5. 匿名 package.json（必读，漏了整台 dsh 都不可用）
 
 `~/.dsh/profiles/desktop/plugins/package.json`：
 
@@ -135,9 +145,12 @@ grep "请求原始内容: source=dsh" ~/.config/ivox/daemon.log | tail -1
 
 ## 已知限制与可优化点
 
-- **粒度是整轮**：`agent/turn-stopping` 时才投递，所以「说完了才开始念」。若想流式，可改用 `agent/assistant-stream` 的 `text-delta` 帧边生成边喂 TTS（iVox 本身支持流式），首字延迟能显著降低。
-- **5000 字上限**：`hook.sh` 里 `text[:5000]` 截断。
+- **粒度是整轮（这是取舍，不是缺陷）**：`agent/turn-stopping` 时才投递，所以「说完了才开始念」。
+  流式（改吃 `agent/assistant-stream` 的 `chunk.type === "text-delta"`，iVox 本身支持流式）能显著降低首字延迟，**但会改变播报语义**：在流式阶段无法判断当前 step 是不是最终回答，带工具调用的中间步骤同样在产出文本，于是「我先看看 X」「让我查一下 Y」这类过程话会被念出来，且念出去收不回。
+  换句话说，整轮粒度是「只念答案」的**唯一**保证；流式是**旁白模式**，属于产品选择而非纯优化。真要上，先想清楚要不要听过程话。
+- **一轮以「无文本的 tool-call 消息」收尾时不播**：这是照抄 DSH 官方最终输出规则的结果（见上文「选取规则对齐 DSH 官方定义」）。若希望此时回放上一段文字，需要显式偏离官方语义。
 - **过短纯西文不播**：长度 ≤ 5 且不含中文（如 `ok` / `done`）会被跳过。
+- **文本走 argv**：`hook.sh` 用 `ivox speak -- "$text"` 传参，受 macOS `ARG_MAX`（1MB）约束。超长回复理论上会失败；要彻底解决得给 `speak` 加 stdin 入参。
 - **插件是复制品**：升级 DSH、换 profile 或重建环境后需重跑安装脚本。
 
 ## 卸载
