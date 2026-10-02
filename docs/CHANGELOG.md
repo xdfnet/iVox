@@ -2,9 +2,20 @@
 
 ## Unreleased
 
+### 修复
+- **DSH 播报从未生效** — 旧实现「Stop 触发后回头读 `~/.dsh/sessions/**.zstd`」有两处硬伤：会话目录实际是 `session-<uuid>`，脚本按 `<uuid>` 拼路径必然 miss（文本恒空、静默退出）；且 dsh 内置桥接插件的 Stop payload 根本不含回复文本（claude-code 版无此字段、codex 版写死 `null`）。改为本地 cordis 插件在轮结束时直投文本，`hook.sh` 里整段 zstd/轮询逻辑删除
+- **本地 dsh 插件会撞插件清单校验** — profile 根 `package.json` 有 `name` 无 `version`，插件清单校验向上命中它并抛错，导致每次请求（含 auto-review）在 prepare 阶段失败（`REQUEST_EXTENSION`）。修法：在 `plugins/package.json` 放匿名包（`{"private": true}`）
+- **短文本无标点换行导致 TTS 连读** — 短回复（<80 字符、无 Markdown）走快捷路径时只 trim 首尾，内部换行行被 TTS 当空白吞掉，两句零停顿。新增换行归一化：换行处行末无停顿标点则补句号（中文「。」/ 英文 `.` 按行末字符区分），已有 `。！？!?：，；…—` 不重复补，换行换空格兼容英文单词
+- **表格各行间平读** — 整张表只在末尾补一次句号，单元格间仅空格。改为每行结束补句号停顿
+- **短文本 emoji / URL 漏过滤** — 快捷路径未过 emoji 和 URL（「😄」「https://…」原样进 TTS），补齐；同时修正处理顺序为**先删 URL 再清符号**，否则符号清理会删掉 URL 冒号导致链接漏删（旧顺序下 `https://` 残留成 `https//` 的老问题一并解决）
+
+### 变更
+
+- **`ivox on` 语义改为「确保按当前二进制运行」** — 已在运行时不再直接返回，而是先停旧进程、等其退出再重新拉起；未运行则直接启动。`ivox on` 改为直接复用 `restart`（先停后启的主逻辑收敛在 restart，此前 restart 是「先 off 再 on」，未运行时会因 off 报错而整体失败），两者行为完全等价、未运行也能正常拉起；命令说明文案同步更新
+
 ### 新增
 
-- **支持 DeepSeek Harness 语音播报** — dsh desktop profile 在 `cordis.patch.yml` 以 `- insert:` 条目挂载桥接插件 `@deepseek-ai/dsh-hooks-claude-code`；该插件随 app 内置（app.asar，0.2.0-rc.2），桌面是 Electron 进程可直接读取，**无需解包或复制进 profile**（`dsh plugin add` 软链装反而会因 peer 依赖解析失败）。Stop 事件触发 `hook.sh dsh`，因桥接 payload 不含回复文本，hook 从本地 `~/.dsh/sessions/<编码cwd>/<sid>/session.v4.jsonl.zstd`（zstd 解码）取最后一条 `assistant/message`；读取后轮询到文本稳定（最多 2 秒），避免回复未刷盘时播到上一轮旧内容。默认音色湾湾（wanwan），hook 配置 `~/.dsh/hooks.json`（放在 dsh 自己的目录，与 claude/codex 一致）
+- **支持 DeepSeek Harness 语音播报（插件直投）** — desktop profile 以 `- insert:` 挂载本地插件 `./plugins/ivox-tts.mjs`（`name` 以 `.` 开头时按 profile 目录解析，无需改 app.asar、无需 pnpm）；插件在 `session/event` 缓存每轮最后一条 `assistant/message`，`agent/turn-stopping` 时 spawn `hook.sh dsh` 把原文写进 `last_assistant_message`。默认音色湾湾。详见 [`docs/dsh-tts.md`](dsh-tts.md)
 
 ## v3.1.0 — 2026-09-22
 

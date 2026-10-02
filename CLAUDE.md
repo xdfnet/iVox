@@ -46,7 +46,7 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
 
 Sources/iVoxTests/     — 测试（仅依赖 iVoxKit）
 
-docs/                  — architecture.md, api.md, CHANGELOG.md, hook-chain.md, stability.md, compiler-bugs.md, network-issues.md
+docs/                  — architecture.md, api.md, CHANGELOG.md, hook-chain.md, dsh-tts.md, stability.md, compiler-bugs.md, network-issues.md
 scripts/               — runtime.sh, download-models.sh, install-*.sh
 ```
 

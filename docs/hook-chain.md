@@ -63,15 +63,30 @@
 |------|----------|----------|
 | Claude Code | Stop Hook | `~/.claude/settings.json` |
 | Codex | Stop Hook | `~/.codex/hooks.json` |
-| DeepSeek Harness | Stop Hook（经 `dsh-hooks-claude-code` 桥接插件） | `~/.dsh/hooks.json`，desktop profile `cordis.patch.yml` 挂载 |
+| DeepSeek Harness | 本地 cordis 插件 `ivox-tts` 在每轮结束时把回复原文直投 hook.sh | `~/.dsh/profiles/desktop/cordis.patch.yml` 挂载 `./plugins/ivox-tts.mjs` |
 
-Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发。DeepSeek Harness 的桥接 payload 不含回复文本，`hook.sh dsh` 分支从本地 zstd 会话日志（`~/.dsh/sessions/...`）提取最后一条 assistant 消息。Stop 触发时本轮回复可能尚未压缩刷盘，因此读取后会每 0.25 秒重读、直到连续两次文本一致（最多等 2 秒），避免播报到上一轮的旧内容。
+Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发，payload 自带 `last_assistant_message`。
+
+DeepSeek Harness 不同：它内置的桥接插件（`dsh-hooks-claude-code` / `dsh-hooks-codex`）的 Stop payload **不含回复文本**（`stopPayload()` 只给 `session_id` / `cwd` / `hook_event_name`；codex 版把 `last_assistant_message` 写死成 `null`）。文本改由本地 cordis 插件 `ivox-tts` 在内存中取出，直投给 hook.sh：
+
+```
+DSH 一轮结束
+  ├─ ctx.on("session/event")        assistant/message 落盘时，缓存该轮最后一条文本
+  └─ ctx.on("agent/turn-stopping")  轮结束 → spawn: bash hook.sh dsh
+        stdin: {session_id, cwd, hook_event_name:"Stop",
+                last_assistant_message:"<回复原文>"}
+  └─ hook.sh 通用分支 → ivox speak --source dsh（湾湾音色）
+```
+
+装在 `~/.dsh/profiles/desktop/plugins/ivox-tts.mjs`，由 `scripts/install-hooks.sh` 安装，源码在仓库 `Sources/iVox/Resources/dsh-plugin/`。
+
+机制细节、安装步骤、踩坑清单（`.mjs` 后缀要求、匿名 `package.json`、子代理过滤、旧的 zstd 取文本方案为何废弃）见 **[`dsh-tts.md`](dsh-tts.md)**。
 
 ### 2. Hook 脚本
 
 `~/.config/ivox/hook.sh`
 
-接收来源参数（如 `codex` / `claude`），从 Stop Hook 的 stdin JSON 提取最后一条 assistant message。职责：
+接收来源参数（如 `codex` / `claude` / `dsh`），从 stdin JSON 提取 `last_assistant_message`。dsh 的这份 payload 由本地插件 `ivox-tts` 直接投喂（见上），脚本里已没有读 zstd 会话日志的分支。职责：
 
 - 从 stdin 读取 Hook payload
 - 提取最后一条 assistant message
@@ -229,6 +244,9 @@ codesign -dv ~/.local/share/ivox/runtime/iVox 2>&1 | grep -E 'flags|Signature|Te
 | 日志有播放但没声音 | AudioPlayer 引擎异常？音量设置？扬声器？ |
 | 播放完音乐没恢复 | iDict 是否运行？`curl http://127.0.0.1:8888/api/ping` |
 | Hook 不触发 | settings.json / hooks.json 配置是否正确？Shell 权限？ |
+| DSH 播报不触发 | `~/.dsh/profiles/desktop/plugins/ivox-tts.mjs` 在不在？`cordis.patch.yml` 有没有 `ivox-tts` 挂载？改完重启 dsh 了没？ |
+| DSH 每次请求都在 prepare 阶段报错（如 auto-review REQUEST_EXTENSION） | `plugins/package.json` 匿名包缺失，原因见 [`dsh-tts.md`](dsh-tts.md) |
+| DSH 念了过程话 / 播到上一轮 | 是否被改回「读 zstd 轮询」的老实现？正常实现只在 `agent/turn-stopping` 取该轮最后一条 `assistant/message` |
 
 ## 参考
 

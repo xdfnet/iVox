@@ -1,0 +1,112 @@
+// iVox TTS bridge for DeepSeek Harness (dsh).
+// 每轮回复结束时，把最后一条 assistant 消息原文直接交给 ivox hook.sh。
+// 取代旧方案「Stop hook -> 回头读 sessions/*.zstd 取文本」：
+// 不解 zstd、不猜 session 目录名、不轮询等刷盘、无「播到上一轮」竞态。
+// 挂载（profile 的 cordis.patch.yml）：
+//   - insert: [{id: ivox-tts, name: "./plugins/ivox-tts.mjs"}]
+// 相对路径按 profile 目录解析，故无需改 app.asar，也无需 pnpm 安装。
+// 只用 node: 内置模块（profile 的 node_modules 是空的，不能 import dsh 内部包）。
+import { spawn } from "node:child_process";
+import { homedir } from "node:os";
+import { join } from "node:path";
+
+export const name = "ivox-tts";
+export const inject = [];
+
+const HOOK = join(homedir(), ".config", "ivox", "hook.sh");
+
+// 拼出一条 assistant 消息的纯文本（跳过 tool_use / reasoning 等块）
+function textOf(message) {
+var content = (message || {}).content;
+if (Array.isArray(content)) {
+var out = "";
+for (var i = 0; i < content.length; i++) {
+var block = content[i] || {};
+if (block.type === "text") {
+if (typeof block.text === "string") out += block.text;
+}
+}
+return out;
+}
+return "";
+}
+
+export function apply(ctx, config) {
+config = config || {};
+var hookScript = config.hookScript || HOOK;
+var source = config.source || "dsh";
+// session.id -> 本轮最后一条 assistant 文本
+var buffered = new Map();
+// 子代理会话 id：不播报，避免一次提问念多遍
+var subs = new Set();
+
+function childOf(info) {
+try {
+var agents = ctx.get("agents");
+if (agents && info) return agents.get(info.id);
+} catch (e) {}
+return undefined;
+}
+
+ctx.on("subagent/start", function (info) {
+var child = childOf(info);
+if (child && child.session) subs.add(child.session.id);
+});
+
+ctx.on("subagent/end", function (info) {
+var child = childOf(info);
+if (child && child.session) subs.delete(child.session.id);
+});
+
+// 每个 step 都会落一条 assistant/message（含带工具调用的中间回复），
+// 所以只缓存，整轮结束时取最后一条。
+ctx.on("session/event", function (session, event) {
+if (event && event.type === "assistant/message") {
+var data = event.data || {};
+var text = textOf(data.message);
+if (text.trim().length > 0) buffered.set(session.id, text);
+}
+});
+
+ctx.on("agent/turn-stopping", function (args) {
+var session = args && args.agent && args.agent.session;
+if (session) {
+var text = buffered.get(session.id);
+if (text) {
+buffered.delete(session.id);
+if (subs.has(session.id)) return;
+deliver(session, text);
+}
+}
+});
+
+ctx.on("session/disposed", function (session) {
+buffered.delete(session.id);
+subs.delete(session.id);
+});
+
+function deliver(session, text) {
+var header = session.header || {};
+var payload = JSON.stringify({
+session_id: session.id,
+transcript_path: "",
+cwd: header.cwd || process.cwd(),
+hook_event_name: "Stop",
+stop_hook_active: false,
+last_assistant_message: text,
+source: source
+});
+try {
+var child = spawn("bash", [hookScript, source], {
+detached: true,
+stdio: ["pipe", "ignore", "ignore"]
+});
+child.on("error", function () {});
+child.stdin.on("error", function () {});
+child.stdin.end(payload);
+child.unref();
+} catch (e) {
+if (ctx.logger) ctx.logger.warn("ivox-tts: cannot spawn hook.sh: " + String(e));
+}
+}
+}

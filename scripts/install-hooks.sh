@@ -74,31 +74,56 @@ else
 fi
 
 # ── DeepSeek Harness ──
-DSH_JSON="$HOME/.dsh/hooks.json"
-DSH_PATCH="$HOME/.dsh/profiles/desktop/cordis.patch.yml"
-mkdir -p "$(dirname "$DSH_JSON")"
-[[ -f "$DSH_JSON" ]] || echo '{}' > "$DSH_JSON"
+# dsh 的回复文本由本地 cordis 插件 ivox-tts.mjs 在每轮结束时直投 hook.sh；
+# 桥接插件（dsh-hooks-claude-code）的 Stop payload 不含回复文本，故不再使用。
+DSH_PROFILE_DIR="$HOME/.dsh/profiles/desktop"
+DSH_PATCH="$DSH_PROFILE_DIR/cordis.patch.yml"
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
-if grep -q 'hook.sh' "$DSH_JSON" 2>/dev/null; then
-  echo "[i] DSH hook 已存在"
-elif write_hook "$DSH_JSON" "dsh" 10; then
-  echo "✓  DSH hook（$DSH_JSON）"
-else
-  echo "⚠️  需要 jq 或 python3 写入 DSH 配置，请手动添加"
-fi
+DSH_PLUGIN_SRC=""
+for cand in "$SCRIPT_DIR/dsh-plugin" "$SCRIPT_DIR/../Sources/iVox/Resources/dsh-plugin"; do
+  if [[ -f "$cand/ivox-tts.mjs" ]]; then
+    DSH_PLUGIN_SRC="$cand"
+    break
+  fi
+done
 
-if [[ -f "$DSH_PATCH" ]]; then
-  if grep -q 'ivox-hooks' "$DSH_PATCH"; then
-    echo "[i] DSH profile 挂载已存在"
+if [[ -d "$DSH_PROFILE_DIR" ]]; then
+  if [[ -z "$DSH_PLUGIN_SRC" ]]; then
+    echo "⚠️  未找到 dsh-plugin/ivox-tts.mjs，跳过 DSH 播报插件"
   else
-    cat >> "$DSH_PATCH" <<PATCH
-- insert:
-    - id: ivox-hooks
-      name: "@deepseek-ai/dsh-hooks-claude-code"
-      config:
-        configPath: $DSH_JSON
-PATCH
-    echo "✓  DSH profile 已挂桥接插件（$DSH_PATCH）"
+    mkdir -p "$DSH_PROFILE_DIR/plugins"
+    cp "$DSH_PLUGIN_SRC/ivox-tts.mjs" "$DSH_PROFILE_DIR/plugins/ivox-tts.mjs"
+    # 匿名 package.json：profile 根 package.json 有 name 无 version，
+    # 插件清单校验会顺着目录往上找到它并抛错，导致每次请求都失败。
+    cp "$DSH_PLUGIN_SRC/package.json" "$DSH_PROFILE_DIR/plugins/package.json"
+
+    if [[ -f "$DSH_PATCH" ]]; then
+      if grep -q 'ivox-tts' "$DSH_PATCH"; then
+        echo "[i] DSH 播报插件挂载已存在"
+      else
+        printf '\n- insert:\n    - id: ivox-tts\n      name: "./plugins/ivox-tts.mjs"\n' >> "$DSH_PATCH"
+        echo "✓  DSH profile 已挂载 ivox-tts"
+      fi
+    else
+      echo "⚠️  未找到 $DSH_PATCH，请手动挂载 ./plugins/ivox-tts.mjs"
+    fi
+
+    # 清理旧方案残留：hooks.json 的 Stop 已无意义（payload 没有文本）
+    DSH_JSON="$HOME/.dsh/hooks.json"
+    if [[ -f "$DSH_JSON" ]] && grep -q 'hook.sh' "$DSH_JSON" 2>/dev/null; then
+      python3 - "$DSH_JSON" <<'PYEOF' 2>/dev/null && echo "✓  已清理 DSH hooks.json 里失效的 Stop"
+import json, sys
+p = sys.argv[1]
+d = json.load(open(p))
+if d.get("hooks", {}).get("Stop"):
+    d["hooks"]["Stop"] = []
+    json.dump(d, open(p, "w"), indent=2)
+    open(p, "a").write("\n")
+PYEOF
+    fi
+
+    echo "✓  DSH 播报插件（重启 dsh 生效）"
   fi
 fi
 
