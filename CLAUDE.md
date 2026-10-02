@@ -46,7 +46,7 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
 
 Sources/iVoxTests/     — 测试（仅依赖 iVoxKit）
 
-docs/                  — architecture.md, api.md, CHANGELOG.md, hook-chain.md, dsh-tts.md, stability.md, compiler-bugs.md, network-issues.md
+docs/                  — architecture.md, socket-api.md, hook-chain.md, dsh-tts.md, playback-queue.md, CHANGELOG.md；archive/ 放历史复盘与调研
 scripts/               — runtime.sh, download-models.sh, install-*.sh
 ```
 
@@ -77,13 +77,13 @@ Claude Code/Codex  →  hook.sh  →  Unix Socket  →  Daemon
 ## 已知问题
 
 ### Swift 6.4 快照版编译器崩溃（已修复）
-此问题已在 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a` 中修复。详见 `docs/compiler-bugs.md`。
+此问题已在 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a` 中修复。详见 `docs/archive/incident-swift-compiler-crash.md`。
 
 ### 代码签名变更导致 TCC 权限失效
 Ad-hoc 签名每次构建都会变化 → TCC 权限（麦克风、辅助功能）丢失。`deploy-bin`（`make update`）会自动重新签名。部署后如权限丢失，需在系统设置中重新勾选。
 
 ### 安装网络层问题（HTTP/2 截断 + Metal Toolchain）
-git smart 协议（POST `git-upload-pack`）在国内偶发 HTTP/2 截断，HuggingFace 也常 SSL 握手失败。已实现兜底：模型下载三级 fallback（HF → hf-mirror → ModelScope），mlx 子模块 tarball 预填（`scripts/fetch-mlx-submodules.sh`），SwiftPM `--skip-update`。首次安装还需 `xcodebuild -downloadComponent MetalToolchain`（~838MB）。详见 `docs/network-issues.md`。
+git smart 协议（POST `git-upload-pack`）在国内偶发 HTTP/2 截断，HuggingFace 也常 SSL 握手失败。已实现兜底：模型下载三级 fallback（HF → hf-mirror → ModelScope），mlx 子模块 tarball 预填（`scripts/fetch-mlx-submodules.sh`），SwiftPM `--skip-update`。首次安装还需 `xcodebuild -downloadComponent MetalToolchain`（~838MB）。详见 `docs/archive/guide-install-network.md`。
 
 ## 部署
 

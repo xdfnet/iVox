@@ -72,7 +72,7 @@ await ws; await sock; await mic
 
 - `~/.config/ivox/ivox.sock`，JSON 行协议
 - 支持 TTS 播报（`{source:claude,voice:wanwan}` 前缀）和 ASR 识别
-- 详见 [`docs/api.md`](api.md)
+- 详见 [`docs/socket-api.md`](socket-api.md)
 
 ### TTSEngine — 本地语音合成
 
@@ -226,7 +226,7 @@ ConnectionHandler.extractVoicePrefix():
 
 ## 构建系统
 
-`Makefile` 使用 `TOOLCHAINS=swift-6.3.2-RELEASE`（Swift 6.4 快照在编译 MLXAudioTTS 时有编译器崩溃，见 [`compiler-bugs.md`](compiler-bugs.md)）。
+`Makefile` 使用 `TOOLCHAINS=swift-6.3.2-RELEASE`（Swift 6.4 快照在编译 MLXAudioTTS 时有编译器崩溃，见 [`archive/incident-swift-compiler-crash.md`](archive/incident-swift-compiler-crash.md)）。
 
 关键 target：
 

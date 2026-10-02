@@ -76,6 +76,6 @@ echo "$PAYLOAD" | bash ~/.config/ivox/hook.sh claude                            
 
 ## 参考
 
-- [Hook 链路](hook-chain.md)
+- [Hook 链路](../hook-chain.md)
 - reflexio: `node_modules/claude-smart/plugin/vendor/reflexio/reflexio/server/llm/providers/claude_code_provider.py`
 - 调试日志: `~/.config/ivox/daemon.log`

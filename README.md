@@ -71,7 +71,7 @@ make test      # 运行测试
 make clean     # 清除 .build
 ```
 
-Swift 6.4 快照有编译器 bug（MLXAudioTTS 在 `-O` 下崩溃），详见 [`docs/compiler-bugs.md`](docs/compiler-bugs.md)。
+Swift 6.4 快照有编译器 bug（MLXAudioTTS 在 `-O` 下崩溃），详见 [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)。
 
 ## 配置
 
@@ -86,7 +86,7 @@ Swift 6.4 快照有编译器 bug（MLXAudioTTS 在 `-O` 下崩溃），详见 [`
 | `wechat.token` | 微信 ilink bot token |
 | `voice.xx.refAudio` | 音色参考音频路径 |
 
-完整配置说明见 [`docs/api.md`](docs/api.md)。
+完整字段见 `Sources/iVoxKit/Config.swift`。
 
 ## 架构
 
