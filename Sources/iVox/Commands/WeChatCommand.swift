@@ -4,7 +4,7 @@ import Foundation
 struct WeChatCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "wechat",
-        abstract: "微信消息桥接",
+        abstract: "管理微信桥接",
         subcommands: [
             WeChatSetupCommand.self,
             WeChatStatusCommand.self,

@@ -12,10 +12,10 @@ struct StatusCommand: ParsableCommand {
         let socketPath = AppPaths.socketPath
 
         guard SocketClient.isRunning(path: socketPath) else {
-            print("状态: 未运行")
+            print("未运行")
             return
         }
-        print("状态: 运行中")
+        print("运行中")
         print("Socket: \(socketPath)")
     }
 }

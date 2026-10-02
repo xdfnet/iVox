@@ -5,20 +5,20 @@ import iVoxKit
 struct ASRCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "listen",
-        abstract: "语音识别（WAV → 文本）"
+        abstract: "识别音频为文本"
     )
 
     private static let maxAudioBytes = 100 * 1024 * 1024
 
-    @Option(name: .shortAndLong, help: "语言 (zh/en)")
+    @Option(name: .shortAndLong, help: "识别语言（zh/en）")
     var lang: String = "zh"
 
-    @Option(name: .shortAndLong, help: "WAV 文件路径")
+    @Option(name: .shortAndLong, help: "WAV 文件路径，缺省读标准输入")
     var file: String?
 
     func run() async throws {
         guard !lang.isEmpty, lang.allSatisfy(\.isLetter) else {
-            fputs("✗ 语言参数无效: \(lang)\n", stderr)
+            fputs("错误: 语言参数无效: \(lang)\n", stderr)
             throw ExitCode.failure
         }
 
@@ -31,14 +31,14 @@ struct ASRCommand: AsyncParsableCommand {
             while let chunk = try FileHandle.standardInput.read(upToCount: 1 << 20), !chunk.isEmpty {
                 buf.append(chunk)
                 if buf.count > Self.maxAudioBytes {
-                    fputs("✗ 音频数据超过 100MB 上限\n", stderr)
+                    fputs("错误: 音频数据超过 100MB 上限\n", stderr)
                     throw ExitCode.failure
                 }
             }
             wavData = buf
         }
         guard !wavData.isEmpty else {
-            fputs("✗ 无音频数据\n", stderr)
+            fputs("错误: 无音频数据\n", stderr)
             throw ExitCode.failure
         }
 

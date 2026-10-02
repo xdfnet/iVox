@@ -5,19 +5,18 @@ import Foundation
 struct iVox: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "ivox",
-        abstract: "macOS 本地语音播报守护进程",
+        abstract: "本地语音播报守护进程，朗读 AI 编程工具的回复",
         subcommands: [
-            ServeCommand.self,
-            SpeakCommand.self,
-            SayCommand.self,
-            VoiceCommand.self,
-            StopCommand.self,
             StartCommand.self,
-            StatusCommand.self,
-            VersionCommand.self,
+            StopCommand.self,
             RestartCommand.self,
+            StatusCommand.self,
+            SpeakCommand.self,
             ASRCommand.self,
+            VoiceCommand.self,
             WeChatCommand.self,
+            VersionCommand.self,
+            ServeCommand.self,
         ],
         defaultSubcommand: ServeCommand.self
     )

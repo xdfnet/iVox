@@ -5,7 +5,7 @@ import iVoxKit
 struct VoiceCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "voice",
-        abstract: "音色管理",
+        abstract: "管理播报音色",
         subcommands: [VoiceList.self, VoiceAdd.self, VoiceRemove.self]
     )
 }
@@ -13,19 +13,19 @@ struct VoiceCommand: ParsableCommand {
 struct VoiceList: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "list",
-        abstract: "列出所有可用音色"
+        abstract: "列出全部音色"
     )
 
     func run() throws {
         guard let config = try? loadConfig() else {
-            print("无法加载配置 \(AppPaths.configDir)/config.json")
+            print("错误: 无法加载配置 \(AppPaths.configDir)/config.json")
             throw ExitCode.failure
         }
         for v in config.voices {
-            let mark = v.id == config.defaultVoice ? " ●" : "  "
             let name = v.name ?? v.id
             let desc = v.description.map { " — \($0)" } ?? ""
-            print("\(mark) \(name) (\(v.id))\(desc)")
+            let isDefault = v.id == config.defaultVoice ? " (默认)" : ""
+            print("\(name) (\(v.id))\(isDefault)\(desc)")
         }
     }
 }
@@ -33,7 +33,7 @@ struct VoiceList: ParsableCommand {
 struct VoiceAdd: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "add",
-        abstract: "添加音色配置"
+        abstract: "添加音色"
     )
 
     @Option(name: .shortAndLong, help: "音色 ID")
@@ -56,7 +56,7 @@ struct VoiceAdd: ParsableCommand {
         var config = try loadConfig(from: configPath)
 
         guard config.voice(id: id) == nil else {
-            print("[✗] 音色 ID \(id) 已存在")
+            print("错误: 音色 ID \(id) 已存在")
             return
         }
 
@@ -69,14 +69,14 @@ struct VoiceAdd: ParsableCommand {
         )
         config.voices.append(voice)
         try saveConfig(config, to: configPath)
-        print("[✓] 已添加音色: \(voice.name ?? id) (\(id))")
+        print("已添加音色: \(voice.name ?? id) (\(id))")
     }
 }
 
 struct VoiceRemove: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "remove",
-        abstract: "删除自定义音色"
+        abstract: "删除音色"
     )
 
     @Option(name: .shortAndLong, help: "音色 ID")
@@ -87,11 +87,11 @@ struct VoiceRemove: ParsableCommand {
         var config = try loadConfig(from: configPath)
 
         guard let voice = config.voice(id: id) else {
-            print("[✗] 音色 ID \(id) 不存在")
+            print("错误: 音色 ID \(id) 不存在")
             return
         }
         guard id != config.defaultVoice else {
-            print("[✗] 不能删除默认音色 (\(id))")
+            print("错误: 不能删除默认音色 (\(id))")
             return
         }
 
@@ -99,6 +99,6 @@ struct VoiceRemove: ParsableCommand {
         config.sourceVoices = config.sourceVoices.filter { $0.value != id }
         try saveConfig(config, to: configPath)
 
-        print("[✓] 已删除音色: \(voice.name ?? id) (\(id))")
+        print("已删除音色: \(voice.name ?? id) (\(id))")
     }
 }

@@ -4,7 +4,7 @@ import Foundation
 struct VersionCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "version",
-        abstract: "显示 iVox 版本",
+        abstract: "显示版本号",
         version: iVoxVersion
     )
 

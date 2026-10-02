@@ -5,16 +5,16 @@ import iVoxKit
 struct SpeakCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "speak",
-        abstract: "一次性播报文本"
+        abstract: "朗读一段文本"
     )
 
-    @Option(name: .shortAndLong, help: "来源标识 (claude/codex/qwen/pi)")
+    @Option(name: .shortAndLong, help: "来源（claude/codex/dsh/qwen/pi），决定默认音色")
     var source: String?
 
-    @Option(name: .shortAndLong, help: "音色 ID")
+    @Option(name: .shortAndLong, help: "音色 ID（用 ivox voice list 查看）")
     var voice: String?
 
-    @Argument(help: "要播报的文本")
+    @Argument(help: "要朗读的文本")
     var text: String
 
     func run() async throws {
@@ -25,6 +25,6 @@ struct SpeakCommand: AsyncParsableCommand {
         let prefix = parts.isEmpty ? "" : "{\(parts.joined(separator: ","))}"
         try SocketClient.send(prefix + text, to: socketPath)
         // Hook-compatible: stdout must be clean JSON, no diagnostic output
-        fputs("[✓] 已发送播报请求\n", stderr)
+        fputs("已发送播报请求\n", stderr)
     }
 }
