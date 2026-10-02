@@ -112,7 +112,7 @@ public struct WeChatConfig: Codable, Sendable {
     }
 
     public var enabled: Bool { !token.isEmpty }
-    public var resolvedClaudePath: String { claudePath ?? "/Users/admin/.local/bin/claude" }
+    public var resolvedClaudePath: String { claudePath ?? "~/.local/bin/claude" }
     public var resolvedAskTimeoutSeconds: Int { askTimeoutSeconds ?? 120 }
 
     private enum CodingKeys: String, CodingKey {

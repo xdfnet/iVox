@@ -138,3 +138,16 @@ if [[ -d "$PI_EXT_DIR" && -f "$PI_EXT_SRC" ]]; then
 elif [[ -f "$PI_EXT_SRC" ]]; then
   echo "[i] PI 未安装，跳过扩展安装"
 fi
+
+# ── 确保 macOS GUI 环境能找到 ~/.local/bin（.zprofile 注入） ──
+ZPROFILE="$HOME/.zprofile"
+if [[ -f "$ZPROFILE" ]] && grep -q '\.local/bin' "$ZPROFILE" 2>/dev/null; then
+  echo "[i] .zprofile 已包含 ~/.local/bin"
+elif grep -q 'export PATH' "$ZPROFILE" 2>/dev/null; then
+  # 已有 .zprofile 但没包含 ~/.local/bin，追加一行到 export PATH
+  sed -i '' 's|export PATH=.*:.*$|\0:$HOME/.local/bin|' "$ZPROFILE" 2>/dev/null || true
+  echo "✓  已追加 ~/.local/bin 到现有 .zprofile"
+else
+  echo 'export PATH="$HOME/.local/bin:$PATH"' >> "$ZPROFILE"
+  echo "✓  已创建 .zprofile，包含 ~/.local/bin"
+fi
