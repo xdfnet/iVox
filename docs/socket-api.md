@@ -133,7 +133,35 @@ while off + 4 <= len(data):
 pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 ```
 
-### 4. CLI 工具
+### 4. 状态查询 — 功能健康与权限
+
+请求头，无 body：
+
+```
+{type:status}
+```
+
+回复为 `DaemonStatus` JSON（字段语义：功能健康值 `ok` / `off` / `error:<原因>`；麦克风 `authorized` / `denied` / `notDetermined` / `restricted`）：
+
+```json
+{
+  "version": "3.2.0",
+  "features": {
+    "speechInput": "ok",
+    "wechat": "ok",
+    "mediaControl": "ok",
+    "mediaHTTP": "ok"
+  },
+  "permissions": {
+    "microphone": "authorized",
+    "deviceControl": true
+  }
+}
+```
+
+权限状态由 daemon 进程自查，反映 daemon 自身授权（非调用方终端）。`ivox status` 即此接口的中文渲染。
+
+### 5. CLI 工具
 
 ```bash
 # TTS

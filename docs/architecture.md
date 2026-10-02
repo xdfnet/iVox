@@ -106,7 +106,7 @@ await ws; await sock; await mic
 `Sources/iVox/Audio/MediaController.swift`
 
 - `MRMediaRemoteSendCommand` 系统框架直接控制媒体播放
-- 支持播放/暂停/切换/下一曲，无需辅助功能权限
+- 支持播放/暂停/切换/下一曲，无需设备控制与数据访问权限
 
 ### SpeechInput — 语音输入
 
@@ -118,7 +118,7 @@ await ws; await sock; await mic
 - **任意其他键**（除 ↓ 外）：取消 TTS + 恢复音乐
 - **方向下键 ↓**：跳到下一段 TTS
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
-- 需要辅助功能权限（`AXIsProcessTrustedWithOptions`）
+- 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 
 ### MediaHTTPServer — Web UI
 
@@ -222,7 +222,7 @@ ConnectionHandler.extractVoicePrefix():
 ~/.config/ivox/daemon.log                  # 日志（5MB 轮转）
 ```
 
-`make update` 构建 → 签名 → 拷贝二进制 → 重启守护进程（socket 存在时）。
+`make update` 停服 → 构建 → 签名 → 拷贝二进制 → 启动守护进程。
 
 ## 构建系统
 
@@ -233,7 +233,7 @@ ConnectionHandler.extractVoicePrefix():
 | Target | 作用 |
 |--------|------|
 | `make build` | `swift build -c release -Xswiftc -Osize` |
-| `make update` | build + voices + deploy-bin + 守护进程重启 |
+| `make update` | ivox off → build + voices + deploy-bin → ivox on |
 | `make run` | build + 前台运行（调试） |
 | `make test` | 运行 iVoxKit 测试 |
 

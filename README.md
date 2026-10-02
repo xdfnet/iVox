@@ -38,7 +38,7 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 ```bash
 ivox speak "你好"           # 手动播报
 ivox voice list             # 列出音色
-ivox status                 # 服务状态
+ivox status                 # 版本、各功能健康状态、麦克风/设备控制权限
 ivox listen -f 录音.wav     # 语音识别
 ivox restart                # 重启服务
 ```
@@ -66,7 +66,7 @@ ivox wechat status             # 查看配置状态
 ```bash
 make build     # release 编译（自动使用 Swift 6.4 开发快照）
 make run       # 编译 + 前台调试
-make update    # 编译 + 部署 + 重启守护进程
+make update    # 停服 + 编译 + 部署 + 启动守护进程
 make test      # 运行测试
 make clean     # 清除 .build
 ```
@@ -105,10 +105,10 @@ Claude Code / Codex → hook → Unix Socket → Daemon
 | 权限 | 用途 | 是否必需 |
 |------|------|:--------:|
 | **麦克风** | 语音输入（按住 ⌘ 键说话 → ASR） | 不用语音输入可不给 |
-| **辅助功能** | ① 监听 ⌘ 键 ② 剪贴板粘贴注入 ③ 媒体控制 | **是** |
+| **设备控制与数据访问** | ① 监听 ⌘ 键 ② 剪贴板粘贴注入 ③ 媒体控制 | **是** |
 | **代码签名** | ad-hoc 自签，每次重建哈希变化 → TCC 权限失效 | 部署后重新勾选 |
 
-辅助功能路径：系统设置 → 隐私与安全性 → 辅助功能 → 勾选 `ivox`。
+设备控制与数据访问路径：系统设置 → 隐私与安全性 → 设备控制与数据访问 → 勾选 `ivox`。
 
 > 重建二进制后 ad-hoc 签名变化，TCC 记录的权限会失效。`make deploy` 会自动重新签名，但如果权限丢了，需要去系统设置重新勾选。
 

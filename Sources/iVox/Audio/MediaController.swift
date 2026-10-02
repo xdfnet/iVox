@@ -37,7 +37,7 @@ enum MediaControllerError: LocalizedError, Sendable {
 
     var errorDescription: String? {
         switch self {
-        case .permissionDenied: return "缺少「辅助功能」权限"
+        case .permissionDenied: return "缺少「设备控制与数据访问」权限"
         case .eventCreationFailed: return "创建媒体控制事件失败"
         case .eventPostFailed: return "发送媒体控制事件失败"
         }
@@ -46,7 +46,7 @@ enum MediaControllerError: LocalizedError, Sendable {
     var recoverySuggestion: String? {
         switch self {
         case .permissionDenied:
-            return "请前往「系统设置」> 「隐私与安全性」> 「辅助功能」启用权限"
+            return "请前往「系统设置」> 「隐私与安全性」> 「设备控制与数据访问」启用权限"
         case .eventCreationFailed, .eventPostFailed:
             return "请尝试重启应用"
         }
@@ -203,7 +203,7 @@ struct MediaController {
         return .success(())
     }
 
-    /// 播放/暂停切换（通过 MediaRemote 系统媒体键，无需辅助功能权限）
+    /// 播放/暂停切换（通过 MediaRemote 系统媒体键，无需设备控制权限）
     static func playPause() async -> Result<Void, MediaControllerError> {
         guard hasMediaAppRunning() else {
             Log.info("无抖音或汽水音乐运行，跳过")
@@ -282,9 +282,9 @@ struct MediaController {
         NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.loginwindow"
     }
 
-    // MARK: - 辅助功能权限
+    // MARK: - 设备控制权限
 
-    static func checkAccessibilityPermission() -> Bool {
+    static func checkDeviceControlPermission() -> Bool {
         let key = "AXTrustedCheckOptionPrompt" as CFString
         let options = [key: false] as CFDictionary
         return AXIsProcessTrustedWithOptions(options)
@@ -295,8 +295,8 @@ struct MediaController {
     private static func withPermissionCheck<T>(
         _ operation: @escaping () async -> Result<T, MediaControllerError>
     ) async -> Result<T, MediaControllerError> {
-        guard checkAccessibilityPermission() else {
-            Log.warn("无辅助功能权限")
+        guard checkDeviceControlPermission() else {
+            Log.warn("无设备控制权限")
             return .failure(.permissionDenied)
         }
         return await operation()

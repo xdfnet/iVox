@@ -149,8 +149,8 @@ final class MediaHTTPServer: @unchecked Sendable {
         let action = String(path.dropFirst(5))
         Log.info("API 动作: \(action)")
 
-        if !Self.actionsWithoutAccessibilityCheck.contains(action) && !MediaController.checkAccessibilityPermission() {
-            let json = HTTPResponseHandler.buildJSONResponse(status: "failed", error: "缺少辅助功能权限")
+        if !Self.actionsWithoutDeviceControlCheck.contains(action) && !MediaController.checkDeviceControlPermission() {
+            let json = HTTPResponseHandler.buildJSONResponse(status: "failed", error: "缺少设备控制与数据访问权限")
             HTTPResponseHandler.sendJSON(connection, json)
             return
         }
@@ -162,11 +162,11 @@ final class MediaHTTPServer: @unchecked Sendable {
         }
     }
 
-    /// 不需要辅助功能权限的动作：
+    /// 不需要设备控制权限的动作：
     /// - 状态查询类（只读）
     /// - MediaRemote 直接调用（play/pause/next/prev — 使用私有系统框架，无需 CGEvent）
     /// - 应用切换（toggle/status — 走 NSWorkspace + open，无需 CGEvent）
-    private static let actionsWithoutAccessibilityCheck: Set<String> = [
+    private static let actionsWithoutDeviceControlCheck: Set<String> = [
         "status", "lock_status", "status_douyin", "status_qishui",
         "play", "pause", "next", "prev",
         "toggle_douyin", "toggle_qishui",

@@ -224,7 +224,7 @@
 
 - **ASR 时自动取消 TTS** — 按 Cmd 录音前先停掉正在播和待播的语音，避免音响声音被麦克风采集干扰 ASR
 - **媒体控制界面重新布局** — 顺序调整为锁屏→App→音量→播放控制
-- **播放键改为模拟空格键** — playpause 从 `MRMediaRemote` 切换改为 `CGEvent` 空格键，需要辅助功能权限
+- **播放键改为模拟空格键** — playpause 从 `MRMediaRemote` 切换改为 `CGEvent` 空格键，需要设备控制与数据访问权限
 - **锁屏改回按钮** — 滑块方案取消，保持顶部位置用红色按钮
 
 ### 修复
@@ -477,13 +477,13 @@
 
 ### 媒体控制重构
 - 从 `CGEvent` 系统媒体键改为调用 [iDict](https://github.com/xdfnet/iDict) HTTP API
-- 移除 `entitlements.plist`，不再需要辅助功能权限
+- 移除 `entitlements.plist`，不再需要设备控制与数据访问权限
 - 不再需要 Apple Development 证书签名
 - `install.sh` 简化：跳过代码签名步骤
 
 ### 文档
 - 更新 README、架构文档、CHANGELOG
-- `install.sh` 移除过时的辅助功能权限提示
+- `install.sh` 移除过时的设备控制与数据访问权限提示
 
 ## v1.1.0 — 2026-05-29
 
@@ -507,7 +507,7 @@
 
 ### 媒体控制
 - `MediaController`: CGEvent 系统媒体键，播报时自动暂停/恢复音乐
-- 用 Apple Development 证书签名，辅助功能权限持久绑定
+- 用 Apple Development 证书签名，设备控制与数据访问权限持久绑定
 - Makefile 集成 `codesign` 步骤
 
 ### 播放队列

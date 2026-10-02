@@ -158,8 +158,8 @@ struct WeChatSetupCommand: AsyncParsableCommand {
                 print("登录成功，bot_id: \(botID)")
                 print("微信配置完成")
 
-                // 引导辅助功能权限
-                await setupAccessibility()
+                // 引导设备控制权限
+                await setupDeviceControl()
 
                 // 重启 daemon 让配置生效
                 print("正在重启守护进程")
@@ -175,11 +175,11 @@ struct WeChatSetupCommand: AsyncParsableCommand {
         throw ExitCode.failure
     }
 
-    private func setupAccessibility() async {
+    private func setupDeviceControl() async {
         print()
-        print("辅助功能权限是必要条件（用于 Cmd+V 键盘注入）")
+        print("设备控制与数据访问权限是必要条件（用于 Cmd+V 键盘注入）")
         print()
-        print("   需要将 ivox 添加到辅助功能列表")
+        print("   需要将 ivox 添加到设备控制与数据访问列表")
         print()
 
         print("按 Enter 打开系统设置...", terminator: "")
@@ -193,7 +193,7 @@ struct WeChatSetupCommand: AsyncParsableCommand {
         print("   请点击 + 添加 \(AppPaths.binDir)/ivox 并勾选")
         print("   完成后按 Enter 继续...", terminator: "")
         _ = readLine()
-        print("辅助功能权限配置完成")
+        print("设备控制权限配置完成")
     }
 
     private func restartDaemon() {

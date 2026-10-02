@@ -44,6 +44,9 @@ actor WeChatPlatform {
 
     // MARK: - 生命周期
 
+    /// 长轮询是否在运行
+    var isPolling: Bool { isRunning }
+
     func start(handler: @escaping WeChatMessageHandler) {
         guard !isRunning else { return }
         isRunning = true

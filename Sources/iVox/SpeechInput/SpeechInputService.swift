@@ -78,6 +78,9 @@ final class SpeechInputService: @unchecked Sendable {
         }
     }
 
+    /// 键盘监听（eventTap）是否真正在运行；等待权限时为 false
+    var isMonitoring: Bool { stateQueue.sync { eventTap != nil } }
+
     // MARK: - Event loop
 
     private func run() {
@@ -87,34 +90,24 @@ final class SpeechInputService: @unchecked Sendable {
             return
         }
 
-        // 检查两类权限
-        let hasMic = checkMicPermission()
-        let hasAccessibility: Bool
-        if let tap = createEventTap() {
-            stateQueue.sync { eventTap = tap }
-            hasAccessibility = true
-        } else {
-            hasAccessibility = checkAccessibilityPermission()
-        }
-
-        // 缺权限则轮询等待，到手后自动重启
-        let needMic = !hasMic
-        let needAccessibility = !hasAccessibility
-        if needMic || needAccessibility {
-            stateQueue.sync {
-                if let tap = eventTap { CFMachPortInvalidate(tap); eventTap = nil }
-            }
-            waitForPermissions(needMic: needMic, needAccessibility: needAccessibility)
+        // eventTap 是键盘监听的硬前提（任意键停 / ↓ / 右⌘），需要设备控制权限。
+        // 麦克风只在录音时才需要，缺失不应连坐拆掉键盘监听。
+        guard let tap = createEventTap() else {
+            waitForPermissions()
             stateQueue.sync { runLoop = nil }
             return
         }
 
         stateQueue.sync {
-            guard !shouldStop, let tap = eventTap else { return }
+            guard !shouldStop else { return }
+            eventTap = tap
             runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         }
         Log.info("语音输入已启动 (right ⌘→说话→松开→粘贴，↓=下一段，其他键=取消)")
+
+        // 首次启动异步触发麦克风授权框，不阻塞 runloop；授权与否键盘监听都常驻
+        Task { _ = checkMicPermission() }
 
         CFRunLoopRun()
         stateQueue.sync { runLoop = nil }
@@ -164,6 +157,12 @@ final class SpeechInputService: @unchecked Sendable {
                 if case .idle = state { return true } else { return false }
             }
             guard shouldStart else { return }
+            // 麦克风仅录音时才需要；未授权只提示，不影响键盘监听
+            guard AVCaptureDevice.authorizationStatus(for: .audio) == .authorized else {
+                Log.warn("语音输入: 麦克风未授权，跳过录音（键盘控制不受影响）")
+                showOverlayThenDismiss(.error("麦克风未授权"), after: 1.5)
+                return
+            }
 
             Task { await media.pause() }
             Task { await queue.cancelAll() }
@@ -409,33 +408,14 @@ final class SpeechInputService: @unchecked Sendable {
         }
     }
 
-    /// 检查辅助功能权限，notDetermined 时弹系统对话框
-    private func checkAccessibilityPermission() -> Bool {
-        let noPrompt = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): false] as CFDictionary
-        if AXIsProcessTrustedWithOptions(noPrompt) { return true }
-        // 弹一次系统对话框
-        let prompt = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
-        AXIsProcessTrustedWithOptions(prompt)
-        Log.error("语音输入: 缺少辅助功能权限，请前往 系统设置 → 隐私与安全性 → 辅助功能 启用 iVox")
-        return false
-    }
-
-    /// 轮询等待两类权限就绪，然后自动重启
-    private func waitForPermissions(needMic: Bool, needAccessibility: Bool) {
-        var needMic = needMic
-        var needAccessibility = needAccessibility
-        while !isStopped && (needMic || needAccessibility) {
+    /// 轮询等待设备控制权限就绪，然后自动重启
+    private func waitForPermissions() {
+        while !isStopped {
             Thread.sleep(forTimeInterval: 5)
-            if needMic, AVCaptureDevice.authorizationStatus(for: .audio) == .authorized {
-                Log.info("语音输入: 麦克风已授权")
-                needMic = false
-            }
-            if needAccessibility {
-                let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
-                if AXIsProcessTrustedWithOptions(options) {
-                    Log.info("语音输入: 辅助功能已授权")
-                    needAccessibility = false
-                }
+            let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
+            if AXIsProcessTrustedWithOptions(options) {
+                Log.info("语音输入: 设备控制权限已授权")
+                break
             }
         }
         guard !isStopped else {

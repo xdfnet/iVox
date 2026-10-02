@@ -1,3 +1,4 @@
+import AVFoundation
 import Darwin
 import Foundation
 import iVoxKit
@@ -61,7 +62,13 @@ actor Daemon {
         let dir = AppPaths.configDir
         try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
 
-        let handler = ConnectionHandler(queue: queue, config: config, asrEngine: asrEngine, engine: engine)
+        let handler = ConnectionHandler(
+            queue: queue, config: config, asrEngine: asrEngine, engine: engine,
+            statusProvider: { [weak self] in
+                guard let snapshot = await self?.makeStatusSnapshot() else { return nil }
+                return try? JSONEncoder().encode(snapshot)
+            }
+        )
         try await server.start(path: socketPath, handler: handler)
 
         Log.info("iVox 已启动，监听 \(socketPath)")
@@ -80,6 +87,65 @@ actor Daemon {
         }
 
         await cleanup()
+    }
+
+    /// 汇总各功能真实运行开关与两个权限状态，供 socket `{type:status}` 返回。
+    func makeStatusSnapshot() async -> DaemonStatus {
+        let micStatus = AVCaptureDevice.authorizationStatus(for: .audio)
+        let mic: String
+        switch micStatus {
+        case .authorized: mic = "authorized"
+        case .denied: mic = "denied"
+        case .restricted: mic = "restricted"
+        case .notDetermined: mic = "notDetermined"
+        @unknown default: mic = "unknown"
+        }
+
+        // 各功能健康结论：区分 未启用 / 正常 / 异常原因
+        let siEnabled = config.speechInput?.enabled ?? SpeechInputConfig.default.enabled
+        let speech: String
+        if !siEnabled {
+            speech = "off"
+        } else if speechInput?.isMonitoring != true {
+            speech = "error:键盘监听未运行"
+        } else if micStatus != .authorized {
+            speech = "error:麦克风未授权"
+        } else {
+            speech = "ok"
+        }
+
+        let wechatHealth: String
+        if config.wechat?.enabled != true {
+            wechatHealth = "off"
+        } else if await wechat?.isPolling == true {
+            wechatHealth = "ok"
+        } else {
+            wechatHealth = "error:长轮询未运行"
+        }
+
+        let mc = config.resolvedMediaControl
+        let webUI: String
+        if !mc.resolvedHTTPServerEnabled {
+            webUI = "off"
+        } else if mediaHTTPServer?.isRunning == true {
+            webUI = "ok"
+        } else {
+            webUI = "error:Web 服务未监听"
+        }
+
+        return DaemonStatus(
+            version: iVoxVersion,
+            features: .init(
+                speechInput: speech,
+                wechat: wechatHealth,
+                mediaControl: mc.enabled ? "ok" : "off",
+                mediaHTTP: webUI
+            ),
+            permissions: .init(
+                microphone: mic,
+                deviceControl: MediaController.checkDeviceControlPermission()
+            )
+        )
     }
 
     /// 注册 POSIX 信号（SIGINT/SIGTERM）监听，收到后触发优雅 shutdown。

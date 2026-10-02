@@ -7,12 +7,15 @@ actor ConnectionHandler {
     private let config: Config
     private let asrEngine: ASREngine
     private let engine: TTSEngine
+    private let statusProvider: @Sendable () async -> Data?
 
-    init(queue: PlaybackQueue, config: Config, asrEngine: ASREngine, engine: TTSEngine) {
+    init(queue: PlaybackQueue, config: Config, asrEngine: ASREngine, engine: TTSEngine,
+         statusProvider: @escaping @Sendable () async -> Data?) {
         self.queue = queue
         self.config = config
         self.asrEngine = asrEngine
         self.engine = engine
+        self.statusProvider = statusProvider
     }
 
     nonisolated func handle(fd: Int32) {
@@ -40,6 +43,9 @@ actor ConnectionHandler {
             } else if header.contains("type:tts") {
                 Log.debug("TTS PCM 请求: header=\(header) text_bytes=\(body.count)")
                 handleTTSPCM(fd: fd, header: header, body: body)
+            } else if header.contains("type:status") {
+                Log.debug("状态查询请求")
+                handleStatus(fd: fd)
             } else {
                 handleTTS(fd: fd, data: data)
             }
@@ -98,6 +104,17 @@ actor ConnectionHandler {
                 Log.info("ASR 识别完成 [\(text.prefix(60))]")
             } catch {
                 Log.error("ASR 识别失败: \(error)")
+            }
+        }
+    }
+
+    /// 返回守护进程状态 JSON（请求-响应）
+    private nonisolated func handleStatus(fd: Int32) {
+        let provider = statusProvider
+        Task {
+            defer { Darwin.close(fd) }
+            if let json = await provider() {
+                _ = writeAll(json, to: fd)
             }
         }
     }

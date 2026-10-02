@@ -22,9 +22,10 @@ install:
 	@echo "✓  iVox 已就绪（手动启动: ~/.local/bin/ivox start）"
 
 update:
+	@~/.local/bin/ivox off 2>/dev/null || true
 	@$(MAKE) build voices
 	@$(RUNTIME) deploy-bin
-	@if [ -S "$(HOME)/.config/ivox/ivox.sock" ]; then ~/.local/bin/ivox restart; fi
+	@~/.local/bin/ivox on
 	@echo "✓  iVox 已更新"
 
 check:
@@ -76,7 +77,7 @@ help:
 	@echo "iVox 构建系统"
 	@echo ""
 	@echo "  make / make install = 首次安装"
-	@echo "  make update         = 编译 + 部署 + 重启"
+	@echo "  make update         = 停服 + 编译 + 部署 + 启动"
 	@echo "  make run            = 编译 + 前台调试"
 	@echo "  make test           = 运行测试"
 	@echo "  make build          = 编译 release"

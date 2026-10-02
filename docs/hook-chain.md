@@ -174,7 +174,7 @@ AST 提取文本后，只做小范围 token 清理：
 - 播放完调 iDict HTTP API → 恢复音乐
 - 地址、暂停路径、恢复路径由 `mediaControl` 配置控制
 - 不需要媒体控制时可设置 `mediaControl.enabled=false`
-- 不依赖辅助功能权限
+- 不依赖设备控制与数据访问权限
 
 ### 8. TTSEngine
 
