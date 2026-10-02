@@ -7,6 +7,11 @@
 - **微信常驻 Claude Agent 桥（后台任务跨消息存活）** — 原方案每收到一条微信消息就拉起一次 `claude --print`，进程回复后立即退出：`--resume` 只能恢复对话历史，后台任务（dev server、测试 watch、长脚本）随进程结束被带走。改用官方 `@anthropic-ai/claude-agent-sdk` 起单进程常驻 node sidecar（`bridge.messenger.mjs`），底层 claude 全程不退出，agent 可随时读日志、继续操作。关键机制：`query()` 的 prompt 传入一个**永不关闭的异步消息队列**——传字符串会被 SDK 判为单轮、result 后主动关闭 stdin；各轮消息都 push 进同一队列。真机验证：第一条起后台 `sleep 300`，第二条在同一座 agent 查到「还在」，两轮 `session_id` 一致。
   - **桥与微信彻底解耦** — stdio NDJSON 协议无 `user` 字段（请求 `{id, text, cwd}`，事件 `{id, type, text?, session_id?}`），全局单个常驻 agent，谁都能调。工作目录固定为隔离目录 `~/.config/ivox/wechat/workspace`；桥与 SDK 部署在 `~/.config/ivox/bridge/`，由新增的 `scripts/install-bridge-sdk.sh` 安装（npmmirror 兜底）。闲置 30 分钟自动回收，下条消息用 `session_id` resume 恢复。
 - **微信侧收敛为单用户** — 扫码只注册一个用户、重新扫码覆盖。`tokens` 字典改为单个 `userID` + `contextToken`，状态落盘由 `context_tokens.json`（复数）改为 `context_token.json`；白名单从「逗号多人 + `*` 通配」简化为精确匹配扫码注册的那一个；多用户 typing ticket 字典改为单张 ticket；`sendMessage` / `sendTyping` 去掉 userID 参数。
+- **`/new` 开新会话** — 常驻会话的上下文会随轮次持续累积，微信发 `/new` 即关闭当前 agent、清掉桥记录的 `session_id` 指针（旧会话在 claude 侧仍保留，只是不再 resume），回「已开启新会话」；下条消息全新启动、上下文从零开始。该命令在桥层处理，与微信解耦，任何调用方都可用。
+
+### 变更
+
+- **常驻 Agent 权限改为最大** — `permissionMode` 从 `acceptEdits`（自动接受编辑、风险命令仍确认）改为 `bypassPermissions`（跳过所有权限检查，shell/联网/删除等全自动执行，无确认打断）。
 
 ### 文档
 

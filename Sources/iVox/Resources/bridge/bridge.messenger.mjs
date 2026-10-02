@@ -86,8 +86,27 @@ async function pump() {
   }
 }
 
+// 重置会话：关闭当前 agent、清 session_id，下条消息开新会话
+function resetSession() {
+  clearTimeout(idleTimer);
+  stream?.close();
+  stream = null;
+  saveState({ session_id: null });
+  while (waiters.length) {
+    waiters.shift()({ is_error: true, result: "会话已被 /new 重置" });
+  }
+}
+
 function handle(req) {
   const { id, text, cwd } = req;
+
+  // /new：开新会话，不发给模型
+  if (text.trim() === "/new") {
+    resetSession();
+    emit({ id, type: "done", text: "已开启新会话" });
+    return;
+  }
+
   armIdle();
 
   try {
@@ -101,7 +120,7 @@ function handle(req) {
           cwd,
           env: { ...process.env },
           model: process.env.ANTHROPIC_MODEL,
-          permissionMode: "acceptEdits",
+          permissionMode: "bypassPermissions",
           stderrToFile: join(bridgeDir, "stderr.log"),
           ...(state.session_id ? { resume: state.session_id } : {}),
         },

@@ -91,6 +91,7 @@ Daemon (actor)
 - agent 的工作目录固定为 `~/.config/ivox/wechat/workspace`，读写收敛在隔离目录。
 - 桥脚本与 SDK 部署在 `~/.config/ivox/bridge/`，由 `scripts/install-bridge-sdk.sh` 安装（npmmirror 兜底）。
 - Daemon `cleanup()` 中 `await claudeAsk.stop()` 主动等桥退出后再 exit，避免重启时新旧桥并存。
+- 权限模式 `bypassPermissions`（最大权限，全自动免确认）；发 `/new` 关闭当前 agent、清 session_id 指针开新会话。
 
 ### SocketServer — Unix Domain Socket IPC
 
