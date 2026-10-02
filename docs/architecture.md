@@ -226,7 +226,7 @@ ConnectionHandler.extractVoicePrefix():
 
 ## 构建系统
 
-`Makefile` 使用 `TOOLCHAINS=swift-6.3.2-RELEASE`（Swift 6.4 快照在编译 MLXAudioTTS 时有编译器崩溃，见 [`archive/incident-swift-compiler-crash.md`](archive/incident-swift-compiler-crash.md)）。
+`Makefile` 使用 `xcrun --toolchain swift-latest swift`，符号链接指向 Swift 6.4 开发快照（`swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`）。早期快照编译 MLXAudioTTS 的崩溃已在该版本修复，见 [`archive/incident-swift-compiler-crash.md`](archive/incident-swift-compiler-crash.md)。
 
 关键 target：
 

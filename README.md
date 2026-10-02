@@ -26,10 +26,10 @@
 ## 安装
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/master/scripts/install-binary.sh | bash
+curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-binary.sh | bash
 ```
 
-需要编译？克隆后 `make` 即可（需 Swift 6.3.2 + Xcode 26+）。
+需要编译？克隆后 `make` 即可（需 Swift 6.4 开发快照 + Xcode 26+）。
 
 ## 使用
 
@@ -64,14 +64,14 @@ ivox wechat status             # 查看配置状态
 ## 开发
 
 ```bash
-make build     # release 编译（自动使用 Swift 6.3.2）
+make build     # release 编译（自动使用 Swift 6.4 开发快照）
 make run       # 编译 + 前台调试
 make update    # 编译 + 部署 + 重启守护进程
 make test      # 运行测试
 make clean     # 清除 .build
 ```
 
-Swift 6.4 快照有编译器 bug（MLXAudioTTS 在 `-O` 下崩溃），详见 [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)。
+> 需要 Swift 6.4 开发快照（`swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`）。早期快照的编译器崩溃已在该版本修复，详见 [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)。
 
 ## 配置
 
