@@ -1,5 +1,5 @@
 // iVox TTS bridge for DeepSeek Harness (dsh).
-// 每轮回复结束时，把最后一条 assistant 消息原文直接交给 ivox hook.sh。
+// 每轮回复结束时，按 dsh 官方的「最终输出」规则取出该轮文本，直接交给 ivox hook.sh。
 // 取代旧方案「Stop hook -> 回头读 sessions/*.zstd 取文本」：
 // 不解 zstd、不猜 session 目录名、不轮询等刷盘、无「播到上一轮」竞态。
 // 挂载（profile 的 cordis.patch.yml）：
@@ -16,8 +16,7 @@ export const inject = [];
 const HOOK = join(homedir(), ".config", "ivox", "hook.sh");
 
 // 拼出一条 assistant 消息的纯文本（跳过 tool_use / reasoning 等块）
-function textOf(message) {
-var content = (message || {}).content;
+function textOfContent(content) {
 if (Array.isArray(content)) {
 var out = "";
 for (var i = 0; i < content.length; i++) {
@@ -31,12 +30,35 @@ return out;
 return "";
 }
 
+function textOf(message) {
+return textOfContent((message || {}).content);
+}
+
+// 一条 durable 事件里累积的流式文本（dsh-llm 的 joinAssistantStreamText 同款取法）。
+// 只在没有任何非空 assistant 消息时兜底用。
+function streamTextOf(stream) {
+if (!Array.isArray(stream)) return "";
+var out = "";
+for (var i = 0; i < stream.length; i++) {
+var record = stream[i] || {};
+if (record.type === "text-chunks" && Array.isArray(record.texts)) {
+out += record.texts.join("");
+} else if (record.type === "chunk" && record.chunk && record.chunk.type === "text-delta") {
+if (typeof record.chunk.text === "string") out += record.chunk.text;
+}
+}
+return out;
+}
+
 export function apply(ctx, config) {
 config = config || {};
 var hookScript = config.hookScript || HOOK;
 var source = config.source || "dsh";
-// session.id -> 本轮最后一条 assistant 文本
-var buffered = new Map();
+// 选取规则复刻 dsh-subagent 的 AssistantOutputFold（官方「最终输出」定义）：
+// 取最后一条**内容非空**的 assistant 消息；内容为空的消息（max-tokens 且无可执行块）
+// 不覆盖它。若始终没有非空消息，则退回流式累积文本。
+var lastMessage = new Map(); // session.id -> content[]（最后一条非空 assistant 消息）
+var streamed = new Map();    // session.id -> 流式累积文本（兜底）
 // 子代理会话 id：不播报，避免一次提问念多遍
 var subs = new Set();
 
@@ -61,27 +83,35 @@ if (child && child.session) subs.delete(child.session.id);
 // 每个 step 都会落一条 assistant/message（含带工具调用的中间回复），
 // 所以只缓存，整轮结束时取最后一条。
 ctx.on("session/event", function (session, event) {
-if (event && event.type === "assistant/message") {
+if (!event) return;
+if (event.type !== "assistant/message" && event.type !== "assistant/attempt") return;
 var data = event.data || {};
-var text = textOf(data.message);
-if (text.trim().length > 0) buffered.set(session.id, text);
+if (event.type === "assistant/message") {
+var content = (data.message || {}).content;
+if (Array.isArray(content) && content.length > 0) lastMessage.set(session.id, content);
+}
+var piece = streamTextOf(data.stream);
+if (piece.length > 0) {
+var acc = streamed.get(session.id);
+streamed.set(session.id, acc === undefined ? piece : acc + piece);
 }
 });
 
 ctx.on("agent/turn-stopping", function (args) {
 var session = args && args.agent && args.agent.session;
-if (session) {
-var text = buffered.get(session.id);
-if (text) {
-buffered.delete(session.id);
+if (!session) return;
+var content = lastMessage.get(session.id);
+var text = content !== undefined ? textOfContent(content) : (streamed.get(session.id) || "");
+lastMessage.delete(session.id);
+streamed.delete(session.id);
+if (text.trim().length === 0) return;
 if (subs.has(session.id)) return;
 deliver(session, text);
-}
-}
 });
 
 ctx.on("session/disposed", function (session) {
-buffered.delete(session.id);
+lastMessage.delete(session.id);
+streamed.delete(session.id);
 subs.delete(session.id);
 });
 
