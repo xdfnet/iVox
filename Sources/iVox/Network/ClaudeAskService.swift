@@ -1,136 +1,169 @@
 import Foundation
 import iVoxKit
 
-// MARK: - Claude CLI 调用服务
+// MARK: - 常驻 Claude Agent 桥（node sidecar）
 
 actor ClaudeAskService {
-    private let sessionsFile: String
-    private let claudePath: String
+    private let workDir: String
+    private let bridgeDir: String
+    private let bridgeScript: String
     private let timeoutSeconds: Int
-    private var sessions: [String: String] = [:]  // userID -> sessionID
-    private var pending: [String: Task<String, Error>] = [:]  // 并发控制
 
-    init(dataDir: String, claudePath: String = "/usr/local/bin/claude", timeoutSeconds: Int = 120) {
-        self.sessionsFile = dataDir + "/sessions.json"
-        self.claudePath = claudePath
+    private let proc: Process
+    private let stdinPipe: Pipe
+    private let stdoutPipe: Pipe
+
+    private var nextID = 0
+    private var pending: [String: CheckedContinuation<String, Error>] = [:]
+    private var stdoutBuffer = Data()
+
+    init(dataDir: String, claudePath _: String = "", timeoutSeconds: Int = 120) {
+        self.workDir = dataDir + "/workspace"
+        self.bridgeDir = NSString(string: "~/.config/ivox/bridge").expandingTildeInPath
+        self.bridgeScript = bridgeDir + "/bridge.messenger.mjs"
         self.timeoutSeconds = timeoutSeconds
-        // 同步加载已有 sessions
-        if FileManager.default.fileExists(atPath: sessionsFile),
-           let data = try? Data(contentsOf: URL(fileURLWithPath: sessionsFile)),
-           let loaded = try? JSONDecoder().decode([String: String].self, from: data) {
-            self.sessions = loaded
+
+        try? FileManager.default.createDirectory(atPath: workDir, withIntermediateDirectories: true)
+
+        proc = Process()
+        proc.executableURL = URL(fileURLWithPath: Self.resolveNode())
+        proc.arguments = [bridgeScript]
+        proc.currentDirectoryURL = URL(fileURLWithPath: bridgeDir)
+
+        var env = ProcessInfo.processInfo.environment
+        env["ANTHROPIC_MODEL"] = env["ANTHROPIC_MODEL"] ?? "doubao-seed-2.0-mini"
+        env["CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT"] = "1"
+        proc.environment = env
+
+        stdinPipe = Pipe()
+        stdoutPipe = Pipe()
+        proc.standardInput = stdinPipe
+        proc.standardOutput = stdoutPipe
+        proc.standardError = Pipe()
+
+        Self.installStdoutReader(on: stdoutPipe.fileHandleForReading) { [weak self] chunk in
+            Task { await self?.consume(chunk: chunk) }
         }
+        try? proc.run()
+        Log.info("Claude 桥已启动: \(Self.resolveNode()) \(bridgeScript)")
     }
 
     // MARK: - 公开接口
 
-    /// 向 Claude 提问，返回回复文本
-    func ask(userID: String, text: String) async throws -> String {
-        // 并发控制：同一 userID 排队
-        if let existing = pending[userID] {
-            return try await existing.value
+    /// 向常驻 agent 提问，返回本轮回复文本
+    func ask(text: String) async throws -> String {
+        let id = String(format: "%08x", consumeID())
+        let req = ["id": id, "text": text, "cwd": workDir]
+        guard let line = try? JSONEncoder().encode(req) else {
+            throw WeChatError.unknown("请求编码失败")
         }
-        let task = Task { try await askInternal(userID: userID, text: text) }
-        pending[userID] = task
-        defer { pending.removeValue(forKey: userID) }
-        return try await task.value
+        return try await withCheckedThrowingContinuation { continuation in
+            pending[id] = continuation
+            stdinPipe.fileHandleForWriting.write(line)
+            stdinPipe.fileHandleForWriting.write(Data("\n".utf8))
+            armTimeout(id: id)
+        }
+    }
+
+    /// 停止桥：关 stdin，等待退出，超时强杀
+    func stop() async {
+        stdinPipe.fileHandleForWriting.closeFile()
+        for _ in 0..<60 where proc.isRunning {
+            try? await Task.sleep(nanoseconds: 50_000_000)
+        }
+        if proc.isRunning { proc.terminate() }
+        failAllPending(WeChatError.unknown("桥已停止"))
+        Log.info("Claude 桥已停止")
     }
 
     // MARK: - 内部
 
-    private func askInternal(userID: String, text: String) async throws -> String {
-        let sessionID = sessions[userID]
-        let args: [String]
-        let isNewSession: Bool
-
-        if let sid = sessionID {
-            // 继续已有 session
-            args = ["--print", "--resume", sid, text]
-            isNewSession = false
-            Log.info("🤖 ask: claude --print --resume \(sid.prefix(8))… \(text.prefix(20))…")
-        } else {
-            // 首次创建 session
-            let newSID = UUID().uuidString.lowercased()
-            args = ["--print", "--session-id", newSID, text]
-            sessions[newSID] = userID  // 反向映射方便后续查找
-            isNewSession = true
-            Log.info("🤖 ask: claude --print --session-id \(newSID.prefix(8))… (首次创建) \(text.prefix(20))…")
-        }
-
-        let output = try await runClaude(args: args)
-
-        // 解析回复（去掉 stderr 的 model warnings）
-        let response = extractResponse(from: output)
-
-        // 如果是首次，保存 session 映射
-        if isNewSession {
-            // 确认 session 被创建了（输出包含 claude-code: 说明 claude 正常响应）
-            if output.contains("[claude-code:") {
-                if let sid = sessions.first(where: { $0.value == userID })?.key {
-                    sessions[userID] = sid
-                    try persistSessions()
-                }
-            }
-        }
-
-        return response
+    private func consumeID() -> Int {
+        nextID += 1
+        return nextID
     }
 
-    private func runClaude(args: [String]) async throws -> String {
-        try await withCheckedThrowingContinuation { continuation in
-            let proc = Process()
-            proc.executableURL = URL(fileURLWithPath: claudePath)
-            proc.arguments = args
-            proc.currentDirectoryURL = URL(fileURLWithPath: NSHomeDirectory())
-            var env = ProcessInfo.processInfo.environment
-            env["CLAUDE_CODE_DISABLE_UNKNOWN_MODEL_WINDOW_ENFORCEMENT"] = "1"
-            env["ANTHROPIC_MODEL"] = "doubao-seed-2.0-mini"
-            proc.environment = env
-
-            let pipe = Pipe()
-            proc.standardOutput = pipe
-            proc.standardError = pipe
-
-            // 超时 timer
-            let timeoutTask = Task {
-                try await Task.sleep(nanoseconds: UInt64(timeoutSeconds) * 1_000_000_000)
-                if proc.isRunning {
-                    proc.terminate()
-                    Log.warn("🤖 claude 调用超时 (\(timeoutSeconds)s)，已强制终止")
-                }
-            }
-
-            do {
-                try proc.run()
-                proc.waitUntilExit()
-                timeoutTask.cancel()
-
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? ""
-                continuation.resume(returning: output)
-            } catch {
-                timeoutTask.cancel()
-                continuation.resume(throwing: error)
-            }
+    private func armTimeout(id: String) {
+        let seconds = timeoutSeconds
+        Task { [weak self] in
+            try? await Task.sleep(nanoseconds: UInt64(seconds) * 1_000_000_000)
+            await self?.resolve(id: id, result: .failure(WeChatError.unknown("等待回复超时 (\(seconds)s)")))
         }
     }
 
-    /// 从完整输出中提取纯回复文本（去掉 stderr 的 warnings）
-    private func extractResponse(from output: String) -> String {
-        var lines = output.split(separator: "\n", omittingEmptySubsequences: false)
-        // 去掉第一行（如果有 [claude-code:unrecognized_model] 等 warnings）
-        if let first = lines.first, first.contains("[claude-code:") {
-            lines.removeFirst()
-        }
-        return lines.joined(separator: "\n").trimmingCharacters(in: .whitespacesAndNewlines)
+    private func resolve(id: String, result: Result<String, Error>) {
+        guard let cont = pending.removeValue(forKey: id) else { return }
+        cont.resume(with: result)
     }
 
-    // MARK: - 持久化
+    private func failAllPending(_ error: Error) {
+        for (_, cont) in pending { cont.resume(throwing: error) }
+        pending.removeAll()
+    }
 
-    private func persistSessions() throws {
-        let dir = (sessionsFile as NSString).deletingLastPathComponent
-        try FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true)
-        let data = try JSONEncoder().encode(sessions)
-        try data.write(to: URL(fileURLWithPath: sessionsFile))
+    private nonisolated static func installStdoutReader(
+        on handle: FileHandle,
+        onChunk: @escaping @Sendable (Data) -> Void
+    ) {
+        handle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            onChunk(chunk)
+        }
+    }
+
+    private func consume(chunk: Data) {
+        stdoutBuffer.append(chunk)
+        while let nl = stdoutBuffer.firstIndex(of: 0x0A) {
+            let lineData = stdoutBuffer.subdata(in: 0..<nl)
+            stdoutBuffer.removeSubrange(0...nl)
+            guard !lineData.isEmpty,
+                  let evt = try? JSONDecoder().decode(BridgeEvent.self, from: lineData) else { continue }
+            handleEvent(evt)
+        }
+    }
+
+    private func handleEvent(_ e: BridgeEvent) {
+        switch e.type {
+        case "done":
+            resolve(id: e.id, result: .success(e.text ?? ""))
+        case "error":
+            resolve(id: e.id, result: .failure(WeChatError.unknown(e.message ?? "桥错误")))
+        default:
+            break
+        }
+    }
+
+    private nonisolated static func resolveNode() -> String {
+        let candidates = ["/opt/homebrew/bin/node", "/usr/local/bin/node", "/usr/bin/node"]
+        if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
+            return found
+        }
+        let p = Process()
+        p.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        p.arguments = ["which", "node"]
+        let pipe = Pipe()
+        p.standardOutput = pipe
+        p.standardError = Pipe()
+        try? p.run()
+        p.waitUntilExit()
+        let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return out.isEmpty ? "/opt/homebrew/bin/node" : out
+    }
+}
+
+// MARK: - 桥事件模型
+
+private struct BridgeEvent: Codable, Sendable {
+    let id: String
+    let type: String
+    let text: String?
+    let message: String?
+    let sessionID: String?
+
+    enum CodingKeys: String, CodingKey {
+        case id, type, text, message
+        case sessionID = "session_id"
     }
 }

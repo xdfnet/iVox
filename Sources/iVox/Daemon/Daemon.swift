@@ -225,22 +225,22 @@ actor Daemon {
         }
 
         // ① 发 start typing
-        await wechat?.sendTyping(userID: msg.fromUserID, status: .start)
+        await wechat?.sendTyping(status: .start)
 
         do {
-            // ② 调 Claude CLI 获取回复
-            let response = try await claudeAsk.ask(userID: msg.fromUserID, text: msg.content)
+            // ② 调常驻桥获取回复
+            let response = try await claudeAsk.ask(text: msg.content)
 
             // ③ 发 stop typing（"正在输入"先消失，再出现消息）
-            await wechat?.sendTyping(userID: msg.fromUserID, status: .stop)
+            await wechat?.sendTyping(status: .stop)
 
             // ④ 发微信回复
-            try await wechat?.sendMessage(to: msg.fromUserID, text: response)
-            Log.info("📤 已发送 \(response.count) 字符 → \(msg.fromUserID.prefix(20))…")
-            //   TTS 由 claude --print 完成后的 Stop Hook 触发，不在这里处理
+            try await wechat?.sendMessage(text: response)
+            Log.info("📤 已发送 \(response.count) 字符")
+            //   TTS 由 claude 完成后的 Stop Hook 触发，不在这里处理
         } catch {
             // 异常时也要发 stop typing，避免"正在输入"一直显示
-            await wechat?.sendTyping(userID: msg.fromUserID, status: .stop)
+            await wechat?.sendTyping(status: .stop)
             Log.error("❌ Claude 请求失败: \(error)")
         }
     }
@@ -249,6 +249,7 @@ actor Daemon {
     private func cleanup() async {
         Log.info("守护进程退出清理")
         await wechat?.stop()
+        await claudeAsk?.stop()
         speechInput?.stop()
         mediaHTTPServer?.stop()
         await server.stop()

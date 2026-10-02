@@ -14,14 +14,15 @@ actor WeChatPlatform {
     private var pollTask: Task<Void, Never>?
     private var isRunning = false
 
-    // 状态持久化
+    // 状态持久化（单用户：扫码只注册一个微信用户，重新扫码覆盖）
     private var dataDir: String
     private var syncBuf = ""
-    private var tokens: [String: String] = [:]
+    private var userID = ""
+    private var contextToken = ""
     private var dedup: [String: Date] = [:]
 
     // Typing
-    private var typingTickets: [String: TypingTicketCache] = [:]
+    private var typingTicket: TypingTicketCache?
     private let typingTTL: TimeInterval = 600 // 10 min
 
     init(config: WeChatConfig) {
@@ -36,9 +37,10 @@ actor WeChatPlatform {
            let buf = String(data: data, encoding: .utf8) {
             self.syncBuf = buf
         }
-        if let data = try? Data(contentsOf: URL(fileURLWithPath: dir + "/context_tokens.json")),
-           let tokens = try? JSONDecoder().decode([String: String].self, from: data) {
-            self.tokens = tokens
+        if let data = try? Data(contentsOf: URL(fileURLWithPath: dir + "/context_token.json")),
+           let state = try? JSONDecoder().decode(SingleUserState.self, from: data) {
+            self.userID = state.userID
+            self.contextToken = state.contextToken
         }
     }
 
@@ -66,17 +68,12 @@ actor WeChatPlatform {
 
     // MARK: - 消息发送
 
-    func sendMessage(to userID: String, text: String) async throws {
-        guard let token = tokens[userID] else {
-            throw WeChatError.unknown("没有找到用户 \(userID) 的 context_token")
+    func sendMessage(text: String) async throws {
+        guard !contextToken.isEmpty else {
+            throw WeChatError.unknown("没有 context_token")
         }
-        try await sendMessageChunked(to: userID, text: text, contextToken: token)
-    }
-
-    private func sendMessageChunked(to userID: String, text: String, contextToken: String) async throws {
         let maxChunk = 3800
-        let chunks = splitRunes(text, max: maxChunk)
-        for (i, chunk) in chunks.enumerated() {
+        for (i, chunk) in splitRunes(text, max: maxChunk).enumerated() {
             if i > 0 { try await Task.sleep(nanoseconds: 100_000_000) }
             let cid = "ivox-" + randomHex(6)
             try await client.sendText(to: userID, text: chunk, contextToken: contextToken, clientID: cid)
@@ -85,23 +82,22 @@ actor WeChatPlatform {
 
     // MARK: - Typing 指示器
 
-    /// 发 typing 指示器（简化版，直接发 start/stop）
-    func sendTyping(userID: String, status: TypingStatus) async {
-        guard let token = tokens[userID] else { return }
+    func sendTyping(status: TypingStatus) async {
+        guard !contextToken.isEmpty else { return }
         do {
-            let ticket = try await getOrFetchTypingTicket(userID: userID, contextToken: token)
+            let ticket = try await getOrFetchTypingTicket()
             try await client.sendTyping(userID: userID, ticket: ticket, status: status)
         } catch {
             Log.warn("发送 typing 失败: \(error)")
         }
     }
 
-    private func getOrFetchTypingTicket(userID: String, contextToken: String) async throws -> String {
-        if let cached = typingTickets[userID], Date().timeIntervalSince(cached.fetchedAt) < typingTTL {
+    private func getOrFetchTypingTicket() async throws -> String {
+        if let cached = typingTicket, Date().timeIntervalSince(cached.fetchedAt) < typingTTL {
             return cached.value
         }
         let ticket = try await client.getTypingTicket(userID: userID, contextToken: contextToken)
-        typingTickets[userID] = TypingTicketCache(value: ticket, fetchedAt: Date())
+        typingTicket = TypingTicketCache(value: ticket, fetchedAt: Date())
         return ticket
     }
 
@@ -161,14 +157,14 @@ actor WeChatPlatform {
         guard let msgType = m.messageType, msgType == MessageType.user.rawValue || msgType == 0 else { return }
         guard let from = m.fromUserID?.trimmingCharacters(in: .whitespaces), !from.isEmpty else { return }
 
-        // Allow list 过滤
-        guard isAllowed(from) else {
-            Log.warn("用户 \(from) 不在 allow_from 列表中，已忽略")
+        // 单用户白名单：只认扫码注册的那一个
+        guard from == config.allowFrom else {
+            Log.warn("用户 \(from) 不是已注册用户，已忽略")
             return
         }
 
         // 去重
-        let dk = "\(from)|\(m.messageID ?? 0)|\(m.createTimeMs ?? 0)"
+        let dk = "\(m.messageID ?? 0)|\(m.createTimeMs ?? 0)"
         let now = Date()
         dedup = dedup.filter { now.timeIntervalSince($0.value) < 300 } // 5 min 清理
         if dedup[dk] != nil { return }
@@ -176,8 +172,9 @@ actor WeChatPlatform {
 
         // 保存 context_token
         if let tok = m.contextToken?.trimmingCharacters(in: .whitespaces), !tok.isEmpty {
-            tokens[from] = tok
-            persistTokens()
+            userID = from
+            contextToken = tok
+            persistState()
         }
 
         // 提取文本
@@ -187,7 +184,7 @@ actor WeChatPlatform {
         let incoming = IncomingMessage(
             fromUserID: from,
             content: body,
-            contextToken: m.contextToken?.trimmingCharacters(in: .whitespaces) ?? "",
+            contextToken: contextToken,
             messageID: msgID
         )
         await handler(incoming)
@@ -201,20 +198,12 @@ actor WeChatPlatform {
         try? syncBuf.write(toFile: path, atomically: true, encoding: .utf8)
     }
 
-    private func persistTokens() {
-        let path = dataDir + "/context_tokens.json"
+    private func persistState() {
+        let path = dataDir + "/context_token.json"
         try? FileManager.default.createDirectory(atPath: dataDir, withIntermediateDirectories: true)
-        if let data = try? JSONEncoder().encode(tokens) {
+        if let data = try? JSONEncoder().encode(SingleUserState(userID: userID, contextToken: contextToken)) {
             try? data.write(to: URL(fileURLWithPath: path))
         }
-    }
-
-    // MARK: - 工具
-
-    private func isAllowed(_ userID: String) -> Bool {
-        let allow = config.allowFrom.trimmingCharacters(in: .whitespaces)
-        if allow.isEmpty || allow == "*" { return true }
-        return allow.split(separator: ",").contains { $0.trimmingCharacters(in: .whitespaces) == userID }
     }
 
     nonisolated private func extractText(_ items: [MessageItem]?) -> String? {
@@ -232,6 +221,11 @@ actor WeChatPlatform {
 }
 
 // MARK: - 辅助类型
+
+private struct SingleUserState: Codable, Sendable {
+    let userID: String
+    let contextToken: String
+}
 
 struct TypingTicketCache: Sendable {
     let value: String

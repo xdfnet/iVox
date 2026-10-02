@@ -19,12 +19,14 @@ install:
 	@$(MAKE) models
 	@$(MAKE) build voices
 	@$(RUNTIME) deploy-bin
+	@scripts/install-bridge-sdk.sh
 	@echo "✓  iVox 已就绪（手动启动: ~/.local/bin/ivox start）"
 
 update:
 	@~/.local/bin/ivox off 2>/dev/null || true
 	@$(MAKE) build voices
 	@$(RUNTIME) deploy-bin
+	@scripts/install-bridge-sdk.sh
 	@~/.local/bin/ivox on
 	@echo "✓  iVox 已更新"
 

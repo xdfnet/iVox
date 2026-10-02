@@ -19,7 +19,7 @@
 
 | 🗣️ AI 自动播报 | 🎙️ 语音输入 | 💬 微信桥接 |
 |:---:|:---:|:---:|
-| Claude Code / Codex 回复自动朗读<br>跳过代码和噪音，只说人话<br>按 ⌦ 跳到下一个 | 按住 ⌘ 键说话，松开识别粘贴<br>屏幕浮窗实时显示录音波形与状态<br>纯语音输入，不碰键盘 | 微信消息→注入 Claude Code<br>AI 回复自动转发回微信 |
+| Claude Code / Codex 回复自动朗读<br>跳过代码和噪音，只说人话<br>按 ⌦ 跳到下一个 | 按住 ⌘ 键说话，松开识别粘贴<br>屏幕浮窗实时显示录音波形与状态<br>纯语音输入，不碰键盘 | 微信消息→常驻 Claude Agent<br>后台任务跨消息持续运行<br>AI 回复自动转发回微信 |
 
 播报前暂停音乐，播完自动恢复。一条命令安装，守护进程自启动。
 
@@ -94,9 +94,12 @@ make clean     # 清除 .build
 Claude Code / Codex → hook → Unix Socket → Daemon
                                             ├── TTSEngine (本地 MLX)
                                             ├── WeChatPlatform (ilink 长轮询)
+                                            │       └─ 常驻 Agent 桥 (node + Agent SDK)
                                             ├── SpeechInput (⌘ 键 + ASR)
                                             └── MediaHTTPServer (Web UI)
 ```
+
+微信消息经守护进程转发给一个常驻 node 桥，每个微信用户绑定一个不退出的 Claude Agent，后台任务可跨消息持续运行；Agent 工作目录隔离在 `~/.config/ivox/wechat/workspace`。
 
 详见 [架构文档](docs/architecture.md)。
 
@@ -116,6 +119,7 @@ Claude Code / Codex → hook → Unix Socket → Daemon
 
 - macOS 14+ / Apple Silicon
 - Swift 6.3.2 / Xcode 26+
+- Node.js 18+ — 微信常驻 Agent 桥（`@anthropic-ai/claude-agent-sdk`，安装时自动拉取）
 - [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) — 本地 MLX 推理
 
 ## 许可

@@ -2,7 +2,7 @@
 
 ## 概览
 
-macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、Codex）和微信，输出侧走本地 MLX TTS/ASR + 系统媒体控制。
+macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、Codex、Qwen Code、DeepSeek Harness、PI coding agent）和微信，输出侧走本地 MLX TTS/ASR + 系统媒体控制。
 
 ```
                           用户
@@ -60,11 +60,37 @@ await ws; await sock; await mic
 - Actor 封装，通过 `WeChatClient` 调用微信 ilink API
 - 长轮询 `getupdates` 获取新消息，`GetUpdatesResp.ret` 为 `Int?`（空响应不返回此字段）
 - 手动 `withThrowingTaskGroup` 超时（URLSession 空闲超时在 TCP 保活下不触发）
-- 消息去重（5 分钟窗口），`allow_from` 白名单过滤
-- Typing 指示器（10 分钟 ticket 缓存，每 5 秒刷新）
-- 状态持久化：`get_updates.buf` 和 `context_tokens.json` 到 `~/.config/ivox/wechat/`
+- 消息去重（5 分钟窗口），单用户白名单：`from` 精确等于扫码注册的那一个
+- Typing 指示器（单张 ticket，10 分钟缓存）
+- 单用户状态持久化：`get_updates.buf` 和 `context_token.json`（单个 userID + contextToken）到 `~/.config/ivox/wechat/`
 
-收到消息 → Daemon.handleWeChatMessage → claude --print → WeChatPlatform.sendMessage 发回微信。
+收到消息 → Daemon.handleWeChatMessage → ClaudeAskService（常驻桥）→ WeChatPlatform.sendMessage 发回微信。
+
+### ClaudeAskService — 常驻 Claude Agent 桥
+
+`Sources/iVox/Network/ClaudeAskService.swift` + `Sources/iVox/Resources/bridge/bridge.messenger.mjs`
+
+早期方案每轮拉起一次 `claude --print`，进程回复后即退出——`--resume` 只能恢复对话历史，后台任务（dev server、测试 watch 等）随进程结束被带走。现改为单进程常驻桥：
+
+```
+Daemon (actor)
+  └─ ClaudeAskService: 一个常驻 node 子进程（stdio NDJSON）
+        stdin  {id, text, cwd}
+        stdout {id, type:"done"|"error", text?, session_id?}
+              └─ bridge.messenger.mjs: 全局单个常驻 agent（无 user、与上游解耦）
+                 · query(prompt=永不关闭的消息队列)   ← 底层 claude 不退出
+                 · 各轮消息 push 进同一队列
+                 · result.session_id 落盘，重建时 resume
+                 · 闲置 30 分钟自动 close 回收
+```
+
+要点：
+- 底层 claude 进程常驻 → **后台任务跨微信消息存活**，agent 可随时读日志、继续操作。
+- Agent SDK（`@anthropic-ai/claude-agent-sdk`）仅 TS/Python，Swift 通过 stdio 桥接入；桥只做协议转发与 agent 生命周期，不含业务。
+- 桥与微信彻底解耦：协议无 `user` 字段，全局一个 agent，谁都能调。`query()` 的 prompt 必须是永不关闭的异步消息队列——传字符串会被 SDK 判为单轮、result 后主动关闭 stdin。
+- agent 的工作目录固定为 `~/.config/ivox/wechat/workspace`，读写收敛在隔离目录。
+- 桥脚本与 SDK 部署在 `~/.config/ivox/bridge/`，由 `scripts/install-bridge-sdk.sh` 安装（npmmirror 兜底）。
+- Daemon `cleanup()` 中 `await claudeAsk.stop()` 主动等桥退出后再 exit，避免重启时新旧桥并存。
 
 ### SocketServer — Unix Domain Socket IPC
 
@@ -239,9 +265,12 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-| 工具 | 配置文件 | 触发 |
+| 工具 | 配置/挂载 | 触发 |
 |------|----------|------|
-| Claude Code | `~/.claude/settings.json` | Stop Hook → hook.sh |
-| Codex | `~/.codex/hooks.json` | Stop Hook → hook.sh |
+| Claude Code | `~/.claude/settings.json` | Stop Hook → hook.sh claude |
+| Codex | `~/.codex/hooks.json` | Stop Hook → hook.sh codex |
+| Qwen Code | `~/.qwen/settings.json` | Stop Hook → hook.sh qwen |
+| DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | 每轮结束直投 hook.sh（Stop payload 无文本） |
+| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `agent_settled` 事件 → ivox speak |
 
-`hook.sh` 提取 `last_assistant_message`，只调用 `ivox speak`（TTS 由 Claude Code 统一处理）。
+由 `scripts/install-hooks.sh` 统一安装（已存在则跳过）。`hook.sh` 提取回复文本，只调用 `ivox speak`（TTS 由各工具这一层统一处理）。
