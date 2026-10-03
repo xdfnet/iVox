@@ -1,5 +1,15 @@
 # iVox 开发日志
 
+## v3.4.0 — 2026-10-03
+
+### 变更
+
+- **微信 Agent 去 Node，Swift 原生直连 claude（占用 278 MB → 0）** — v3.3.0 的常驻 Agent 依赖 node sidecar + Agent SDK，`~/.config/ivox/bridge/` 占 278 MB（几乎全是 node_modules，桥逻辑仅 8 KB），并要求用户额外装 Node.js。实测确认 SDK 本质只是 spawn 原生 `claude` + stdio NDJSON 后，[ClaudeAskService.swift](../Sources/iVox/Network/ClaudeAskService.swift) 重写为 Swift 直接 spawn `claude`（`--input-format stream-json --output-format stream-json --verbose --dangerously-skip-permissions`，stdin 包层 `{type:"user",message}`，result 取文本 + session_id，FIFO 匹配）。删除 node sidecar、`bridge.messenger.mjs`、`install-bridge-sdk.sh`、Node.js 依赖；对外行为（常驻多轮、resume、`/new`、后台任务跨消息存活）保持不变。协议三大机制均经裸进程实测。
+
+### 文档
+
+- architecture.md「ClaudeAskService」章节改写为原生直连；README 删 Node 依赖、架构图更新；调研文档 [`research-native-bridge.md`](research-native-bridge.md) 状态改为已实施。
+
 ## v3.3.0 — 2026-10-03
 
 ### 新增

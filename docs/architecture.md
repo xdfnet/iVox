@@ -66,32 +66,29 @@ await ws; await sock; await mic
 
 收到消息 → Daemon.handleWeChatMessage → ClaudeAskService（常驻桥）→ WeChatPlatform.sendMessage 发回微信。
 
-### ClaudeAskService — 常驻 Claude Agent 桥
+### ClaudeAskService — 原生常驻 Claude Agent
 
-`Sources/iVox/Network/ClaudeAskService.swift` + `Sources/iVox/Resources/bridge/bridge.messenger.mjs`
+`Sources/iVox/Network/ClaudeAskService.swift`
 
-早期方案每轮拉起一次 `claude --print`，进程回复后即退出——`--resume` 只能恢复对话历史，后台任务（dev server、测试 watch 等）随进程结束被带走。现改为单进程常驻桥：
+Swift 直接 spawn 原生 `claude` 进程、经 stdio NDJSON 通信，**无 node、无 Agent SDK 依赖**（此前的 node sidecar 方案占用 278 MB node_modules，已移除）。底层 claude 进程常驻 → **后台任务跨微信消息存活**。
 
 ```
 Daemon (actor)
-  └─ ClaudeAskService: 一个常驻 node 子进程（stdio NDJSON）
-        stdin  {id, text, cwd}
-        stdout {id, type:"done"|"error", text?, session_id?}
-              └─ bridge.messenger.mjs: 全局单个常驻 agent（无 user、与上游解耦）
-                 · query(prompt=永不关闭的消息队列)   ← 底层 claude 不退出
-                 · 各轮消息 push 进同一队列
-                 · result.session_id 落盘，重建时 resume
-                 · 闲置 30 分钟自动 close 回收
+  └─ ClaudeAskService: 常驻 claude 子进程（stdio NDJSON）
+        启动  claude --input-format stream-json --output-format stream-json
+                    --verbose --dangerously-skip-permissions --model <m>
+                    [--resume <sid>]          # cwd 用进程 currentDirectoryURL
+        stdin  逐行写 {"type":"user","message":{role:"user",content}}
+        stdout 逐行读，忽略 system/assistant，取 type=="result" 的 result / session_id
 ```
 
 要点：
-- 底层 claude 进程常驻 → **后台任务跨微信消息存活**，agent 可随时读日志、继续操作。
-- Agent SDK（`@anthropic-ai/claude-agent-sdk`）仅 TS/Python，Swift 通过 stdio 桥接入；桥只做协议转发与 agent 生命周期，不含业务。
-- 桥与微信彻底解耦：协议无 `user` 字段，全局一个 agent，谁都能调。`query()` 的 prompt 必须是永不关闭的异步消息队列——传字符串会被 SDK 判为单轮、result 后主动关闭 stdin。
+- stdin 每条 user 消息**必须外包一层** `{type:"user",message:{...}}`；裸 `{role,content}` 会被静默忽略。
+- result 按 FIFO 匹配当前最早等待者（单 agent 串行）；`session_id` 落盘 `~/.config/ivox/wechat/bridge_state.json`，进程重启用 `--resume` 恢复历史。
 - agent 的工作目录固定为 `~/.config/ivox/wechat/workspace`，读写收敛在隔离目录。
-- 桥脚本与 SDK 部署在 `~/.config/ivox/bridge/`，由 `scripts/install-bridge-sdk.sh` 安装（npmmirror 兜底）。
-- Daemon `cleanup()` 中 `await claudeAsk.stop()` 主动等桥退出后再 exit，避免重启时新旧桥并存。
-- 权限模式 `bypassPermissions`（最大权限，全自动免确认）；发 `/new` 关闭当前 agent、清 session_id 指针开新会话。
+- Daemon `cleanup()` 中 `await claudeAsk.stop()` 关 stdin、等退出（60×50ms）、超时 terminate，避免孤儿与新旧进程并存。
+- 权限为最大权限 `--dangerously-skip-permissions`（全自动免确认）；发 `/new` terminate 当前进程、清 session_id 指针，下次裸启新会话。
+- 协议实测细节见 [`research-native-bridge.md`](research-native-bridge.md)。
 
 ### SocketServer — Unix Domain Socket IPC
 

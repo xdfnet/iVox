@@ -94,12 +94,12 @@ make clean     # 清除 .build
 Claude Code / Codex → hook → Unix Socket → Daemon
                                             ├── TTSEngine (本地 MLX)
                                             ├── WeChatPlatform (ilink 长轮询)
-                                            │       └─ 常驻 Agent 桥 (node + Agent SDK)
+                                            │       └─ 常驻 Claude Agent (Swift 直连 claude)
                                             ├── SpeechInput (⌘ 键 + ASR)
                                             └── MediaHTTPServer (Web UI)
 ```
 
-微信消息经守护进程转发给一个常驻 node 桥，每个微信用户绑定一个不退出的 Claude Agent，后台任务可跨消息持续运行；Agent 工作目录隔离在 `~/.config/ivox/wechat/workspace`。
+微信消息经守护进程发给一个常驻 `claude` Agent（Swift 经 stdio NDJSON 直连，无 node 依赖），后台任务可跨消息持续运行；Agent 工作目录隔离在 `~/.config/ivox/wechat/workspace`，发 `/new` 可开新会话。
 
 详见 [架构文档](docs/architecture.md)。
 
@@ -118,8 +118,8 @@ Claude Code / Codex → hook → Unix Socket → Daemon
 ## 依赖
 
 - macOS 14+ / Apple Silicon
-- Swift 6.3.2 / Xcode 26+
-- Node.js 18+ — 微信常驻 Agent 桥（`@anthropic-ai/claude-agent-sdk`，安装时自动拉取）
+- Swift 6.4 开发快照 / Xcode 26+
+- [Claude Code](https://claude.com/claude-code) CLI — 微信常驻 Agent（Swift 经 stdio 直连）
 - [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) — 本地 MLX 推理
 
 ## 许可
