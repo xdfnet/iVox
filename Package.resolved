@@ -16,7 +16,7 @@
       "location" : "https://github.com/Blaizzy/mlx-audio-swift.git",
       "state" : {
         "branch" : "main",
-        "revision" : "3e978558404df4ad1bbb0a5634a03df2b0f9dfa5"
+        "revision" : "8d86630ade569728aaea3dc1a29fc44e2efa719b"
       }
     },
     {
@@ -106,7 +106,7 @@
       "location" : "https://github.com/apple/swift-markdown.git",
       "state" : {
         "branch" : "main",
-        "revision" : "4661b550c55abde97d14e35b89e094084669f40a"
+        "revision" : "392b73b858efe3dacec0e8a91c6e7fd19af0bb98"
       }
     },
     {
