@@ -121,6 +121,7 @@ Claude Code / Codex → hook → Unix Socket → Daemon
 - Swift 6.4 开发快照 / Xcode 26+
 - [Claude Code](https://claude.com/claude-code) CLI — 微信常驻 Agent（Swift 经 stdio 直连）
 - [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) — 本地 MLX 推理
+- [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) — TTS 模型（[官方博客](https://qwen.ai/blog?id=qwen3tts-0115)）
 
 ## 许可
 
