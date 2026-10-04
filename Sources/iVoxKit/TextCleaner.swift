@@ -131,10 +131,10 @@ private extension String {
                     if lastWasSpace { result.append(" ") }
                     result.append(Character(s))
                     lastWasSpace = false
-                } else if v == 32 || v == 9 {  // 空格 + Tab 合并
+                } else {
+                    // 其余 ASCII 符号（含 \r \n 及 . _ - / 等）→ 转空格，避免前后词粘连
                     lastWasSpace = true
                 }
-                // 其余 ASCII 符号（含 \r \n）丢弃
             } else {
                 let p = s.properties
                 if p.isEmoji || p.isEmojiModifier || p.isEmojiModifierBase || p.isEmojiPresentation {
