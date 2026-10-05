@@ -83,9 +83,11 @@ actor ConnectionHandler {
         }
         Log.debug("清洗后内容: source=\(source) cleaned=\(logPreview(cleaned))")
 
-        let job = PlaybackJob(text: cleaned, voiceID: voiceID, source: source)
-        Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(cleaned.count)")
-        Task { await queue.enqueue(job) }
+        // 分块入队：整条一次合成会长时间占住播放，「↓ 跳过当前段」也失去意义
+        let chunks = splitSentences(cleaned)
+        let jobs = chunks.map { PlaybackJob(text: $0, voiceID: voiceID, source: source) }
+        Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(cleaned.count) 分块=\(jobs.count)")
+        Task { await queue.enqueue(jobs) }
     }
 
     private nonisolated func handleASR(fd: Int32, header: String, body: Data) {

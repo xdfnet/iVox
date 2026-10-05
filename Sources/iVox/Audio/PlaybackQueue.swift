@@ -62,14 +62,22 @@ actor PlaybackQueue {
         await media.resume()
     }
 
-    func enqueue(_ job: PlaybackJob) async {
-        jobs.append(job)
+    /// 批量入队：一次 append 完再启动处理。
+    /// 逐条 await enqueue 时，若分块之间队列瞬时为空，processNext 会提前 resume 音乐，
+    /// 下一块再 pause —— 表现为播报中音乐反复跳动。批量入口消除这个窗口。
+    func enqueue(_ newJobs: [PlaybackJob]) async {
+        guard !newJobs.isEmpty else { return }
+        jobs.append(contentsOf: newJobs)
         Log.debug("队列状态: pending=\(jobs.count) processing=\(currentTask != nil)")
 
         // 正在播就不打断；当前 task 跑完 processNext 的 while 会自动消费新 job
         if currentTask == nil {
             currentTask = Task { await processNext() }
         }
+    }
+
+    func enqueue(_ job: PlaybackJob) async {
+        await enqueue([job])
     }
 
     private func processNext() async {
