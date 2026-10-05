@@ -128,34 +128,40 @@ Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执�
 
 | Markdown 节点 | 处理 |
 |----------------|------|
-| `Paragraph` / `Heading` / `ListItem` / `BlockQuote` | 保留文本 |
+| `Paragraph` / `Heading` / `ListItem` / `BlockQuote` | 保留文本，块末补「。」 |
 | `Link` | 保留链接标题 |
 | `Emphasis` / `Strong` | 保留内部文本 |
-| `CodeBlock` / `InlineCode` | 跳过 |
-| `HTMLBlock` / `InlineHTML` | 跳过 |
-| `Image` / `Table` / `ThematicBreak` | 跳过 |
+| `InlineCode` | 保留（函数名、API 名有信息量），前后按需补分词空格 |
+| `CodeBlock` | **跳过**：源码逐 token 念出来对听众没有信息量，一段代码能占几分钟 |
+| `HTMLBlock` / `InlineHTML` / `ThematicBreak` | 跳过 |
+| `Image` | 保留 alt 文字（通常是一句人话描述） |
+| `Table` | 保留单元格文字；单元格之间强制补空格、每行末补「。」 |
+
+块的句末判断取「最后一个非空白字符」，否则嵌套块（`ListItem` 内含 `Paragraph`）会补出重复的「。 。」。
+相邻文本节点之间只在**一侧是拉丁字母/数字**时才补空格——中日韩文本天然分词，硬插空格会产生伪停顿（如「加粗 普通」）。
 
 不再单独处理 `<artifact>`：输入被视为完整 Markdown，artifact 如果需要跳过，应由上游输出为标准 Markdown 代码块或其他可解析结构。
 
 #### 5.2 行内噪音过滤
 
-AST 提取文本后，只做小范围 token 清理：
+AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**URL 必须在路径规则之前**（否则 URL 会被当路径砍成 `https:b` 残片），**噪音必须在 `removingEmoji` 之前**（符号清理会把 `:` `/` `[` 换成空格，正则就匹配不到了）。
 
 | 规则 | 匹配内容 | 处理 |
 |------|----------|------|
 | URL | `https://...` | 删除 |
-| 常见路径 | `/Users/...`, `/tmp/...`, `/opt/...`, `~/...` | 删除 |
-| UUID | `xxxxxxxx-xxxx-...` | 删除 |
-| Commit Hash | 12-40 位小写 hex | 删除 |
+| 路径 | 绝对/家目录路径（`/Users/...`、`~/...`）、多段相对路径（`Sources/iVox/TextCleaner.swift`） | 只保留文件名（`TextCleaner.swift`）——念文件名有用，念整条路径没用 |
+| UUID | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` | 删除（须排在 hash 规则之前，否则末段 12 位会先被吃掉） |
+| Commit Hash | ≥12 位、且至少含一个字母的十六进制串 | 删除；纯数字长串（订单号/时间戳）保留 |
 | ANSI 转义 | `\x1b[31m` | 删除 |
-| 速度噪音 | `12MB/s`, `1.5kb/s` | 删除 |
-| 剩余时间 | `ETA`, `预计剩余`, `剩余时间` | 删除 |
-| 状态符号 | `✅`, `❌`, `✓`, `✗` | 删除 |
-| 箭头 | `→` | 替换为“到” |
+| JSON 对象 | 同时含「冒号 + 引号」的 `{...}`（支持嵌套） | 删除；「{待办}」这类无引号文本不受影响 |
+| 传输速度 | `12MB/s`、`1.5kb/s` | 删除 |
+| 剩余时间 | `ETA`、`预计剩余`、`剩余时间` | 删除 |
+| Emoji / 状态符号 | `✅`、`❌`、`🎉`、肤色修饰符 | 删除 |
+| 箭头 | `→` | 替换为「到」 |
+| 其余 ASCII 符号 | `_`、`=`、`@`、`&`、`<`、`>` 等 | 转空格，避免 `loadRefAudio_12` 粘成 `loadRefAudio12` 导致破音 |
 
 保留的内容：版本号、API 名、函数名、百分比、品牌名（Codex、ChatGPT、OpenAI、iVox 等）、中文标点和语义文本。
-
-清洗后的行用中文逗号（`，`）拼接。
+各类空白（Tab / NBSP / 全角空格 / 连续半角空格）统一折叠成一个空格。
 
 ### 6. PlaybackQueue
 

@@ -8,8 +8,8 @@
 
 | 命令 | 发出位置 | 触发条件 |
 |------|---------|---------|
-| `media.pause()` | `processNext` 入口（line 69） | 每次播放开始 |
-| `media.resume()` | `processNext` 退出且队列空（line 109）| 自然完成 / DEL 队列空分支 / daemon 退出 |
+| `media.pause()` | `processNext` 入口（line 86） | 每次播放开始 |
+| `media.resume()` | `processNext` 退出且队列空（line 130）| 自然完成 / ↓ 队列空分支 / daemon 退出 |
 
 `catch CancellationError` 分支**不发**任何 media 命令（只清本地状态）。`media` 状态由 PlaybackQueue 统一管理，避免多分支并发发出命令造成 resume↔pause 竞态。
 
@@ -26,7 +26,7 @@
    │ media: 用户原始状态  │ ◀─────────────  └────────────────┘
    └─────────────────────┘   while 退出      │
         ▲                      + yield         │
-        │                      + jobs 空       │ DEL (jobs 非空)
+        │                      + jobs 空       │ ↓ (jobs 非空)
         │                                      │
         │ skipCurrent                          │
         │ (jobs 空)                            │
@@ -43,11 +43,11 @@
 |---|------|------|-----------|----|
 | 1 | 空闲 → enqueue | spawn processNext → pause → 播 | pause×1 | ✅ |
 | 2 | 播放中 → enqueue | jobs 累积，while 自动取下一个 | 不发 | ✅ |
-| 3 | 播放中 → DEL，队列非空 | 取消旧 task → spawn 新 → 播下一个 | pause×1（no-op） | ✅ |
-| 4 | 播放中 → DEL，队列空 | 取消旧 task → resume music | resume×1 | ✅ |
-| 5 | 空闲 → DEL | `guard currentTask != nil` 拦截 | 不发 | ✅ |
+| 3 | 播放中 → ↓，队列非空 | 取消旧 task → spawn 新 → 播下一个 | pause×1（no-op） | ✅ |
+| 4 | 播放中 → ↓，队列空 | 取消旧 task → resume music | resume×1 | ✅ |
+| 5 | 空闲 → ↓ | `guard currentTask != nil` 拦截 | 不发 | ✅ |
 | 6 | 播放中 → ⌘ 录音 | pause music + cancelAll TTS | pause×1（外部） | ✅ |
-| 7 | 录音中 → DEL | guard 拦截 | 不发 | ✅ |
+| 7 | 录音中 → ↓ | guard 拦截 | 不发 | ✅ |
 | 8 | 录音中 → ⌘ | state guard 拦截 | 不发 | ✅ |
 | 9 | ⌘ 松开 | resume music | resume×1（外部） | ✅ |
 | 10 | daemon 退出 | cancel task + resume | resume×1 | ✅ |
@@ -57,18 +57,18 @@
 | # | 场景 | 行为 | media 命令 | OK |
 |---|------|------|-----------|----|
 | 11 | processNext 自然完成 | while 退出 → yield → 检查 jobs → resume | resume×1 | ✅ |
-| 12 | processNext 被 DEL 取消 | catch 分支只清本地状态 | 不发 | ✅ |
+| 12 | processNext 被 ↓ 取消 | catch 分支只清本地状态 | 不发 | ✅ |
 | 13 | TTS 合成失败 | catch error → 继续 while（直到成功或队列空） | 不发 | ✅ |
-| 14 | 连续 DEL 多次 | 每次都触发 skipCurrent | resume×0~1 | ✅ |
+| 14 | 连续 ↓ 多次 | 每次都触发 skipCurrent | resume×0~1 | ✅ |
 | 15 | processNext 退出 + 立刻 enqueue | yield 让 enqueue 插入 → 若 jobs 非空不 resume，由新 processNext 接管 | resume×0 / pause×1 | ✅ |
 
 ## 关键时序
 
-### DEL 按下（队列非空）
+### ↓ 按下（队列非空）
 
 ```
 T0   processNext 播 job1，music 已暂停
-T1   按 DEL
+T1   按 ↓
 T2   skipCurrent: oldTask.cancel() + player.cancelPendingPlayback()
 T3   _ = await oldTask?.value  ← 串行化点：旧 task 全部退出
 T4   旧 task catch 分支：清本地状态、return（**不发 resume**）
@@ -77,7 +77,7 @@ T6   新 processNext 入口 await media.pause()（no-op）
 T7   新 processNext 播 job2
 ```
 
-### DEL 按下（队列空）
+### ↓ 按下（队列空）
 
 ```
 T0-T4  同上
@@ -106,7 +106,7 @@ v2.7.0 期间发现并修复的 4 个问题：
 | 问题 | 触发条件 | 修复 |
 |------|---------|------|
 | 媒体命令多源头竞态 | 旧 task catch 与新 processNext 入口同时发命令 | catch 分支不再发 resume，统一交给 skipCurrent / processNext 退出点 |
-| 空闲按 DEL 误发 resume | currentTask=nil 时仍走 resume 分支 | `skipCurrent` 加 `guard currentTask != nil` |
+| 空闲按 ↓ 误发 resume | currentTask=nil 时仍走 resume 分支 | `skipCurrent` 加 `guard currentTask != nil` |
 | daemon 退出 music 卡暂停 | shutdown 不发 resume | shutdown 末尾补 `Task { await media.resume() }` |
 | 自然完成 + 立即 enqueue race | 老 resume 与新 pause 时序不可控 | processNext 退出前 `await Task.yield()`，yield 后再决策 |
 | AudioPlayer.drain 永久挂起 | buffer 播放回调丢失（AudioEngine 被系统事件停止）→ `pendingCount` 永不归零 | `drain()` 加超时兜底：按本段已写帧数估算播放时长 + 2s 余量，超时强制返回并打 warn |
@@ -119,7 +119,7 @@ v2.7.0 期间发现并修复的 4 个问题：
 
 ### 现象
 
-`processNext` 中 `await player.drain()` 永久不返回 → 播放队列被单个 job 卡死，后续请求全部排队，**只有按 ⌦（跳到下一个）能解锁**。
+`processNext` 中 `await player.drain()` 永久不返回 → 播放队列被单个 job 卡死，后续请求全部排队，**只有按 ↓（跳到下一段）能解锁**。
 
 ### 日志证据（2026-08-01，daemon.log）
 
@@ -129,7 +129,7 @@ v2.7.0 期间发现并修复的 4 个问题：
 |------|--------------|--------------|
 | TTS 播放开始 | 14:11:17.248 | 16:07:16.111 |
 | TTS 流式完成 | 14:11:18.883（42 chunk） | 16:07:17.797（43 chunk） |
-| TTS 播放完成 | 14:11:20.815（+2s ✅） | 20:01:53.978（+4h，由 ⌦ 触发） |
+| TTS 播放完成 | 14:11:20.815（+2s ✅） | 20:01:53.978（+4h，由 ↓ 触发） |
 
 当天共 5 次挂起，均为 `source=test`：
 
@@ -171,3 +171,4 @@ test-B53180     26.2s
 4. **保持 `await oldTask?.value`**——这是串行化的线性化点，去掉会重新引入竞态
 5. **`cancelPendingPlayback()` 会递增 `generation`**——write 回调经 `guard generation == gen` 丢弃旧世代回调；不要移除该 guard，也不要绕过 `cancelPendingPlayback` 直接清零 `pendingCount`，否则旧回调会把计数减成负数
 6. **`scheduleBuffer` 必须带 `completionCallbackType: .dataConsumed`**——旧 API（不带 callbackType）是 `.dataPlayedBack` 语义，播放末尾引擎 auto-shutdown 时回调永不触发，会重新引入 drain 超时；`.dataConsumed` 在数据被读出即回调，不依赖引擎存活
+7. **多条 job 一次性入队时走批量入口 `enqueue([PlaybackJob])`**——逐条 `await enqueue` 时，若两段之间队列瞬时为空，`processNext` 末尾的 `if jobs.isEmpty` 会提前 resume 音乐、下一段再 pause，表现为播报中音乐反复跳动（对应场景 15 的窗口）。批量入口先 append 完再启动处理，消除该窗口

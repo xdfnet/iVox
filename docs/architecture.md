@@ -113,7 +113,7 @@ Daemon (actor)
 
 - Actor，管理播报队列
 - `enqueue` 追加到队列尾部，不打断当前播放；`processNext` 的 while 循环自然消费
-- 抢新（取消当前播报、跳到下一个）由 `skipCurrent()` 处理，仅 DEL 键触发
+- 抢新（取消当前播报、跳到下一个）由 `skipCurrent()` 处理，仅 ↓ 键触发
 - `cancelAll()` 清空队列 + 取消全部播放
 - 等待 TTS 模型就绪后再开始合成
 - 播报前通过 `MediaController` 暂停音乐，播完恢复
@@ -160,9 +160,9 @@ Daemon (actor)
 |------|------|
 | `Config.swift` | JSON 配置模型（TTS/ASR 路径、音色、媒体控制、微信等） |
 | `Logger.swift` | 日志工具，输出到 daemon.log，5MB 轮转 |
-| `TextCleaner.swift` | Markdown AST 过滤 + 行内噪音（URL/路径/哈希/ANSI） |
+| `TextCleaner.swift` | Markdown AST 过滤（跳过代码块）+ 行内噪音（URL/路径/哈希/UUID/JSON/ANSI/进度）+ emoji |
 | `AudioPipeline.swift` | 音频格式转换工具 |
-| `TextSplitter.swift` | 按句切分 ≤80 字 |
+| `TextSplitter.swift` | 按句切分并合并到 ≤80 字，供播报分块 |
 
 ## 并发模型
 
@@ -211,15 +211,18 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 
 ## 文本过滤
 
-`TextCleaner` 只在 daemon 侧执行，分两层：
+`TextCleaner` 只在 daemon 侧执行，分两层（取舍标准：屏幕可以略读，耳朵只能线性听完）：
 
 1. **Markdown AST**（`swift-markdown` 库）
-   - 跳过：CodeBlock、InlineCode、HTMLBlock、Image、Table、ThematicBreak
-   - 保留：标题、段落、列表、引用、链接标题、加粗/斜体
-2. **行内噪音**
-   - 删除 URL、绝对路径、UUID、12-40 位哈希、ANSI 转义
-   - 删除速度/ETA 噪音（`12MB/s`、`预计剩余`）
-   - 符号替换：✅❌✓✗→
+   - 跳过：CodeBlock、HTMLBlock、InlineHTML、ThematicBreak
+   - 保留：标题、段落、列表、引用、链接标题、加粗/斜体、行内代码、图片 alt、表格单元格
+2. **行内噪音**（顺序不可调换：URL → 噪音 → emoji）
+   - 删除 URL、UUID、≥12 位 hex hash、ANSI 转义、JSON 对象、速度/ETA 噪音
+   - 路径只保留文件名：`/Users/admin/x/TextCleaner.swift` → `TextCleaner.swift`
+   - 箭头 `→` → 「到」；其余 ASCII 符号（`_ = @ &`）→ 空格，避免 `loadRefAudio_12` 粘成 `loadRefAudio12`
+   - 删除 emoji；各类空白折叠为一个空格
+
+清洗后由 `TextSplitter` 分成 ≤80 字的块入队，**「任意键 = 取消整条」与「↓ = 跳过当前这一段」因此才真正有区别**。
 
 ## 音色匹配
 

@@ -1,5 +1,28 @@
 # iVox 开发日志
 
+## v3.5.0 — 2026-10-05
+
+### 修复
+
+- **代码块被整段朗读** — `visitCodeBlock` 从「保留内容」改为「跳过」。播报场景下把源码逐 token 念出来（`func loadRefAudio  path  String  throws -  MLXArray…`）既没有信息量、一段代码又能占掉几分钟，且与 README「跳过代码」的承诺相悖。`testCodeBlock` 原先锁的正是「保留代码」，同步反转为断言不朗读
+- **文档承诺的噪音过滤只落地了 1 类** — `hook-chain.md` / `architecture.md` 列的路径、UUID、commit hash、ANSI、速度、ETA、箭头规则在 f1929a2「TextCleaner 只做 Markdown→纯文本」重构时被整体删掉，只剩 URL。本次补齐 `removingNoise`：ANSI、UUID、≥12 位 hex hash（要求含字母，纯数字长串保留）、JSON 对象（须同时含冒号+引号，支持嵌套）、传输速度、ETA；路径改为只保留文件名（`/Users/…/TextCleaner.swift` → `TextCleaner.swift`）；`→` 替换为「到」
+- **噪音清洗顺序会导致规则失效** — 明确为 URL → 噪音 → emoji：路径规则若排在 URL 之前，链接会被砍成 `https:b` 残片；`removingEmoji` 若先执行，会把 `:` `/` `[` 换成空格导致正则失配
+- **嵌套块补出重复句号** — `endBlock` 原先看 `output.last`，而它自己刚补过空格，于是 `ListItem` / `TableRow` 内含 `Paragraph` 时会补出「。 。」。改为取最后一个非空白字符判断
+- **行内代码后缺分词空格** — `visitInlineCode` append 后未复位 `lastWasSpace`，尾部的 `appendSpace()` 变成空操作，`loadRefAudio之后` 被连读
+- **中文相邻节点被硬插空格** — 文本节点边界原先无条件补空格，`**加粗**普通` 变 `加粗 普通`。改为只在**一侧是拉丁字母/数字**时补；表格单元格另加强制分隔（否则中文连读成「名称版本」）
+- **英文句号被补出中文句号** — `sentenceEnds` 补入 `.` `;` `；` `…`，`finished.` 不再变 `finished.。`
+- **连续半角空格未折叠** — `removingEmoji` 中 `v == 32` 走白名单分支被原样追加，连续空格漏了出去；改为空白统一折叠
+- **短文本路径丢引号** — 半角 `"` `'` 加入白名单，短文本快捷路径不再把引号删成空格
+
+### 新增
+
+- **播报分块** — `splitSentences` 兑现了一直没被使用的 `maxChars`（默认 `PlaybackChunking.maxChars = 80`）：按句末标点切分、合并相邻短句到 ≤80 字、超长句在软标点处断开、纯标点并回上一句。`ConnectionHandler` 据此分块入队，「任意键 = 取消整条」与「↓ = 跳过当前这一段」终于有区别；`PlaybackQueue` 新增批量入口 `enqueue([PlaybackJob])`，避免分块之间音乐反复跳动
+
+### 文档
+
+- `hook-chain.md` 5.1/5.2、`architecture.md` 文本过滤章节按实现重写（此前描述的是 f1929a2 之前的旧实现）；`playback-queue.md` 补批量入队维护约束、修正 media 命令行号
+- 修正「跳过」按键的文档错误：`README.md` / `architecture.md` / `playback-queue.md` 写的是 ⌦（Forward Delete）/ DEL，而实现自 637f551 起就是 `↓`（`0x7D`）。按 ⌦ 实际会落进「任意键 = 取消整条」分支，与文档描述的「跳到下一个」正好相反
+
 ## v3.4.0 — 2026-10-03
 
 ### 变更
