@@ -209,10 +209,10 @@ actor Daemon {
     //
     // 流程（微信驱动，非 CLI 驱动）：
     //   1. 收到微信消息 → 发 start typing（"正在输入"）
-    //   2. 调 claude --print 获取回复
+    //   2. 调常驻 ClaudeAskService.ask() 获取回复
     //   3. 发 stop typing（"正在输入"消失）
     //   4. 发消息到微信
-    //   5. claude --print 结束时触发 Stop Hook → hook.sh → ivox speak（TTS 由 Claude Code 统一处理）
+    //   5. claude 回复结束时触发 Stop Hook → hook.sh → ivox speak（TTS 由 Claude Code 统一处理）
     //
     // 注意：TTS 不在 daemon 这一层，daemon 只负责消息路由。
 
