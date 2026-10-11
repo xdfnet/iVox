@@ -188,7 +188,7 @@ test-B53180     26.2s
 
 1. **不要在 `catch` 分支发任何 media 命令**——所有 `media.pause/resume` 都通过两个固定出口
 2. **新增退出条件时只改 `processNext` 末尾的 `if jobs.isEmpty`**——决策点集中在一处
-3. **新增触发点（如新快捷键）只走 `skipCurrent` 或 `cancelAll`**——不要直接 `currentTask?.cancel()`
+3. **新增触发点（如新快捷键）只走 `cancelAll` 或 `bargeIn`**——不要直接 `currentTask?.cancel()`（`skipCurrent()` 已随「↓ 跳段」一并删除）
 4. **保持 `await oldTask?.value`**——这是串行化的线性化点，去掉会重新引入竞态
 5. **`cancelPendingPlayback()` 会递增 `generation`**——write 回调经 `guard generation == gen` 丢弃旧世代回调；不要移除该 guard，也不要绕过 `cancelPendingPlayback` 直接清零 `pendingCount`，否则旧回调会把计数减成负数
 6. **`scheduleBuffer` 必须带 `completionCallbackType: .dataConsumed`**——旧 API（不带 callbackType）是 `.dataPlayedBack` 语义，播放末尾引擎 auto-shutdown 时回调永不触发，会重新引入 drain 超时；`.dataConsumed` 在数据被读出即回调，不依赖引擎存活

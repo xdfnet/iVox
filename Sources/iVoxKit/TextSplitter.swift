@@ -2,14 +2,14 @@ import Foundation
 
 /// 播报分块参数
 public enum PlaybackChunking {
-    /// 单个播报分块上限（字符）。太小会频繁起停合成，太大则 ↓ 跳过粒度太粗
+    /// 单个播报分块上限（字符）。太小会频繁起停合成，太大则首句开播延迟变大
     public static let maxChars = 80
 }
 
 /// 按句末标点切分文本，并把相邻短句合并到接近 `maxChars`。
 ///
-/// 用于播报分块：一次 `ivox speak` 拆成多段入队，
-/// 「任意键 = 取消整条」与「↓ = 跳过当前这一段」才真正有区别。
+/// 用于播报分块：一次 `ivox speak` 拆成多段入队，句级合成
+/// 也贴合流式 turn 的「边切边播」。
 public func splitSentences(_ text: String, maxChars: Int = PlaybackChunking.maxChars) -> [String] {
     let limit = max(1, maxChars)
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
