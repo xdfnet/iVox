@@ -5,12 +5,18 @@ struct PlaybackJob: Sendable {
     let text: String
     let voiceID: String
     let source: String
+    /// 所属流式轮次；nil = 传统整段播报（ivox speak / hook.sh）
+    var turnID: String? = nil
 }
 
 actor PlaybackQueue {
     private var jobs: [PlaybackJob] = []
     private var currentTask: Task<Void, Never>?
     private var generation: UInt = 0
+    /// 当前播报所属轮次；与新请求的 turnID 不同即触发打断
+    private var currentTurn: String?
+    /// 当前轮次是否仍在流式生成（true 时句间队列瞬时排空也不恢复音乐）
+    private var turnOpen = false
     private let player: AudioPlayer
     private let engine: TTSEngine
     private let media: MediaController
@@ -39,10 +45,9 @@ actor PlaybackQueue {
 
     /// 取消所有播放（正在播的和队列中等待的）
     func cancelAll() {
-        currentTask?.cancel()
-        currentTask = nil
-        jobs.removeAll()
-        player.cancelPendingPlayback()
+        bargeIn()
+        currentTurn = nil
+        turnOpen = false
     }
 
     /// 跳过当前正在播的 job，直接播队列里下一个；队列空才真的停
@@ -67,13 +72,56 @@ actor PlaybackQueue {
         await media.resume()
     }
 
+    /// 流式轮次开始（首帧）：打断旧轮/普通播报，标记本轮仍在生成（句间不恢复音乐）。
+    func beginTurn(_ id: String) {
+        if currentTurn != id { bargeIn() }
+        currentTurn = id
+        turnOpen = true
+    }
+
+    /// 流式轮次正常结束：放开音乐保活；若已播完则恢复音乐。
+    func endTurn(_ id: String) async {
+        guard currentTurn == id else { return }
+        turnOpen = false
+        if jobs.isEmpty, currentTask == nil { await media.resume() }
+    }
+
+    /// 流式轮次被取消（用户 Escape）：丢弃本轮未播内容并恢复音乐。
+    func cancelTurn(_ id: String) async {
+        guard currentTurn == id else { return }
+        bargeIn()
+        turnOpen = false
+        await media.resume()
+    }
+
+    /// 打断：取消在播任务、清空队列（新轮或无 turn 的普通播报调用）。
+    private func bargeIn() {
+        currentTask?.cancel()
+        currentTask = nil
+        jobs.removeAll()
+        player.cancelPendingPlayback()
+    }
+
     /// 批量入队：一次 append 完再启动处理。
     /// 逐条 await enqueue 时，若分块之间队列瞬时为空，processNext 会提前 resume 音乐，
     /// 下一块再 pause —— 表现为播报中音乐反复跳动。批量入口消除这个窗口。
-    func enqueue(_ newJobs: [PlaybackJob]) async {
+    /// - Parameter turnID: 流式轮次。与当前轮不同（含 nil 普通播报）先打断旧轮；同轮追加。
+    func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async {
         guard !newJobs.isEmpty else { return }
+        if let turnID {
+            if currentTurn != turnID {
+                bargeIn()
+                currentTurn = turnID
+                turnOpen = true
+            }
+        } else {
+            // 普通 ivox speak / hook.sh：作为新一轮打断当前在播
+            bargeIn()
+            currentTurn = nil
+            turnOpen = false
+        }
         jobs.append(contentsOf: newJobs)
-        Log.debug("队列状态: pending=\(jobs.count) processing=\(currentTask != nil)")
+        Log.debug("队列状态: pending=\(jobs.count) processing=\(currentTask != nil) turn=\(turnID ?? "-")")
 
         // 正在播就不打断；当前 task 跑完 processNext 的 while 会自动消费新 job
         if currentTask == nil {
@@ -82,7 +130,7 @@ actor PlaybackQueue {
     }
 
     func enqueue(_ job: PlaybackJob) async {
-        await enqueue([job])
+        await enqueue([job], turnID: job.turnID)
     }
 
     private func processNext() async {
@@ -132,7 +180,8 @@ actor PlaybackQueue {
 
         currentTask = nil
         await Task.yield()
-        if jobs.isEmpty, gen == generation {
+        // turnOpen 时同轮后续分块马上到，不能恢复音乐，否则句间反复 pause/resume
+        if jobs.isEmpty, gen == generation, !turnOpen {
             await media.resume()
         }
     }

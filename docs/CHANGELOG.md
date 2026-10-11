@@ -11,6 +11,8 @@
 - **`ivox upgrade` 自动升级命令** — 检查 GitHub 最新 release → 比对版本号（x.y.z 数值段比较）→ 选适配 macos-arm64 的 `.tar.gz` → 停守护进程 → 旧版备份为 `~/.local/bin/ivox.bak-<旧版本>` → 解包替换 → `chmod 755` + ad-hoc 重签 → 原本在运行则自动重启。已是最新直接退出；无适配包给明确报错；全程可从备份回滚
 - **`ivox status` 配置体检** — 新增「配置」段（守护进程未运行也显示）：校验 TTS 模型目录（含 config.json + safetensors）、启用语音输入时校验 ASR 模型目录、逐个音色检查 `refAudio` 文件是否存在。只读、不改变启动期校验
 
+- **pi 扩展逐句流式（第二层流式）** — 此前 pi 挂 `agent_settled`，要等模型把整轮写完才一次性投递，长回复首句延迟≈整轮生成时间。改为：扩展监听 `message_update`，只把 `text_delta` **原文**按帧（`\n` 分隔）经一条长连接转发（跳过 thinking/toolcall，文本块切换补换行）；服务端新增 `StreamBuffer`（iVoxKit，纯逻辑、带单测），在**安全边界**（句末/段落，且吐出前缀自身代码围栏配平）抽出完整前缀，复用既有 `cleanText → splitSentences` 切句入队，模型写下一句时上一句已在念。切句/清洗真源仍只在 Swift 一份，TS 侧绝不切句（否则破坏 Markdown AST 块末补句号与跨行规则）。协议新增 `{type:stream,turn:<id>}` 首帧 + `{end}`/`{cancel}`；`PlaybackJob` 加 `turnID`，`PlaybackQueue` 支持轮次打断（新 turn/普通 speak 打断旧轮，同 turn 顺序追加，turn 未结束句间不恢复音乐）。`agent_settled` 保留为整段兜底（老版本无增量事件 / socket 连不上），并用 `streamed` 标志去重；用户 Escape（`aborted`）发 `{cancel}` 丢弃未播内容。传统 `ivox speak`/hook.sh 无 turn，行为不变（作为新一轮可打断）
+
 ### 变更
 
 - **离线环境变量** — `serve`（守护进程）启动最早期设置 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`。模型本就走「本地目录含 config.json」分支不联网，此为防御性设置（惠及子进程与未来组件）

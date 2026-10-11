@@ -19,39 +19,135 @@ actor ConnectionHandler {
     }
 
     nonisolated func handle(fd: Int32) {
-        var data = Data()
         var buf = [UInt8](repeating: 0, count: 65536)
+
+        // 增量读到第一个换行（首行 header）。流式连接常开，绝不能等 EOF。
+        var data = Data()
+        var firstNL: Data.Index?
+        while firstNL == nil {
+            let n = Darwin.read(fd, &buf, buf.count)
+            if n <= 0 { break }
+            data.append(contentsOf: buf[0..<n])
+            if let idx = data.firstIndex(of: 0x0A) { firstNL = idx }
+        }
+        Log.info("Socket 接入: fd=\(fd) bytes=\(data.count)")
+
+        guard let nl = firstNL,
+              let header = String(data: data[0..<nl], encoding: .utf8)?
+                  .trimmingCharacters(in: .whitespaces),
+              header.hasPrefix("{") else {
+            // 无 header：读到 EOF，走传统整段播报
+            drainToEOF(fd: fd, into: &data, buf: &buf)
+            handleTTS(fd: fd, data: data)
+            return
+        }
+
+        if header.contains("type:stream") {
+            handleStream(fd: fd, header: header, leftover: data[(nl + 1)...], buf: &buf)
+            return
+        }
+
+        // 其余请求读完 body 到 EOF 后分发
+        drainToEOF(fd: fd, into: &data, buf: &buf)
+        guard let nl2 = data.firstIndex(of: 0x0A) else {
+            handleTTS(fd: fd, data: data)
+            return
+        }
+        let body = data[(nl2 + 1)...]
+        if header.contains("type:asr") {
+            Log.debug("ASR 请求: bytes=\(body.count)")
+            handleASR(fd: fd, header: header, body: body)
+        } else if header.contains("type:tts") {
+            Log.debug("TTS PCM 请求: header=\(header) text_bytes=\(body.count)")
+            handleTTSPCM(fd: fd, header: header, body: body)
+        } else if header.contains("type:status") {
+            Log.debug("状态查询请求")
+            handleStatus(fd: fd)
+        } else {
+            handleTTS(fd: fd, data: data)
+        }
+    }
+
+    private nonisolated func drainToEOF(fd: Int32, into data: inout Data, buf: inout [UInt8]) {
         while true {
             let n = Darwin.read(fd, &buf, buf.count)
             if n <= 0 { break }
             data.append(contentsOf: buf[0..<n])
         }
-        Log.info("Socket 接入: fd=\(fd) bytes=\(data.count)")
+    }
 
-        // 找第一个 \n 切分头/体
-        if let nl = data.firstIndex(of: 0x0A) {
-            let headerBytes = data[0..<nl]
-            guard let header = String(data: headerBytes, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
-                  header.hasPrefix("{") else {
-                handleTTS(fd: fd, data: data)
-                return
-            }
-            let body = data[(nl + 1)...]
-            if header.contains("type:asr") {
-                Log.debug("ASR 请求: bytes=\(body.count)")
-                handleASR(fd: fd, header: header, body: body)
-            } else if header.contains("type:tts") {
-                Log.debug("TTS PCM 请求: header=\(header) text_bytes=\(body.count)")
-                handleTTSPCM(fd: fd, header: header, body: body)
-            } else if header.contains("type:status") {
-                Log.debug("状态查询请求")
-                handleStatus(fd: fd)
-            } else {
-                handleTTS(fd: fd, data: data)
-            }
-        } else {
-            handleTTS(fd: fd, data: data)
+    /// 流式播报：首帧 `{type:stream,source:x,voice:y,turn:<id>}`，其后逐帧增量原文，
+    /// `{end}` 结束（flush 残尾），`{cancel}` 取消。帧以 \n 分隔；delta 内含的 \n
+    /// 被切成帧边界（补回后正好作为句末 flush 触发）。EOF 也按结束兜底。
+    private nonisolated func handleStream(fd: Int32, header: String, leftover: Data,
+                                          buf: inout [UInt8]) {
+        defer { Darwin.close(fd) }
+        let meta = parseMetaKV(header)
+        let source = meta["source"] ?? "default"
+        let voiceID = meta["voice"] ?? config.sourceVoices[source] ?? config.defaultVoice
+        guard let turn = meta["turn"], !turn.isEmpty else {
+            Log.warn("stream 缺少 turn，丢弃连接")
+            return
         }
+        Log.info("流式开始: source=\(source) voice=\(voiceID) turn=\(turn)")
+        Task { await queue.beginTurn(turn) }
+
+        let sb = StreamBuffer()
+        var acc = Data()
+        var closed = false
+
+        func feed(_ chunk: Data) {
+            acc.append(chunk)
+            while let idx = acc.firstIndex(of: 0x0A) {
+                let line = Data(acc[acc.startIndex..<idx])
+                acc.removeSubrange(acc.startIndex...idx)
+                guard let frame = String(data: line, encoding: .utf8) else { continue }
+                if frame == "{end}" {
+                    finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn)
+                    closed = true
+                    return
+                }
+                if frame.hasPrefix("{cancel") {
+                    Log.info("流式取消: turn=\(turn)")
+                    Task { await queue.cancelTurn(turn) }
+                    closed = true
+                    return
+                }
+                for block in sb.append(frame + "\n") {
+                    emitStreamBlock(block, source: source, voiceID: voiceID, turn: turn)
+                }
+            }
+        }
+
+        if !leftover.isEmpty { feed(leftover) }
+        while !closed {
+            let n = Darwin.read(fd, &buf, buf.count)
+            if n <= 0 { break }
+            feed(Data(buf[0..<n]))
+        }
+        if !closed {  // EOF 兜底：正常结束 flush 残尾
+            finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn)
+        }
+    }
+
+    private nonisolated func emitStreamBlock(_ raw: String, source: String,
+                                             voiceID: String, turn: String) {
+        let cleaned = cleanText(raw)
+        guard !cleaned.isEmpty else { return }
+        let jobs = splitSentences(cleaned).map {
+            PlaybackJob(text: $0, voiceID: voiceID, source: source, turnID: turn)
+        }
+        Log.info("流式入队: turn=\(turn) 分块=\(jobs.count) chars=\(cleaned.count)")
+        Task { await queue.enqueue(jobs, turnID: turn) }
+    }
+
+    private nonisolated func finishStream(sb: StreamBuffer, source: String,
+                                          voiceID: String, turn: String) {
+        if let tail = sb.finish() {
+            emitStreamBlock(tail, source: source, voiceID: voiceID, turn: turn)
+        }
+        Task { await queue.endTurn(turn) }
+        Log.info("流式结束: turn=\(turn)")
     }
 
     private nonisolated func handleTTS(fd: Int32, data: Data) {

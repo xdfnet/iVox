@@ -54,6 +54,36 @@ func speak(_ text: String, source: String? = nil, voice: String? = nil) {
 }
 ```
 
+### 1b. 流式 TTS — 边生成边播报（turn）
+
+整轮回复边生成边投递，服务端在安全边界切句，第一句生成完即开播，不必等整轮。
+一条连接多帧，帧间以 `\n` 分隔，连接保持打开：
+
+```
+{type:stream,source:pi,turn:<唯一id>}\n     首帧：开流（声明来源/音色/轮次）
+<增量原文片段>\n                              后续帧：一帧一段 text_delta 原文
+<增量原文片段>\n                              （delta 内自带的换行也作为句末边界）
+{end}\n                                       结束帧：flush 残尾并放开音乐保活
+```
+
+取消帧（用户中断）：`{cancel:<turn>}\n`（或 `{cancel}`）。客户端直接断开（EOF）等价于 `{end}`。
+
+**关键约定**
+
+- 客户端**只转发原文增量，不要自己切句/清洗**。切句（`splitSentences`）与降噪（`cleanText`）真源只在服务端：按句末/段落边界、且保证吐出前缀的代码围栏（```` ``` ````）自身配平后才抽出整段清洗，避免念出 Markdown/代码残片。
+- `turn` 必填且一轮内不变。**新 turn 打断旧 turn**（取消旧轮在播+丢弃排队）；同一 turn 的帧顺序追加。
+- turn 未收到 `{end}` 前，句间队列瞬时排空也不恢复音乐，避免反复 pause/resume。
+
+**示例（Node，pi 扩展即此实现）**
+
+```js
+import { createConnection } from "node:net";
+const sock = createConnection(`${process.env.HOME}/.config/ivox/ivox.sock`);
+sock.write(`{type:stream,source:pi,turn:${turnId}}\n`);
+sock.write(deltaText + "\n");   // 每个 text_delta 一帧
+sock.write("{end}\n");          // turn 结束
+```
+
 ### 2. ASR — 语音识别
 
 发送 WAV 音频，iVox 返回识别文本。

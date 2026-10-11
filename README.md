@@ -1,7 +1,7 @@
 # iVox
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Swift-6.0-FA7343?logo=swift&logoColor=white" alt="Swift 6.0">
+  <img src="https://img.shields.io/badge/Swift-6.4-FA7343?logo=swift&logoColor=white" alt="Swift 6.4">
   <img src="https://img.shields.io/badge/macOS-14%2B-000000?logo=apple&logoColor=white" alt="macOS 14+">
   <img src="https://img.shields.io/badge/Apple_Silicon-M1%2B-A2AAAD?logo=apple&logoColor=white" alt="Apple Silicon">
   <img src="https://img.shields.io/badge/TTS%2FASR-MLX_Local-7B68EE?logo=mlflow&logoColor=white" alt="MLX Local TTS/ASR">
@@ -19,9 +19,9 @@
 
 | 🗣️ AI 自动播报 | 🎙️ 语音输入 | 💬 微信桥接 |
 |:---:|:---:|:---:|
-| Claude Code / Codex 回复自动朗读<br>跳过代码和噪音，只说人话<br>按 ↓ 跳到下一段 | 按住 ⌘ 键说话，松开识别粘贴<br>屏幕浮窗实时显示录音波形与状态<br>纯语音输入，不碰键盘 | 微信消息→常驻 Claude Agent<br>后台任务跨消息持续运行<br>AI 回复自动转发回微信 |
+| Claude Code / Codex / pi 回复自动朗读<br>pi 边生成边逐句播报，跳过代码和噪音<br>按 ↓ 跳过当前段，任意键取消整条 | 按住右 ⌘ 或右 ⌃ 说话，松开识别粘贴<br>屏幕浮窗实时显示录音波形与状态<br>纯语音输入，不碰键盘 | 微信消息→常驻 Claude Agent<br>后台任务跨消息持续运行<br>AI 回复自动转发回微信 |
 
-播报前暂停音乐，播完自动恢复。一条命令安装，守护进程自启动。
+播报前暂停音乐，播完自动恢复。一条命令安装，装完即运行（不注册登录自启，用 `ivox on/off` 手动管理）。
 
 ## 安装
 
@@ -99,11 +99,12 @@ make clean     # 清除 .build
 ## 架构
 
 ```
-Claude Code / Codex → hook → Unix Socket → Daemon
+Claude Code / Codex → hook ─┐
+pi 扩展（逐句流式）──────────┴→ Unix Socket → Daemon
                                             ├── TTSEngine (本地 MLX)
                                             ├── WeChatPlatform (ilink 长轮询)
                                             │       └─ 常驻 Claude Agent (Swift 直连 claude)
-                                            ├── SpeechInput (⌘ 键 + ASR)
+                                            ├── SpeechInput (右 ⌘ / 右 ⌃ + ASR)
                                             └── MediaHTTPServer (Web UI)
 ```
 
@@ -115,13 +116,13 @@ Claude Code / Codex → hook → Unix Socket → Daemon
 
 | 权限 | 用途 | 是否必需 |
 |------|------|:--------:|
-| **麦克风** | 语音输入（按住 ⌘ 键说话 → ASR） | 不用语音输入可不给 |
+| **麦克风** | 语音输入（按住右 ⌘ / 右 ⌃ 说话 → ASR） | 不用语音输入可不给 |
 | **设备控制与数据访问** | ① 监听 ⌘ 键 ② 剪贴板粘贴注入 ③ 媒体控制 | **是** |
 | **代码签名** | ad-hoc 自签，每次重建哈希变化 → TCC 权限失效 | 部署后重新勾选 |
 
 设备控制与数据访问路径：系统设置 → 隐私与安全性 → 设备控制与数据访问 → 勾选 `ivox`。
 
-> 重建二进制后 ad-hoc 签名变化，TCC 记录的权限会失效。`make deploy` 会自动重新签名，但如果权限丢了，需要去系统设置重新勾选。
+> 重建二进制后 ad-hoc 签名变化，TCC 记录的权限会失效。`make update`（`deploy-bin`）会自动重新签名，但如果权限丢了，需要去系统设置重新勾选。
 
 ## 依赖
 
@@ -130,6 +131,7 @@ Claude Code / Codex → hook → Unix Socket → Daemon
 - [Claude Code](https://claude.com/claude-code) CLI — 微信常驻 Agent（Swift 经 stdio 直连）
 - [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) — 本地 MLX 推理
 - [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) — TTS 模型（[官方博客](https://qwen.ai/blog?id=qwen3tts-0115)）
+- Qwen3-ASR-1.7B — 本地语音识别模型（首次安装自动下载）
 
 ## 许可
 
