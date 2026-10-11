@@ -114,6 +114,7 @@ Daemon (actor)
 - Actor，管理播报队列
 - **连续播放管道**：`processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，句间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
 - `enqueue` 追加到队列尾部，同 `turnID` 不打断；新 turn / 无 turn 的普通 speak 触发 `bargeIn` 打断旧轮
+- **过期轮次静默丢弃**：`currentTurn` 已切到新轮后，旧轮的迟到帧/`endTurn`（含旧连接 EOF 残尾）一律 no-op、不再 `bargeIn`，避免旧轮残音反杀新轮（真人对话：你一开口对方就停）
 - 流式轮次（`turnOpen`）队列瞬时排空时挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐；`endTurn` 后排空才收尾
 - 打断只有两个途径：**开口说话**（right⌘ 录音触发 `cancelAll()`）与**新轮次**（新 turn / 无 turn 普通 speak 触发 `bargeIn`）；不再有「跳段」语义
 - `cancelAll()` 清空队列 + 取消全部播放（bargeIn + 清 turn 状态）

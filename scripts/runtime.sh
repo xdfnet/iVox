@@ -97,6 +97,14 @@ deploy_bin() {
     echo "⚠️  未找到 iVox_iVox.bundle，跳过（可能未编译资源包）" >&2
   fi
   sign_bin
+
+  # 升级也要刷新集成脚本本体（make update / ivox upgrade 走这里，不走 init）。
+  # hook 挂载配置不变（install-hooks 幂等，首次安装时已挂），只覆盖脚本内容。
+  if [[ -f "${ROOT}/integrations/hook.sh" ]]; then
+    cp "${ROOT}/integrations/hook.sh" "${HOOK_SH}"
+    chmod 755 "${HOOK_SH}"
+    echo "✓  hook: ${HOOK_SH}"
+  fi
 }
 
 uninstall_runtime() {

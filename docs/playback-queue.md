@@ -33,6 +33,7 @@
 - 队列瞬时排空时：`turnOpen == true`（流式轮次还在生成）→ 挂起在 `waitForJobs()`（continuation 存入 `jobWaiters`），**不退出、不恢复音乐**；`turnOpen == false` → 退出循环 → 末端 drain → 恢复音乐。
 - `signalJobs()` resume 并清空所有 `jobWaiters`，调用点只有：`enqueue`（新 job 到达）、`endTurn`（轮次结束）、`bargeIn`（打断/取消）。三者覆盖了挂起的全部唤醒路径，无 continuation 泄漏。
 - 轮次语义：`beginTurn/new turn` 打断旧轮；同 `turnID` 的分块顺序 append；普通 `ivox speak`/hook.sh（turnID=nil）作为新一轮打断当前在播。
+- **过期轮次的迟到帧一律静默丢弃（真人对话：你一开口，对方就别说了）**：一旦 `currentTurn` 已切到新轮，旧轮连接残留的入队/`endTurn`/`cancelTurn`（含旧连接被 destroy 后 EOF 触发的残尾 flush）全部 no-op——`enqueue` 见到 `currentTurn != 自己` 直接 return，**绝不再 bargeIn**（否则旧轮残音会反杀、打断刚开的新轮）。新轮开口的唯一权威是 `beginTurn`/新 turnID 的首次入队。典型：dsh 开新轮时旧连接直接 destroy（不发 cancel/end），靠这条不变量让旧轮 EOF 残尾作废。
 
 ## 状态机
 

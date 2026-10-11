@@ -66,6 +66,7 @@ actor PlaybackQueue {
     }
 
     /// 流式轮次正常结束：放开音乐保活并唤醒管道，让其排空后退出、恢复音乐。
+    /// 已被更新轮次顶掉的旧轮：其迟到的 {end}/EOF 一律忽略，残尾不再开口。
     func endTurn(_ id: String) async {
         guard currentTurn == id else { return }
         turnOpen = false
@@ -104,11 +105,14 @@ actor PlaybackQueue {
     func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async {
         guard !newJobs.isEmpty else { return }
         if let turnID {
-            if currentTurn != turnID {
+            // 已被更新轮次顶掉的旧轮：迟到帧（含 EOF 残尾）静默丢弃，
+            // 不 bargeIn——否则旧轮残音会反杀新轮，用户会听到上一轮冒半句。
+            if let cur = currentTurn, cur != turnID { return }
+            if currentTurn == nil {
                 bargeIn()
                 currentTurn = turnID
-                turnOpen = true
             }
+            turnOpen = true
         } else {
             // 普通 ivox speak / hook.sh：作为新一轮打断当前在播
             bargeIn()
