@@ -5,6 +5,15 @@
 # 手动静音（IVOX_SKIP=1，如 Samantha 内部调用）或 reflexio 后台学习调用（CLAUDE_SMART_INTERNAL=1）→ 不播报
 [[ "${IVOX_SKIP:-}" == "1" ]] && exit 0
 [[ "${CLAUDE_SMART_INTERNAL:-}" == "1" ]] && exit 0
+
+# stop 模式：挂在 UserPromptSubmit，用户一提交就打断当前播报（不读文本、不发声）。
+# stdin 的 hook payload 直接丢弃。
+if [[ "${1:-}" == "stop" ]]; then
+  cat >/dev/null 2>&1
+  ivox quiet 2>/dev/null
+  exit 0
+fi
+
 exec 3>&1
 exec 1>/dev/null
 

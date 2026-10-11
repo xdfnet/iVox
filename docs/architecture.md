@@ -282,12 +282,14 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-| 工具 | 配置/挂载 | 触发 |
-|------|----------|------|
-| Claude Code | `~/.claude/settings.json` | Stop Hook → hook.sh claude |
-| Codex | `~/.codex/hooks.json` | Stop Hook → hook.sh codex |
-| Qwen Code | `~/.qwen/settings.json` | Stop Hook → hook.sh qwen |
-| DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | `agent/assistant-stream` 逐 text-delta 流式转发；socket 不可用时 turn-stopping 退回直投 hook.sh（内置桥接 Stop payload 无文本） |
-| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `agent_settled` 事件 → ivox speak |
+每个 hook 类工具挂两个事件：**UserPromptSubmit → `hook.sh stop`**（提交即打断旧播报，调 `ivox quiet`）与 **Stop → `hook.sh <source>`**（回复完成，`ivox speak` 念新回复）。
 
-由 `scripts/install-hooks.sh` 统一安装（已存在则跳过）。`hook.sh` 提取回复文本，只调用 `ivox speak`（TTS 由各工具这一层统一处理）。
+| 工具 | 配置/挂载 | 提交即打断 | 回复播报 |
+|------|----------|-----------|----------|
+| Claude Code | `~/.claude/settings.json` | UserPromptSubmit → hook.sh stop | Stop → hook.sh claude |
+| Codex | `~/.codex/hooks.json` | UserPromptSubmit → hook.sh stop | Stop → hook.sh codex |
+| Qwen Code | `~/.qwen/settings.json` | UserPromptSubmit → hook.sh stop | Stop → hook.sh qwen |
+| DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | 新 turn `start` 帧自动 bargeIn | `agent/assistant-stream` 逐 text-delta 流式；socket 不可用时 turn-stopping 退回 hook.sh（内置桥接 Stop payload 无文本） |
+| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_start` 用户消息即发停止哨兵 | `message_update` 流式（`agent_settled` 兜底） |
+
+由 `scripts/install-hooks.sh` 统一安装（已存在则跳过）。`hook.sh` 两种模式：`stop` 只调 `ivox quiet` 打断；`<source>` 提取回复文本调 `ivox speak`（TTS 由各工具这一层统一处理）。

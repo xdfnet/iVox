@@ -5,46 +5,66 @@ set -euo pipefail
 HOOK_SH="${1:?用法: install-hooks.sh <hook-sh-path>}"
 
 # ── 公共函数：用 jq 或 python3 安全写入 hook 配置 ──
+# 用法：write_hook <config> <source> <timeout> [event]
+#   event 默认 Stop（念回复）；UserPromptSubmit 用固定命令 hook.sh stop（打断旧播报）
 write_hook() {
   local config_path="$1"
   local tool_name="$2"
   local timeout="$3"
-  local cmd="bash $HOOK_SH $tool_name"
+  local event="${4:-Stop}"
+  local cmd
+  if [[ "$event" == "UserPromptSubmit" ]]; then
+    cmd="bash $HOOK_SH stop"
+  else
+    cmd="bash $HOOK_SH $tool_name"
+  fi
 
   if command -v jq &>/dev/null; then
-    jq --arg cmd "$cmd" --argjson timeout "$timeout" \
-      '.hooks.Stop += [{"hooks": [{"command": $cmd, "timeout": $timeout, "type": "command"}]}]' \
+    jq --arg cmd "$cmd" --argjson timeout "$timeout" --arg event "$event" \
+      '.hooks[$event] += [{"hooks": [{"command": $cmd, "timeout": $timeout, "type": "command"}]}]' \
       "$config_path" > "${config_path}.tmp" && mv "${config_path}.tmp" "$config_path"
   elif command -v python3 &>/dev/null; then
     python3 -c "
 import json, sys
-cmd = sys.argv[1]
-timeout = int(sys.argv[2])
-path = sys.argv[3]
+cmd, timeout, path, event = sys.argv[1], int(sys.argv[2]), sys.argv[3], sys.argv[4]
 with open(path) as f:
     d = json.load(f)
-d.setdefault('hooks', {}).setdefault('Stop', []).append({
+d.setdefault('hooks', {}).setdefault(event, []).append({
     'hooks': [{'command': cmd, 'timeout': timeout, 'type': 'command'}]
 })
 with open(path, 'w') as f:
     json.dump(d, f, indent=2)
     f.write('\n')
-" "$cmd" "$timeout" "$config_path"
+" "$cmd" "$timeout" "$config_path" "$event"
   else
     return 1
+  fi
+}
+
+# UserPromptSubmit 打断 hook（用户一提交就停止旧播报）；已挂则跳过
+write_prompt_hook() {
+  local config_path="$1"
+  local timeout="$2"
+  if grep -q 'hook.sh stop' "$config_path" 2>/dev/null; then
+    echo "[i] $config_path 的 UserPromptSubmit 打断已存在"
+  elif write_hook "$config_path" "_" "$timeout" "UserPromptSubmit"; then
+    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断"
+  else
+    echo "⚠️  写入 UserPromptSubmit hook 失败（需 jq 或 python3）"
   fi
 }
 
 # ── Claude ──
 CLAUDE_JSON="$HOME/.claude/settings.json"
 if [[ -f "$CLAUDE_JSON" ]]; then
-  if grep -q 'hook.sh' "$CLAUDE_JSON" 2>/dev/null; then
+  if grep -q 'hook.sh claude' "$CLAUDE_JSON" 2>/dev/null; then
     echo "[i] Claude hook 已存在"
   elif write_hook "$CLAUDE_JSON" "claude" 10; then
     echo "✓  Claude hook"
   else
     echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"
   fi
+  write_prompt_hook "$CLAUDE_JSON" 10
 fi
 
 # ── Codex ──
@@ -52,26 +72,28 @@ CODEX_JSON="$HOME/.codex/hooks.json"
 mkdir -p "$(dirname "$CODEX_JSON")"
 [[ -f "$CODEX_JSON" ]] || echo '{}' > "$CODEX_JSON"
 
-if grep -q 'hook.sh' "$CODEX_JSON" 2>/dev/null; then
+if grep -q 'hook.sh codex' "$CODEX_JSON" 2>/dev/null; then
   echo "[i] Codex hook 已存在"
 elif write_hook "$CODEX_JSON" "codex" 30; then
   echo "✓  Codex hook（首次触发时授权即可）"
 else
   echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
 fi
+write_prompt_hook "$CODEX_JSON" 30
 
 # ── Qwen Code ──
 QWEN_JSON="$HOME/.qwen/settings.json"
 mkdir -p "$(dirname "$QWEN_JSON")"
 [[ -f "$QWEN_JSON" ]] || echo '{}' > "$QWEN_JSON"
 
-if grep -q 'hook.sh' "$QWEN_JSON" 2>/dev/null; then
+if grep -q 'hook.sh qwen' "$QWEN_JSON" 2>/dev/null; then
   echo "[i] Qwen Code hook 已存在"
 elif write_hook "$QWEN_JSON" "qwen" 60; then
   echo "✓  Qwen Code hook"
 else
   echo "⚠️  需要 jq 或 python3 写入 Qwen Code 配置，请手动添加"
 fi
+write_prompt_hook "$QWEN_JSON" 60
 
 # ── DeepSeek Harness ──
 # dsh 的回复文本由本地 cordis 插件 ivox-tts.mjs 在每轮结束时直投 hook.sh；
