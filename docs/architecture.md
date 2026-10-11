@@ -288,7 +288,7 @@ ConnectionHandler.extractVoicePrefix():
 | Claude Code | `~/.claude/settings.json` | Stop Hook → hook.sh claude |
 | Codex | `~/.codex/hooks.json` | Stop Hook → hook.sh codex |
 | Qwen Code | `~/.qwen/settings.json` | Stop Hook → hook.sh qwen |
-| DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | 每轮结束直投 hook.sh（Stop payload 无文本） |
+| DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | `agent/assistant-stream` 逐 text-delta 流式转发；socket 不可用时 turn-stopping 退回直投 hook.sh（内置桥接 Stop payload 无文本） |
 | PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `agent_settled` 事件 → ivox speak |
 
 由 `scripts/install-hooks.sh` 统一安装（已存在则跳过）。`hook.sh` 提取回复文本，只调用 `ivox speak`（TTS 由各工具这一层统一处理）。

@@ -1,12 +1,15 @@
 // iVox TTS bridge for DeepSeek Harness (dsh).
-// 每轮回复结束时，按 dsh 官方的「最终输出」规则取出该轮文本，直接交给 ivox hook.sh。
-// 取代旧方案「Stop hook -> 回头读 sessions/*.zstd 取文本」：
-// 不解 zstd、不猜 session 目录名、不轮询等刷盘、无「播到上一轮」竞态。
+// 第二层逐句流式：订阅 agent/assistant-stream 的 text-delta 增量，一 turn 一条
+// 长连接按 \n 分帧转发给守护进程，服务端在安全边界切句清洗并立刻开播，不必等
+// 整轮结束。切句/清洗真源只在服务端一份，这里绝不切句。
+// 兜底：socket 连不上（守护进程未运行 / 旧版无流式协议）时，退回 turn-stopping
+// 取整轮最终文本 spawn hook.sh，与旧行为一致。
 // 挂载（profile 的 cordis.patch.yml）：
 //   - insert: [{id: ivox-tts, name: "./plugins/ivox-tts.mjs"}]
-// 相对路径按 profile 目录解析，故无需改 app.asar，也无需 pnpm 安装。
-// 只用 node: 内置模块（profile 的 node_modules 是空的，不能 import dsh 内部包）。
+// 相对路径按 profile 目录解析，无需改 app.asar，也无需 pnpm。
+// 只用 node: 内置模块（profile 的 node_modules 是空的）。
 import { spawn } from "node:child_process";
+import { createConnection } from "node:net";
 import { homedir } from "node:os";
 import { join } from "node:path";
 
@@ -14,8 +17,9 @@ export const name = "ivox-tts";
 export const inject = [];
 
 const HOOK = join(homedir(), ".config", "ivox", "hook.sh");
+const SOCKET = join(homedir(), ".config", "ivox", "ivox.sock");
 
-// 拼出一条 assistant 消息的纯文本（跳过 tool_use / reasoning 等块）
+// 拼出一条 assistant 消息的纯文本（跳过 tool_use / reasoning 等块）——兜底路径用
 function textOfContent(content) {
 if (Array.isArray(content)) {
 var out = "";
@@ -35,7 +39,7 @@ return textOfContent((message || {}).content);
 }
 
 // 一条 durable 事件里累积的流式文本（dsh-llm 的 joinAssistantStreamText 同款取法）。
-// 只在没有任何非空 assistant 消息时兜底用。
+// 只在兜底路径、且没有任何非空 assistant 消息时用。
 function streamTextOf(stream) {
 if (!Array.isArray(stream)) return "";
 var out = "";
@@ -50,15 +54,19 @@ if (typeof record.chunk.text === "string") out += record.chunk.text;
 return out;
 }
 
+const randomTurn = () =>
+Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0") +
+Date.now().toString(16);
+
 export function apply(ctx, config) {
 config = config || {};
 var hookScript = config.hookScript || HOOK;
 var source = config.source || "dsh";
-// 选取规则复刻 dsh-subagent 的 AssistantOutputFold（官方「最终输出」定义）：
-// 取最后一条**内容非空**的 assistant 消息；内容为空的消息（max-tokens 且无可执行块）
-// 不覆盖它。若始终没有非空消息，则退回流式累积文本。
-var lastMessage = new Map(); // session.id -> content[]（最后一条非空 assistant 消息）
-var streamed = new Map();    // session.id -> 流式累积文本（兜底）
+// 兜底路径：最后一条非空 assistant 消息 / 流式累积文本
+var lastMessage = new Map(); // session.id -> content[]
+var streamed = new Map();    // session.id -> 流式累积文本
+// 流式连接：session.id -> 连接状态
+var conns = new Map();
 // 子代理会话 id：不播报，避免一次提问念多遍
 var subs = new Set();
 
@@ -80,8 +88,74 @@ var child = childOf(info);
 if (child && child.session) subs.delete(child.session.id);
 });
 
-// 每个 step 都会落一条 assistant/message（含带工具调用的中间回复），
-// 所以只缓存，整轮结束时取最后一条。
+// ── 第二层流式：agent/assistant-stream 逐 chunk 增量 ──
+ctx.on("agent/assistant-stream", function (args) {
+var agent = args && args.agent;
+var frame = args && args.frame;
+var sid = agent && agent.session && agent.session.id;
+if (!sid || !frame || subs.has(sid)) return;
+
+if (frame.type === "start") {
+var st0 = conns.get(sid);
+if (!st0 || st0.turnNo !== frame.turn) {
+// 新 turn：重开一条流（自带打断旧轮语义）；同 turn 的后续 attempt（工具调用）
+// 复用连接，仅在两段文本之间补换行。
+openStream(sid, frame.turn);
+} else {
+st0.pendingNL = true;   // 同 turn 新 attempt：工具调用后的下一段文本
+}
+return;
+}
+
+if (frame.type !== "chunk") return;
+var ch = frame.chunk;
+if (!ch || ch.type !== "text-delta" || typeof ch.text !== "string") return; // 跳过 reasoning/tool-call
+
+var state = conns.get(sid);
+if (!state) state = openStream(sid, undefined); // 无 start 的兜底开流
+if (state.socketDead) return;
+
+// 不同文本块（工具调用前后 / content index 变化）之间补换行，避免两句粘连
+if (state.pendingNL || (typeof ch.index === "number" && ch.index !== state.lastIndex)) {
+state.sock.write("\n");
+state.lastIndex = ch.index;
+}
+state.pendingNL = false;
+state.sock.write(ch.text + "\n");
+state.streamed = true;
+});
+
+function openStream(sid, turnNo) {
+closeStream(sid, false);
+var sock = createConnection(SOCKET);
+var state = {
+sock: sock,
+turnNo: turnNo,
+turnId: randomTurn(),
+socketDead: false,
+streamed: false,
+lastIndex: -1,
+pendingNL: false
+};
+sock.on("error", function () { state.socketDead = true; });
+// node net 会在真正建连前缓冲写入，无需等 connect 事件，避免建连期 chunk 被丢
+sock.write("{type:stream,source:" + source + ",turn:" + state.turnId + "}\n");
+conns.set(sid, state);
+return state;
+}
+
+function closeStream(sid, sendEnd) {
+var st = conns.get(sid);
+if (!st) return undefined;
+if (sendEnd && !st.socketDead) {
+try { st.sock.write("{end}\n"); } catch (e) {}
+}
+try { st.sock.destroy(); } catch (e) {}
+conns.delete(sid);
+return st;
+}
+
+// 每个 step 落一条 assistant/message（含带工具调用的中间回复），只缓存供兜底取最终文本
 ctx.on("session/event", function (session, event) {
 if (!event) return;
 if (event.type !== "assistant/message" && event.type !== "assistant/attempt") return;
@@ -100,18 +174,30 @@ streamed.set(session.id, acc === undefined ? piece : acc + piece);
 ctx.on("agent/turn-stopping", function (args) {
 var session = args && args.agent && args.agent.session;
 if (!session) return;
-var content = lastMessage.get(session.id);
-var text = content !== undefined ? textOfContent(content) : (streamed.get(session.id) || "");
-lastMessage.delete(session.id);
-streamed.delete(session.id);
+var sid = session.id;
+
+var st = closeStream(sid, true);   // 流式收尾：flush 残尾并关连接
+if (subs.has(sid)) { cleanup(sid); return; }
+
+// 流式已成功投递 → 不走整段兜底，避免重复播报
+if (st && st.streamed && !st.socketDead) { cleanup(sid); return; }
+
+// 兜底：取最后一条非空 assistant 文本（无则流式累积）整段投 hook.sh
+var content = lastMessage.get(sid);
+var text = content !== undefined ? textOfContent(content) : (streamed.get(sid) || "");
+cleanup(sid);
 if (text.trim().length === 0) return;
-if (subs.has(session.id)) return;
 deliver(session, text);
 });
 
+function cleanup(sid) {
+lastMessage.delete(sid);
+streamed.delete(sid);
+}
+
 ctx.on("session/disposed", function (session) {
-lastMessage.delete(session.id);
-streamed.delete(session.id);
+closeStream(session.id, false);
+cleanup(session.id);
 subs.delete(session.id);
 });
 

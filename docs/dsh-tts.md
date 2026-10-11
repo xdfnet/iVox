@@ -1,21 +1,26 @@
 # DeepSeek Harness 语音播报接入
 
-让 DSH（DeepSeek Harness）每轮回复结束后，用 iVox 自动朗读回复内容。音色走 `sourceVoices.dsh`，默认**湾湾**。
+DSH（DeepSeek Harness）回复时用 iVox 朗读。**默认第二层逐句流式**：模型边生成、iVox 边切句开播，不必等整轮。音色走 `sourceVoices.dsh`，默认**湾湾**。
 
-## 结论：一条直线
+## 结论：流式优先，整段兜底
 
 ```
-DSH 一轮结束
-  ├─ session/event  (assistant/message / assistant/attempt)  缓存候选最终消息 + 流式兜底
-  └─ agent/turn-stopping                        轮结束，按官方规则选取文本，spawn hook.sh
-        stdin: {session_id, cwd, hook_event_name:"Stop",
-                last_assistant_message:"<回复原文>"}
-  └─ ~/.config/ivox/hook.sh dsh                 通用分支读 last_assistant_message
-  └─ ivox speak --source dsh  →  Unix Socket
-  └─ Daemon: TextCleaner → PlaybackQueue → TTSEngine(MLX Qwen3-TTS) → AudioPlayer
+模型生成中
+  └─ agent/assistant-stream  逐 frame：start / chunk(text-delta 真增量) / end
+        每个 text-delta 经一条长连接按 \n 分帧转发：
+        {type:stream,source:dsh,turn:<id>}\n  → 增量原文帧 …
+  └─ Daemon: StreamBuffer 安全边界切句 → cleanText → splitSentences
+             → 连续播放管道（边合成边播）
+一轮结束
+  └─ agent/turn-stopping  发 {end}\n 关流（flush 残尾）
+        · 本轮已成功流式 → 结束，不重复播报
+        · socket 不可用（守护进程未运行 / 旧版）→ 退回整段：按官方规则
+          选最终文本 spawn hook.sh（stdin last_assistant_message）
 ```
 
-全程无轮询、无临时文件、无第二次读取、无竞态。
+流贯穿整个 agent turn：同 turn 内多个 attempt（工具调用前后多段文本）复用一条连接，仅在段间补换行；`frame.turn` 变化才开新流（新 turn 自带打断旧轮）。子代理会话（`subs`）不转发。全程无轮询、无临时文件、无竞态。
+
+> 注：`assistant/message` / `assistant/attempt` 的 `event.data.stream` 是**该 step 的完整紧凑流（累计）**，不是增量，不能直接逐帧转发；真增量只在 `agent/assistant-stream` 的 `chunk` frame（`chunk.chunk = {type:'text-delta', index, text}`，跳过 reasoning/tool-call delta）。
 
 ## 为什么不用 DSH 内置的 hooks 桥接
 
@@ -40,10 +45,11 @@ DSH 自带两个「Claude Code / Codex hook 兼容」桥接插件，但它们的
 
 | 扩展点 | 时机 | 用途 |
 |---|---|---|
-| `session/event` | 任一 session 日志事件落盘 | 过滤 `assistant/message`（登记该轮候选最终消息）与 `assistant/attempt`（累积流式兜底文本） |
-| `agent/turn-stopping` | 一轮结束（Stop 的对应点） | 按官方规则选出该轮文本并投递 |
-| `subagent/start` / `subagent/end` | 子代理起止 | 登记子代理会话，避免一次提问念多遍 |
-| `session/disposed` | 会话销毁 | 清理缓存 |
+| `agent/assistant-stream` | attempt 的 start/chunk/end 帧（**逐 token 真增量**） | 流式转发 `text-delta` 到长连接（主路径） |
+| `session/event` | 任一 session 日志事件落盘 | 过滤 `assistant/message`（登记候选最终消息）与 `assistant/attempt`（累积兜底文本）；仅 socket 不可用时用 |
+| `agent/turn-stopping` | 一轮结束（Stop 的对应点） | 流式发 `{end}` 收尾；未流式成功则按官方规则选最终文本 spawn hook.sh |
+| `subagent/start` / `subagent/end` | 子代理起止 | 登记子代理会话，流式与兜底都跳过，避免一次提问念多遍 |
+| `session/disposed` | 会话销毁 | 关流并清理缓存/连接 |
 
 **注意**：每个 step 都会落一条 `assistant/message`（包括带工具调用的中间回复）。若在 `assistant/message` 上直接播，会把过程话全念出来。所以必须「缓存 + 整轮结束取最后一条」。
 

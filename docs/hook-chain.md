@@ -63,20 +63,25 @@
 |------|----------|----------|
 | Claude Code | Stop Hook | `~/.claude/settings.json` |
 | Codex | Stop Hook | `~/.codex/hooks.json` |
-| DeepSeek Harness | 本地 cordis 插件 `ivox-tts` 在每轮结束时把回复原文直投 hook.sh | `~/.dsh/profiles/desktop/cordis.patch.yml` 挂载 `./plugins/ivox-tts.mjs` |
+| DeepSeek Harness | 本地 cordis 插件 `ivox-tts`：`agent/assistant-stream` 逐 token 流式转发（主）；socket 不可用时 turn-stopping 整段直投 hook.sh（兜底） | `~/.dsh/profiles/desktop/cordis.patch.yml` 挂载 `./plugins/ivox-tts.mjs` |
 
 Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发，payload 自带 `last_assistant_message`。
 
-DeepSeek Harness 不同：它内置的桥接插件（`dsh-hooks-claude-code` / `dsh-hooks-codex`）的 Stop payload **不含回复文本**（`stopPayload()` 只给 `session_id` / `cwd` / `hook_event_name`；codex 版把 `last_assistant_message` 写死成 `null`）。文本改由本地 cordis 插件 `ivox-tts` 在内存中取出，直投给 hook.sh：
+DeepSeek Harness 不同：它内置的桥接插件（`dsh-hooks-claude-code` / `dsh-hooks-codex`）的 Stop payload **不含回复文本**（`stopPayload()` 只给 `session_id` / `cwd` / `hook_event_name`；codex 版把 `last_assistant_message` 写死成 `null`）。文本由本地 cordis 插件 `ivox-tts` 在内存中取出。**默认走与 pi 同构的第二层流式**，只在 socket 连不上时退回整段 hook.sh：
 
 ```
-DSH 一轮结束
-  ├─ ctx.on("session/event")        assistant/message 落盘时，缓存该轮最后一条文本
-  └─ ctx.on("agent/turn-stopping")  轮结束 → spawn: bash hook.sh dsh
-        stdin: {session_id, cwd, hook_event_name:"Stop",
-                last_assistant_message:"<回复原文>"}
-  └─ hook.sh 通用分支 → ivox speak --source dsh（湾湾音色）
+模型生成中
+  └─ ctx.on("agent/assistant-stream")  frame=start/chunk/end
+        chunk.chunk.type==="text-delta" → 增量原文帧写长连接（跳过 reasoning/tool-call）
+一轮结束
+  └─ ctx.on("agent/turn-stopping")  发 {end} 关流
+        · 已流式成功 → 结束
+        · socket 不可用 → spawn: bash hook.sh dsh
+              stdin: {hook_event_name:"Stop", last_assistant_message:"<最终文本>"}
+          （最终文本仍由 session/event 缓存的最后一条非空 assistant/message 选出）
 ```
+
+> `assistant/message`/`attempt` 的 `data.stream` 是该 step 的**累计**紧凑流，不能逐帧转发；真增量只在 `agent/assistant-stream` 的 chunk frame。
 
 装在 `~/.dsh/profiles/desktop/plugins/ivox-tts.mjs`，由 `scripts/install-hooks.sh` 安装，源码在仓库 `integrations/dsh/`。
 
