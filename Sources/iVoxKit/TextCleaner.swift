@@ -110,13 +110,14 @@ private struct TextCollector: MarkupWalker {
 // MARK: - 行内清洗
 
 private extension String {
-    /// 播报前的完整行内清洗：URL → 噪音 → emoji。
+    /// 播报前的完整行内清洗：URL → 噪音 → emoji 口语化 → emoji 剔除。
     ///
     /// 顺序不可调换：
     /// - **URL 必须在噪音之前** —— 否则 URL 会被路径规则当成路径砍成 `https:b` 这类残片；
-    /// - **噪音必须在 removingEmoji 之前** —— 符号清理会把 `:` `/` `[` 换成空格，正则就匹配不到了。
+    /// - **噪音必须在 removingEmoji 之前** —— 符号清理会把 `:` `/` `[` 换成空格，正则就匹配不到了；
+    /// - **replacingEmojiSpeech 必须在 removingEmoji 之前** —— 先把常见 emoji 换成口语词，没命中的再剔除。
     var cleanedForTTS: String {
-        removingURLs.removingNoise.removingEmoji
+        removingURLs.removingNoise.replacingEmojiSpeech.removingEmoji
     }
 
     /// 剔除「眼睛能看、耳朵听不出」的噪音
@@ -274,6 +275,31 @@ private extension String {
         replacingOccurrences(of: "→", with: "到")
     }
 
+    // MARK: emoji 口语化
+
+    /// 常见 emoji → 中文口语词（保留情绪，避免直接删成沉默）；未命中的留给 removingEmoji 剔除。
+    private static let emojiSpeech: [Character: String] = Dictionary(
+        uniqueKeysWithValues: [
+            "👌": "好的", "🆗": "好的", "👍": "赞", "👎": "不行",
+            "✅": "没问题", "❌": "不对", "⚠️": "注意", "❗": "注意", "⁉️": "等等",
+            "🎉": "太棒了", "🎊": "太棒了", "🥳": "太棒了",
+            "😂": "哈哈", "🤣": "哈哈", "😄": "哈哈", "😆": "哈哈",
+            "😊": "开心", "🙂": "嗯", "😅": "汗", "😉": "眨眼",
+            "🤔": "思考", "😭": "哭", "😱": "惊讶", "😴": "困",
+            "🙏": "谢谢", "❤️": "比心", "🔥": "火热", "💡": "提示",
+            "🚀": "起飞", "✨": "闪亮", "⭐": "星星", "🎯": "搞定了",
+            "📝": "记录", "🔊": "声音", "📌": "重点", "🧠": "思考", "📦": "打包",
+        ].map { (Character($0.key), $0.value) })
+
+    /// 以 grapheme cluster 为粒度替换常见 emoji；肤色修饰（U+1F3FB–F3FF）与变体选择符 VS16 先剥离再查表，
+    /// 因此 `👌🏽`/`👍🏻` 等任意肤色变体也能命中基础 emoji。
+    var replacingEmojiSpeech: String {
+        map { ch -> String in
+            guard ch.isEmojiLike, let base = ch.emojiSpeechBase else { return String(ch) }
+            return Self.emojiSpeech[base] ?? String(ch)
+        }.joined()
+    }
+
     // MARK: 换行归一化
 
     /// 纯文本换行归一化：换行是段落/折行边界，TTS 需要停顿信号。
@@ -359,4 +385,15 @@ private extension String {
 
 private extension Character {
     var isEmojiLike: Bool { unicodeScalars.contains { $0.properties.isEmoji } }
+
+    /// 剥掉肤色修饰（U+1F3FB–U+1F3FF）、变体选择符 VS16（U+FE0F）与 ZWJ（U+200D）后，
+    /// 用剩余标量重建字符，作为 emoji 口语表的查表键；剥光了（纯修饰符）则返回 nil。
+    var emojiSpeechBase: Character? {
+        let scalars = unicodeScalars.filter {
+            !(0x1F3FB...0x1F3FF ~= $0.value || $0.value == 0xFE0F || $0.value == 0x200D)
+        }
+        var s = String.UnicodeScalarView()
+        s.append(contentsOf: scalars)
+        return s.isEmpty ? nil : Character(String(s))
+    }
 }

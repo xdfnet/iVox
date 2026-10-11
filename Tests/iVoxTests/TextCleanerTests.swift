@@ -52,9 +52,31 @@ final class TextCleanerTests: XCTestCase {
     }
 
     func testStripsEmojiModifier() {
-        // 👶 主字 + 🏽 肤色修饰符都应砍
+        // 👶 主字 + 🏽 肤色修饰符都应砍（未在口语表里的 emoji 仍被剔除）
         let input = "**a👶🏽b**"
         XCTAssertEqual(cleanText(input), "ab。")
+    }
+
+    // MARK: - emoji 口语化
+
+    func testEmojiToSpeechFastPath() {
+        // 纯中文短文本走快速路径：常见 emoji 换成口语词，不引空格、不加句号
+        XCTAssertEqual(cleanText("搞定了👌🎉"), "搞定了好的太棒了")
+    }
+
+    func testEmojiToSpeechMarkdownPath() {
+        // 粗体触发 AST 路径：emoji 仍替换为口语词，块末补 "。"
+        XCTAssertEqual(cleanText("**测试通过✅🙏**"), "测试通过没问题谢谢。")
+    }
+
+    func testEmojiSkinToneVariant() {
+        // 👍 + 🏼 肤色变体也应命中基础 emoji「赞」
+        XCTAssertEqual(cleanText("写得好👍🏼"), "写得好赞")
+    }
+
+    func testEmojiOnlyLine() {
+        // 一行只剩 emoji：替换为口语词，行尾补句号
+        XCTAssertEqual(cleanText("**🚀**"), "起飞。")
     }
 
     // MARK: - 代码

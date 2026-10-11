@@ -30,6 +30,9 @@ final class MediaHTTPServer: @unchecked Sendable {
     private var _isRunning = false
     private var _serverURL: String?
 
+    /// /health 运行态提供者（由 Daemon 注入）；nil 时端点只回版本号
+    private let healthProvider: (@Sendable () async -> HealthSnapshot?)?
+
     var isRunning: Bool { stateLock.withLock { _isRunning } }
     var serverURL: String? { stateLock.withLock { _serverURL } }
 
@@ -40,8 +43,9 @@ final class MediaHTTPServer: @unchecked Sendable {
         }
     }
 
-    init(port: UInt16 = 8888) {
+    init(port: UInt16 = 8888, healthProvider: (@Sendable () async -> HealthSnapshot?)? = nil) {
         self.port = port
+        self.healthProvider = healthProvider
     }
 
     deinit { stop() }
@@ -122,7 +126,11 @@ final class MediaHTTPServer: @unchecked Sendable {
 
         Log.debug("HTTP 请求: \(path)")
 
-        if path == "/" || path == "/index.html" {
+        // 只读健康探针：剥离 query 后精确匹配 /health，无需设备控制权限
+        let target = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
+        if target == "/health" {
+            await handleHealth(connection)
+        } else if path == "/" || path == "/index.html" {
             HTTPResponseHandler.sendHTML(connection, Self.loadHTML())
         } else if path.hasPrefix("/api/") {
             handleAPI(path: path, connection: connection)
@@ -132,6 +140,19 @@ final class MediaHTTPServer: @unchecked Sendable {
             Log.warn("未找到路径: \(path)")
             HTTPResponseHandler.sendNotFound(connection)
         }
+    }
+
+    /// GET /health：返回版本号 + 引擎/队列运行态（provider 未注入时仅版本号）
+    private nonisolated func handleHealth(_ connection: NWConnection) async {
+        var extra: [String: Any] = ["version": iVoxVersion]
+        if let snap = await healthProvider?() {
+            extra["model"] = snap.model
+            extra["engine"] = snap.engine
+            extra["queued"] = snap.queued
+            extra["playing"] = snap.playing
+        }
+        let json = HTTPResponseHandler.buildJSONResponse(status: "ok", additionalData: extra)
+        HTTPResponseHandler.sendJSON(connection, json)
     }
 
     nonisolated static func parsePath(from data: Data) -> String? {

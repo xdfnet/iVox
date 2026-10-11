@@ -38,9 +38,17 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 ```bash
 ivox speak "你好"           # 手动播报
 ivox voice list             # 列出音色
-ivox status                 # 版本、各功能健康状态、麦克风/设备控制权限
+ivox status                 # 版本、各功能健康状态、权限、模型/音色文件体检
 ivox listen -f 录音.wav     # 语音识别
 ivox restart                # 重启服务
+ivox upgrade                # 检查 GitHub 最新版并自动升级（备份旧版、重签、重启）
+```
+
+**健康检查**（Web UI 端口，默认 8888）：
+
+```bash
+curl -s 127.0.0.1:8888/health
+# {"status":"ok","version":"3.5.0","model":"Qwen3-TTS-…","engine":"ready","queued":0,"playing":false}
 ```
 
 **微信**：配置后微信消息自动注入 Claude Code，AI 回复通过 TTS 播报并转发回微信。

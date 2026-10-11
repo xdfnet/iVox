@@ -192,10 +192,33 @@ actor Daemon {
         }
     }
 
+    /// /health 运行态快照：TTS 引擎状态 + 模型名 + 播放队列
+    func makeHealthSnapshot() async -> HealthSnapshot {
+        let ttsPath = config.models?.ttsPath ?? "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+        let expanded = (ttsPath as NSString).expandingTildeInPath
+        let modelName = expanded.split(separator: "/").last.map { String($0) } ?? ttsPath
+        let engineState: String
+        switch await engine.state {
+        case .notStarted: engineState = "notStarted"
+        case .loading: engineState = "loading"
+        case .ready: engineState = "ready"
+        case .failed: engineState = "failed"
+        }
+        return HealthSnapshot(
+            version: iVoxVersion,
+            model: modelName,
+            engine: engineState,
+            queued: await queue.pendingCount,
+            playing: await queue.isProcessing
+        )
+    }
+
     /// 启动媒体控制 HTTP 服务器（提供 Web UI），端口由配置指定。
     private func startMediaHTTPServer() {
         let port = UInt16(config.resolvedMediaControl.resolvedHTTPServerPort)
-        let httpServer = MediaHTTPServer(port: port)
+        let httpServer = MediaHTTPServer(port: port) { [weak self] in
+            await self?.makeHealthSnapshot()
+        }
         self.mediaHTTPServer = httpServer
         switch httpServer.start() {
         case .success:

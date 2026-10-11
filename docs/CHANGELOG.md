@@ -1,5 +1,20 @@
 # iVox 开发日志
 
+## Unreleased（下一版）
+
+借鉴 `~/iCode/ai-stack` 本地推理栈的体验与运维实践，五项改进：
+
+### 新增
+
+- **emoji 口语化** — `TextCleaner` 新增 `replacingEmojiSpeech`（清洗链 URL → 噪音 → emoji 口语化 → emoji 剔除）：高频 emoji 先替换成中文口语词（`👌`好的、`👍`赞、`✅`没问题、`🎉`太棒了、`🙏`谢谢、`🚀`起飞、`💡`提示 等约 35 个），未命中的仍照旧剔除。以 grapheme cluster 为粒度并先剥离肤色修饰（U+1F3FB–F3FF）/ VS16 / ZWJ，`👌🏽` 等任意肤色变体也能命中；替换不引入 ASCII 空格
+- **`GET /health` 健康端点** — 媒体 HTTP 服务（默认 8888）新增只读探针，返回 `{"status","version","model","engine","queued","playing"}`。`MediaHTTPServer` 通过 `healthProvider` 闭包（`[weak self]`，对齐既有 `statusProvider` 模式）由 `Daemon` 注入运行态；`PlaybackQueue` 新增 `pendingCount`/`isProcessing` 只读访问器；新增 `HealthSnapshot` Sendable 快照类型。无需设备控制权限
+- **`ivox upgrade` 自动升级命令** — 检查 GitHub 最新 release → 比对版本号（x.y.z 数值段比较）→ 选适配 macos-arm64 的 `.tar.gz` → 停守护进程 → 旧版备份为 `~/.local/bin/ivox.bak-<旧版本>` → 解包替换 → `chmod 755` + ad-hoc 重签 → 原本在运行则自动重启。已是最新直接退出；无适配包给明确报错；全程可从备份回滚
+- **`ivox status` 配置体检** — 新增「配置」段（守护进程未运行也显示）：校验 TTS 模型目录（含 config.json + safetensors）、启用语音输入时校验 ASR 模型目录、逐个音色检查 `refAudio` 文件是否存在。只读、不改变启动期校验
+
+### 变更
+
+- **离线环境变量** — `serve`（守护进程）启动最早期设置 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`。模型本就走「本地目录含 config.json」分支不联网，此为防御性设置（惠及子进程与未来组件）
+
 ## v3.5.0 — 2026-10-05
 
 ### 修复

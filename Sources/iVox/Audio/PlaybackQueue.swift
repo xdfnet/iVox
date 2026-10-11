@@ -32,6 +32,11 @@ actor PlaybackQueue {
         Task { await media.resume() }   // 退出时确保 music 恢复，避免 daemon 重启后卡暂停
     }
 
+    /// 队列中等待播放的条数（/health 用）
+    var pendingCount: Int { jobs.count }
+    /// 是否有正在处理的播报（/health 用）
+    var isProcessing: Bool { currentTask != nil }
+
     /// 取消所有播放（正在播的和队列中等待的）
     func cancelAll() {
         currentTask?.cancel()
