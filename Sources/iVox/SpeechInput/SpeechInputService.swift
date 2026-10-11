@@ -90,7 +90,7 @@ final class SpeechInputService: @unchecked Sendable {
             return
         }
 
-        // eventTap 是键盘监听的硬前提（任意键停 / ↓ / 右⌘），需要设备控制权限。
+        // eventTap 是键盘监听的硬前提（只监听 right⌘/right⌃ 的 flagsChanged），需要设备控制权限。
         // 麦克风只在录音时才需要，缺失不应连坐拆掉键盘监听。
         guard let tap = createEventTap() else {
             waitForPermissions()
@@ -104,7 +104,7 @@ final class SpeechInputService: @unchecked Sendable {
             runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         }
-        Log.info("语音输入已启动 (right ⌘→说话→松开→粘贴，↓=下一段，其他键=取消)")
+        Log.info("语音输入已启动 (right ⌘→说话→松开→粘贴并打断播报；打字/Esc/方向键不打断)")
 
         // 首次启动异步触发麦克风授权框，不阻塞 runloop；授权与否键盘监听都常驻
         Task { _ = checkMicPermission() }
@@ -116,24 +116,19 @@ final class SpeechInputService: @unchecked Sendable {
     // MARK: - Event tap
 
     private func createEventTap() -> CFMachPort? {
-        let mask = (1 << CGEventType.flagsChanged.rawValue) | (1 << CGEventType.keyDown.rawValue)
+        // 只监听修饰键（right⌘/right⌃ 的按下与松开），不再劫持任何普通键：
+        // 打字、Esc、方向键原样透传。打断播报的唯一键盘途径就是「开口说话」。
+        let mask = (1 << CGEventType.flagsChanged.rawValue)
 
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
             let service = Unmanaged<SpeechInputService>.fromOpaque(refcon).takeUnretainedValue()
             guard !service.isStopped else { return Unmanaged.passUnretained(event) }
             let keycode = event.getIntegerValueField(.keyboardEventKeycode)
-            switch type {
-            case .flagsChanged where keycode == 0x36 || keycode == 0x3E:
+            if type == .flagsChanged, keycode == 0x36 || keycode == 0x3E {
                 // right ⌘ (0x36) 或 right ⌃ (0x3E) 均可触发语音输入
                 let isDown = event.flags.contains(keycode == 0x36 ? .maskCommand : .maskControl)
                 service.handleKey(isDown: isDown)
-            case .keyDown where keycode == 0x7D:
-                service.handleSkipNext()
-            case .keyDown:
-                service.handleSkip()
-            default:
-                break
             }
             return Unmanaged.passUnretained(event)
         }
@@ -189,24 +184,6 @@ final class SpeechInputService: @unchecked Sendable {
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
             }
         }
-    }
-
-    private func handleSkip() {
-        Log.debug("语音输入: 任意其他键 → 取消 TTS + 恢复音乐")
-        // 录音中按其他键不打断录音，浮窗保留
-        let isRecording: Bool = stateQueue.sync {
-            if case .recording = state { return true } else { return false }
-        }
-        if !isRecording { dismissOverlay() }
-        Task {
-            await queue.cancelAll()
-            await media.resume()
-        }
-    }
-
-    private func handleSkipNext() {
-        Log.debug("语音输入: ↓ 键 → 跳到下一段")
-        Task { await queue.skipCurrent() }
     }
 
     // MARK: - Recording

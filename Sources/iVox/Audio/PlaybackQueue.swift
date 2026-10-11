@@ -52,22 +52,6 @@ actor PlaybackQueue {
         turnOpen = false
     }
 
-    /// 跳过当前正在播的 job，直接播队列里下一个；队列空才真的停
-    func skipCurrent() async {
-        guard let oldTask = currentTask else { return }
-        generation &+= 1
-        currentTask = nil
-        oldTask.cancel()
-        player.cancelPendingPlayback()
-        _ = await oldTask.value
-
-        if jobs.isEmpty {
-            await media.resume()
-        } else if currentTask == nil {
-            currentTask = Task { await processNext() }
-        }
-    }
-
     /// 空闲时恢复音乐（由外部调用，如语音输入结束后）
     func resumeIfIdle() async {
         guard jobs.isEmpty, currentTask == nil else { return }
@@ -186,7 +170,7 @@ actor PlaybackQueue {
                 try Task.checkCancellation()
                 // 注意：这里不 drain —— 下一句音频连续排队，设备零停顿；末端统一 drain
             } catch is CancellationError {
-                // 播放在途音频的作废统一由 bargeIn/skipCurrent 的 cancelPendingPlayback 完成
+                // 播放在途音频的作废统一由 bargeIn/cancelAll 的 cancelPendingPlayback 完成
                 Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
                 currentTask = nil
                 return

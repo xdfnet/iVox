@@ -115,8 +115,8 @@ Daemon (actor)
 - **连续播放管道**：`processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，句间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
 - `enqueue` 追加到队列尾部，同 `turnID` 不打断；新 turn / 无 turn 的普通 speak 触发 `bargeIn` 打断旧轮
 - 流式轮次（`turnOpen`）队列瞬时排空时挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐；`endTurn` 后排空才收尾
-- 抢新（取消当前播报、跳到下一个）由 `skipCurrent()` 处理，仅 ↓ 键触发
-- `cancelAll()` 清空队列 + 取消全部播放
+- 打断只有两个途径：**开口说话**（right⌘ 录音触发 `cancelAll()`）与**新轮次**（新 turn / 无 turn 普通 speak 触发 `bargeIn`）；不再有「跳段」语义
+- `cancelAll()` 清空队列 + 取消全部播放（bargeIn + 清 turn 状态）
 - 等待 TTS 模型就绪后再开始合成
 - 播报前通过 `MediaController` 暂停音乐，播完恢复
 
@@ -141,11 +141,10 @@ Daemon (actor)
 
 `Sources/iVox/SpeechInput/`
 
-- `CGEvent.tapCreate()` 监听 `flagsChanged`（right ⌘ 或 right ⌃）和 `keyDown` 事件
-- **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音
+- `CGEvent.tapCreate()` **只监听 `flagsChanged`**（right ⌘ 或 right ⌃），不再监听任何普通 `keyDown`——打字、Esc、方向键全部原样透传（GUI 客户端里打字不等于要它闭嘴，Esc 还要留给 agent 取消生成）
+- **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」，这是唯一的键盘打断途径）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- **任意其他键**（除 ↓ 外）：取消 TTS + 恢复音乐
-- **方向下键 ↓**：跳到下一段 TTS
+- 另一条打断途径是新轮次入队自动 bargeIn，无需按键
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 
@@ -239,7 +238,7 @@ pi 扩展（`integrations/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在
    - 箭头 `→` → 「到」；其余 ASCII 符号（`_ = @ &`）→ 空格，避免 `loadRefAudio_12` 粘成 `loadRefAudio12`
    - 删除 emoji；各类空白折叠为一个空格
 
-清洗后由 `TextSplitter` 分成 ≤80 字的块入队，**「任意键 = 取消整条」与「↓ = 跳过当前这一段」因此才真正有区别**。
+清洗后由 `TextSplitter` 分成 ≤80 字的块入队，既贴合 TTS 的句级合成，也让流式 turn 能边切边播。
 
 ## 音色匹配
 

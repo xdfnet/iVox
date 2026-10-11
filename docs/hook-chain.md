@@ -176,7 +176,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
 - **轮次（turn）语义**：同一 `turnID` 的分块顺序 append 不打断；新 turn 或无 turn 的普通 `ivox speak` 触发 `bargeIn`，取消在播 + 清空旧轮队列
 - 流式轮次未结束（`turnOpen`）时队列排空就挂起等下一批，不恢复音乐；轮次结束排空后才收尾
-- ↓ 键 `skipCurrent()` 跳过当前段，`cancelAll()` 清空并取消全部
+- 打断只有两途径：right⌘ 开口说话触发 `cancelAll()`（清空并取消全部），或新轮次 `bargeIn`；普通键/Esc/方向键不打断
 
 ### 7. MediaController
 
