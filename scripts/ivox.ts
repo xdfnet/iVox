@@ -23,6 +23,7 @@ export default function (pi: ExtensionAPI) {
   let streamed = false;   // 本轮是否已成功转发过流式增量
   let socketDead = false; // 连接是否失败过（失败则本轮退回整段兜底）
   let lastContentIndex = -1;
+  let muted = false;      // 本轮被手动中断后不再续念，下一轮用户发言/turn_start 解除
 
   const randomTurn = () =>
     Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0") +
@@ -32,6 +33,7 @@ export default function (pi: ExtensionAPI) {
     turnId = randomTurn();
     streamed = false;
     socketDead = false;
+    muted = false;
     lastContentIndex = -1;
     closeSock();
     const s = createConnection(SOCKET_PATH);
@@ -50,6 +52,20 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // 本轮收尾：flush 残尾并关闭长连接（turn 结束，而非每条 message 结束）
+  function endTurn() {
+    if (sock && !socketDead) sock.write("{end}\n");
+    closeSock();
+    turnId = "";
+  }
+
+  function cancelTurn() {
+    muted = true;
+    if (sock && !socketDead) sock.write("{cancel}\n");
+    closeSock();
+    turnId = "";
+  }
+
   function sendFrame(text: string) {
     if (sock && !socketDead && !sock.destroyed) sock.write(text + "\n");
   }
@@ -63,12 +79,18 @@ export default function (pi: ExtensionAPI) {
     startTurn();
   });
 
+  // 一个 turn 收尾：流贯穿整轮（工具调用会产生多条 assistant 消息，
+  // 不能在 message_end 就关流），只在 turn 真正结束时 flush + 关闭。
+  pi.on("turn_end", (_e: unknown, ctx: unknown) => {
+    if (!hasUI(ctx) || !turnId) return;
+    endTurn();
+  });
+
   // 用户发新消息：立即打断上一轮（即使 assistant turn 尚未/未正常开始）
   pi.on("message_start", (event: unknown, ctx: unknown) => {
     if (!hasUI(ctx)) return;
     if ((event as { message?: { role?: string } }).message?.role === "user") {
-      if (sock && !socketDead) sock.write("{cancel}\n");
-      closeSock();
+      if (turnId) cancelTurn();
       stopPlayback();
       startTurn();
     }
@@ -83,8 +105,12 @@ export default function (pi: ExtensionAPI) {
   }
 
   pi.on("message_update", (event: unknown, ctx: unknown) => {
-    if (!hasUI(ctx)) return;
-    const ev = event as { assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string } };
+    if (!hasUI(ctx) || muted) return;
+    const ev = event as {
+      message?: { role?: string };
+      assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string };
+    };
+    if (ev.message?.role && ev.message.role !== "assistant") return;
     const d = ev.assistantMessageEvent;
     if (!d || d.type !== "text_delta" || typeof d.delta !== "string") return; // 跳过 thinking/toolcall
     if (!turnId) startTurn(); // 某些模式可能无 turn_start
@@ -97,22 +123,15 @@ export default function (pi: ExtensionAPI) {
     streamed = true;
   });
 
-  pi.on("message_end", (_e: unknown, ctx: unknown) => {
-    if (!hasUI(ctx)) return;
-    if (sock && !socketDead) sock.write("{end}\n");
-    closeSock();
-  });
-
   pi.on("agent_settled", async (event: unknown, ctx: unknown) => {
     if (!hasUI(ctx)) return;
     const aborted = (event as { aborted?: boolean }).aborted === true;
     if (aborted) {
-      // 用户中断：通知服务端丢弃本轮未播内容
-      if (sock && !socketDead) sock.write("{cancel}\n");
-      closeSock();
-      return
+      if (turnId) cancelTurn();   // 用户中断：丢弃本轮未播内容，且本轮不再续念
+      return;
     }
-    if (streamed && !socketDead) { closeSock(); return; } // 已流式播报，不重复
+    if (turnId) endTurn();        // 正常收尾（turn_end 已收过则为空操作）
+    if (streamed && !socketDead) return; // 已流式播报，不重复
 
     // 兜底：取最后一条 assistant 文本消息整段播报
     closeSock();
