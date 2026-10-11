@@ -44,7 +44,7 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   TextCleaner.swift    — Markdown + 噪音过滤（给 TTS 用）
   TextSplitter.swift   — 流式文本分块
 
-Sources/iVoxTests/     — 测试（仅依赖 iVoxKit）
+Tests/iVoxTests/       — 测试（仅依赖 iVoxKit）
 
 integrations/          — 各外部 agent 的对接适配层（安装时由脚本 cp，不编进二进制）
   hook.sh              — 通用 Stop hook（claude/codex/qwen/dsh 共用）
@@ -60,20 +60,22 @@ scripts/               — runtime.sh, download-models.sh, install-*.sh（构建
 基于守护进程的 actor 架构（无 launchd，`ivox on/off` 手动管理）：
 
 ```
-Claude Code/Codex  →  hook.sh  →  Unix Socket  →  Daemon
-                                                          ├─ PlaybackQueue (actor)
-                                                          │   ├─ TTSEngine (mlx-audio-swift)
-                                                          │   └─ AudioPlayer (AVAudioEngine)
-                                                          ├─ WeChatPlatform (actor, 长轮询)
-                                                          ├─ SpeechInputService (Cmd 键 + ASR)
-                                                          └─ MediaHTTPServer (端口 8888, Web UI)
+Claude Code/Codex/Qwen/DSH → hook.sh(Stop) ┐
+pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬─ PlaybackQueue (actor)
+微信 ilink 长轮询                          ┘                       │   ├─ TTSEngine (mlx-audio-swift)
+                                                                   │   └─ AudioPlayer (AVAudioEngine)
+                                                                   ├─ SpeechInputService (Cmd 键 + ASR)
+                                                                   └─ MediaHTTPServer (端口 8888, Web UI)
 ```
 
 关键模式：
 - **Swift 6 严格并发**：所有服务都是 `actor` 类型。跨 actor 调用使用 `await`。`@Sendable` 闭包必须捕获值拷贝的 `let` 绑定（不能是 actor 上下文中的 `var`）。
 - **Daemon 生命周期**：`init` 加载配置 → `run()` 并行启动所有服务 → `cleanup()` 处理 SIGINT/SIGTERM 退出。
 - **微信长轮询**：`GetUpdatesResp.ret` 是 `Int?`（API 在空响应时省略 `ret`）。手动用 `withThrowingTaskGroup` 让 URL 请求和 `Task.sleep` 超时竞速（URLSession idle timeout 在长轮询 TCP keep-alive 下不会触发）。
-- **TTS 流水线**：Qwen3-TTS 通过 `mlx-audio-swift` 流式合成，`AVAudioEngine` 播放。文本先由 `TextCleaner` 预处理（去除 Markdown 噪音、URL、路径、ANSI 码）。
+- **TTS 两层流水线**：
+  - *第一层（切句/清洗，真源只在 Swift 一份）*：文本先 `cleanText`（Markdown AST 去噪 + URL/路径/ANSI/emoji 处理）再 `splitSentences`（句末边界 `。！？!?…；;\n`，合并到 ≤80 字；英文 `.` 不切以保小数/缩写）。TS 扩展和 hook **绝不在客户端切句**（会破坏 AST 块末补句号与跨行规则）。
+  - *第二层（连续播放管道）*：`PlaybackQueue.processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，**句间不 drain**；`AudioPlayer` 用单个常驻 `AVAudioPlayerNode` 连续 `scheduleBuffer`，4s/2s 高低水位背压（`pendingFrames` 随 `dataConsumed` 核减），prime 静音仅在设备播空/取消后补一次，`drain()` 只在整轮末端调一次。改这里务必读 `docs/playback-queue.md`，不要重新引入逐句 drain（会导致逐字卡顿）。
+- **流式 turn 协议**：pi 扩展经一条长连接按 `\n` 分帧：首帧 `{type:stream,source,turn}` → 原文增量帧（仅 text_delta）→ `{end}`/`{cancel}`，EOF=end。服务端 `StreamBuffer`（iVoxKit 纯逻辑）累积原文，只在安全边界（句末/段落、代码围栏配平、≥`minFlushChars`=24）抽出整段复用同一套 cleanText→splitSentences。`PlaybackJob.turnID`：新 turn/无 turn 普通 speak 打断旧轮（bargeIn），同 turn 顺序追加；`turnOpen` 时队列排空挂起 `waitForJobs` 等下一批、不恢复音乐。详见 `docs/socket-api.md`。
 
 - **配置**：`~/.config/ivox/config.json`，所有运行时文件在 `~/.config/ivox/` 下。
 
@@ -103,13 +105,13 @@ The binary at `~/.local/bin/ivox` is what hook scripts and `ivox on/off` invoke.
 ## 测试
 
 ```bash
-make test
-# 或直接：
-TOOLCHAINS=swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a swift test
-# 或直接用 make test（自动使用 xcrun --toolchain swift-latest）
+make test                          # 自动使用 xcrun --toolchain swift-latest（推荐，别先 make build）
+# 跑单个文件 / 单个用例：
+xcrun --toolchain swift-latest swift test --filter TextCleanerTests
+xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLeadInGetsNoPseudoPeriod
 ```
 
-测试仅覆盖 `iVoxKit`（无 MLX 依赖，快）。测试位于 `Sources/iVoxTests/`。
+测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
 
 ## 版本号
 
