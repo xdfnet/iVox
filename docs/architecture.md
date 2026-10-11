@@ -136,9 +136,9 @@ Daemon (actor)
 
 `Sources/iVox/SpeechInput/`
 
-- `CGEvent.tapCreate()` 监听 `flagsChanged`（right ⌘）和 `keyDown` 事件
-- **right ⌘ 按下**：暂停音乐 + 取消 TTS + 开始录音
-- **right ⌘ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
+- `CGEvent.tapCreate()` 监听 `flagsChanged`（right ⌘ 或 right ⌃）和 `keyDown` 事件
+- **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音
+- **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
 - **任意其他键**（除 ↓ 外）：取消 TTS + 恢复音乐
 - **方向下键 ↓**：跳到下一段 TTS
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
