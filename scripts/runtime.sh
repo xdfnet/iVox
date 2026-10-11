@@ -98,12 +98,14 @@ deploy_bin() {
   fi
   sign_bin
 
-  # 升级也要刷新集成脚本本体（make update / ivox upgrade 走这里，不走 init）。
-  # hook 挂载配置不变（install-hooks 幂等，首次安装时已挂），只覆盖脚本内容。
+  # 升级也要刷新全部集成资产（make update 走这里，不走 init）：hook.sh 本体 +
+  # pi 扩展 + dsh 插件。install-hooks.sh 幂等——挂载配置已存在则跳过，资产无条件覆盖；
+  # 未安装的 agent（无 ~/.pi、~/.dsh 目录）安全跳过。
   if [[ -f "${ROOT}/integrations/hook.sh" ]]; then
     cp "${ROOT}/integrations/hook.sh" "${HOOK_SH}"
     chmod 755 "${HOOK_SH}"
-    echo "✓  hook: ${HOOK_SH}"
+    "${ROOT}/scripts/install-hooks.sh" "${HOOK_SH}" >/dev/null 2>&1 || true
+    echo "✓  集成资产已同步: hook / pi / dsh"
   fi
 }
 
