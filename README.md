@@ -54,9 +54,9 @@ ivox wechat status             # 查看配置状态
 
 | 音色 | 说明 |
 |------|------|
-| 米仔 mizai | 温暖自然，默认 |
-| 甜妹桃子 taozi | 活泼甜美，Claude 默认 |
-| 湾湾小何 wanwan | 温柔知性，Codex 默认 |
+| 甜妹桃子 taozi | 活泼甜美，默认 |
+| 湾湾小何 wanwan | 温柔知性，Codex/Qwen 默认 |
+| 米仔 mizai | 温暖自然 |
 | 大易 dayi | 沉稳可靠 |
 
 > 音色基于 `refAudio` + `refText` 做声音克隆。可自定义：`ivox voice add -i my -n "我的" --ref-audio ~/voice.wav --ref-text "内容"`

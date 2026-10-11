@@ -20,13 +20,13 @@
     "pausePath": "/api/pause",
     "resumePath": "/api/play"
   },
-  "defaultVoice": "dayi",
+  "defaultVoice": "taozi",
   "sourceVoices": {
     "claude": "taozi",
     "codex": "wanwan",
-    "dsh": "wanwan",
-    "qwen": "mizai",
-    "pi": "dayi"
+    "dsh": "taozi",
+    "qwen": "wanwan",
+    "pi": "taozi"
   },
   "speechInput": {
     "enabled": true,
