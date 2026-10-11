@@ -11,8 +11,9 @@ import Foundation
 /// 末尾没写完的半句不带块边界，原样留到下一帧。`finish()` 时把剩余原文一次性清洗，
 /// 与非流式 `ivox speak` 完全相同。
 public final class StreamBuffer: @unchecked Sendable {
-    /// 句末/段落边界（与 TextSplitter 的 sentenceTerminators 对齐）
-    private static let boundaryMarks: Set<Character> = ["。", "！", "？", "!", "?", "…", "\n"]
+    /// 句末/段落边界（与 TextSplitter 的 sentenceTerminators 对齐）。
+    /// 含分号：分号隔开的是相对完整的并列小分句，播报场景提前切可降低首句延迟。
+    private static let boundaryMarks: Set<Character> = ["。", "！", "？", "!", "?", "…", "；", ";", "\n"]
 
     private let lock = NSLock()
     private var pending = ""   // 尚未确认成「完整句」的原文（含已确认句的尾巴）

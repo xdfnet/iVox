@@ -31,6 +31,17 @@ final class TextSplitterTests: XCTestCase {
             ["真的吗？！好吧。"])
     }
 
+    func testSemicolonIsSentenceTerminator() {
+        // 分号是句末边界：超合并上限时在分号处切开（与 StreamBuffer 对齐）
+        XCTAssertEqual(
+            splitSentences("先修登录；再改支付。", maxChars: 5),
+            ["先修登录；", "再改支付。"])
+        // 未超上限仍按 80 字合并到同一块（短并列不碎念）
+        XCTAssertEqual(
+            splitSentences("先修登录；再改支付。", maxChars: 80),
+            ["先修登录；再改支付。"])
+    }
+
     func testEnglishMergeKeepsSpace() {
         XCTAssertEqual(
             splitSentences("First one. Second one.", maxChars: 80),

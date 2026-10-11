@@ -46,6 +46,16 @@ final class StreamBufferTests: XCTestCase {
         XCTAssertEqual(buf.finish(), "世界")
     }
 
+    func testSemicolonFlushesAsBoundary() {
+        let buf = StreamBuffer()
+        // 分号即边界：第一个并列分句立即吐出，后续半句保留
+        XCTAssertEqual(buf.append("先修登录；"), ["先修登录；"])
+        XCTAssertEqual(buf.finish(), nil)
+        let two = StreamBuffer()
+        XCTAssertEqual(two.append("先修登录；再改支付"), ["先修登录；"])
+        XCTAssertEqual(two.finish(), "再改支付")
+    }
+
     func testUnclosedFenceSuppressesFlush() {
         let buf = StreamBuffer()
         XCTAssertTrue(buf.append("```swift\nlet x = 1\n").isEmpty)  // 围栏未闭合

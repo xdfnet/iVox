@@ -21,10 +21,11 @@ public func splitSentences(_ text: String, maxChars: Int = PlaybackChunking.maxC
 
 // MARK: - 私有实现
 
-/// 句末标点：连续出现（如「？！」）算作上一句的结尾
-private let sentenceTerminators: Set<Character> = ["。", "！", "？", "!", "?", "…", "\n"]
+/// 句末标点：连续出现（如「？！」）算作上一句的结尾。
+/// 含分号：分号隔开相对完整的并列小分句，播报时提前切可降低首句延迟（对齐 StreamBuffer）。
+private let sentenceTerminators: Set<Character> = ["。", "！", "？", "!", "?", "…", "；", ";", "\n"]
 /// 超长句优先在这些位置断开
-private let softBreaks: Set<Character> = ["，", "、", "；", "：", ",", ";", ":", " "]
+private let softBreaks: Set<Character> = ["，", "、", "：", ",", ":", " "]
 
 /// 切出原子句；纯标点不单独成句，并回上一句
 private func sentenceAtoms(_ text: String) -> [String] {
