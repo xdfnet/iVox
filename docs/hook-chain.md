@@ -31,7 +31,7 @@
                     │   └───────┬───────┘ │
                     │           ▼         │
                     │   ┌───────────────┐ │
-                    │   │ PlaybackQueue │ │  ← 只保留最新
+                    │   │ PlaybackQueue │ │  ← 连续管道 / turn 打断
                     │   │   (actor)     │ │
                     │   └───────┬───────┘ │
                     │           ▼         │
@@ -168,9 +168,10 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 `Sources/iVox/Audio/PlaybackQueue.swift`
 
 - `actor` 保证线程安全
-- **新任务入队时丢弃 pending 旧任务**
-- `playback.interruptCurrent=true` 时，新任务会取消正在合成/播放的旧任务
-- 只说最新那句，避免长文本占住队列
+- **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
+- **轮次（turn）语义**：同一 `turnID` 的分块顺序 append 不打断；新 turn 或无 turn 的普通 `ivox speak` 触发 `bargeIn`，取消在播 + 清空旧轮队列
+- 流式轮次未结束（`turnOpen`）时队列排空就挂起等下一批，不恢复音乐；轮次结束排空后才收尾
+- ↓ 键 `skipCurrent()` 跳过当前段，`cancelAll()` 清空并取消全部
 
 ### 7. MediaController
 
@@ -198,11 +199,12 @@ Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义
 
 `Sources/iVox/Audio/AudioPlayer.swift`
 
-- 基于 `AVAudioEngine` + `AVAudioPlayerNode`
-- `scheduleBuffer` 流式写入，边生成边播
-- `drain()` 轮询等待所有 buffer 播完（超时自动重启引擎）
-- 空闲复活时间由 `playback.idleReviveSeconds` 控制
-- 监听休眠唤醒 / 耳机插拔 / 音频配置变更
+- 基于 `AVAudioEngine` + 单个常驻 `AVAudioPlayerNode`
+- `scheduleBuffer` 连续排队，整条播报复用、句间不重启设备
+- **高低水位背压**：已排队音频 >4s 暂停合成、降到 2s 放行
+- prime 静音（50ms）只在设备真正播空 / 取消后补一次
+- `drain()` 仅在整条管道末端调用一次（超时兜底，防回调丢失）
+- `ensureHealthy()` 在写入前自检 engine/node，异常时重建
 
 ### 10. 日志
 

@@ -71,6 +71,7 @@ func speak(_ text: String, source: String? = nil, voice: String? = nil) {
 **关键约定**
 
 - 客户端**只转发原文增量，不要自己切句/清洗**。切句（`splitSentences`）与降噪（`cleanText`）真源只在服务端：按句末/段落边界（`。！？!?…；;` 及换行；不含英文 `.`，以免切碎小数/缩写）、且保证吐出前缀的代码围栏（```` ``` ````）自身配平后才抽出整段清洗，避免念出 Markdown/代码残片。
+- 过短句块（「好的。」「明白。」）不立即开播：服务端 `StreamBuffer` 有最小 flush 颗粒（`minFlushChars`=24 字），边界只标记、攒够长度才在最近边界一次吐出（常含多句）；残尾由 `{end}`/EOF 兜底全播。客户端无需关心，照常逐 delta 转发即可。
 - `turn` 必填且一轮内不变。**新 turn 打断旧 turn**（取消旧轮在播+丢弃排队）；同一 turn 的帧顺序追加。
 - turn 未收到 `{end}` 前，句间队列瞬时排空也不恢复音乐，避免反复 pause/resume。
 

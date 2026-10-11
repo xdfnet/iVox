@@ -112,7 +112,9 @@ Daemon (actor)
 `Sources/iVox/Audio/PlaybackQueue.swift`
 
 - Actor，管理播报队列
-- `enqueue` 追加到队列尾部，不打断当前播放；`processNext` 的 while 循环自然消费
+- **连续播放管道**：`processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，句间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
+- `enqueue` 追加到队列尾部，同 `turnID` 不打断；新 turn / 无 turn 的普通 speak 触发 `bargeIn` 打断旧轮
+- 流式轮次（`turnOpen`）队列瞬时排空时挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐；`endTurn` 后排空才收尾
 - 抢新（取消当前播报、跳到下一个）由 `skipCurrent()` 处理，仅 ↓ 键触发
 - `cancelAll()` 清空队列 + 取消全部播放
 - 等待 TTS 模型就绪后再开始合成
@@ -122,8 +124,11 @@ Daemon (actor)
 
 `Sources/iVox/Audio/AudioPlayer.swift`
 
-- `AVAudioEngine` + `AVAudioPlayerNode.scheduleBuffer()` 流式播放
-- `drain()` 轮询等待缓冲播完
+- `AVAudioEngine` + 单个常驻 `AVAudioPlayerNode.scheduleBuffer()`，整条播报复用、句间不重启
+- **高低水位背压**：已排队音频 >4s 暂停合成、降到 2s 放行（`pendingFrames` 随 `dataConsumed` 回调核减）
+- prime 静音（50ms，唤醒电源管理休眠的 node）只在设备真正播空 / 取消后补一次
+- `drain()` 仅在整条管道末端调用一次，等待跨 job 的尾音播完；带超时兜底防回调丢失
+- `cancelPendingPlayback()` 递增 `generation` 作废旧缓冲回调，并恢复背压挂起点
 
 ### MediaController — 系统媒体控制
 
@@ -193,10 +198,22 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 4. PlaybackQueue.enqueue(job)
    → 追加到队尾；如空闲则启动 processNext，其入口调用 MediaController.pause()
 5. TTSEngine.synthesizeStream() → AsyncThrowingStream<Data>
-6. AudioPlayer.write(pcm) → scheduleBuffer 流式播放
-7. drain() 等待播放完成
-8. MediaController.resume()
+6. AudioPlayer.write(pcm) → scheduleBuffer 连续排队（超高水位背压）；跨 job 不 drain
+7. 整条管道末端 drain() 一次，等跨 job 尾音播完
+8. turnOpen 已结束且队列空 → MediaController.resume()
 ```
+
+### pi 流式播报（第二层流式）
+
+pi 扩展（`scripts/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在模型生成中逐 `text_delta` 转发**原文**（TS 侧不切句），经一条长连接按 `\n` 分帧送入 socket：
+
+```
+{type:stream,source:pi,turn:<id>}\n   首帧开流（beginTurn，打断旧轮）
+<增量原文行>…                          仅 text_delta，跳过 thinking/toolcall
+{end}\n                                turn_end 收尾      或  {cancel:<id>}\n（Escape）
+```
+
+`ConnectionHandler.handleStream` 把增量喂给 `StreamBuffer`（iVoxKit）：累积原文，只在**安全边界**（句末/段落、且吐出前缀代码围栏配平、累计 ≥ `minFlushChars`=24）抽出完整前缀 → 复用同一份 `cleanText() → splitSentences()` 切句入队。切句/清洗真源只在 Swift 一份，TS 绝不切句（否则破坏 Markdown AST 块末补句号与跨行规则）。模型写下一句时上一句已在常驻管道里播。
 
 ### 微信消息
 
