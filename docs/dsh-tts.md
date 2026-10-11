@@ -7,8 +7,11 @@ DSH（DeepSeek Harness）回复时用 iVox 朗读。**默认第二层逐句流�
 ```
 模型生成中
   └─ agent/assistant-stream  逐 frame：start / chunk(text-delta 真增量) / end
-        每个 text-delta 经一条长连接按 \n 分帧转发：
-        {type:stream,source:dsh,turn:<id>}\n  → 增量原文帧 …
+        text-delta 经一条长连接转发：块内裸增量直接 write（不补任何字符），
+        仅在文本块切换（content index 变化 / 工具调用后新段）时补一个 \n：
+        {type:stream,source:dsh,turn:<id>}\n  → <裸增量>…\n<下一段裸增量>…
+        ⚠ 绝不能每个 delta 后都加 \n：服务端把 \n 当段落 flush 边界，逐 token
+          补会切成一堆超短块，模型慢吐时上一段播完下一段还没到 → 句间空档卡顿
   └─ Daemon: StreamBuffer 安全边界切句 → cleanText → splitSentences
              → 连续播放管道（边合成边播）
 一轮结束

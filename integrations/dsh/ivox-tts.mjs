@@ -115,13 +115,15 @@ var state = conns.get(sid);
 if (!state) state = openStream(sid, undefined); // 无 start 的兜底开流
 if (state.socketDead) return;
 
-// 不同文本块（工具调用前后 / content index 变化）之间补换行，避免两句粘连
+// 仅在文本块切换（工具调用前后 / content index 变化）时补一个换行作为段落边界。
+// 同一 text block 内的增量裸转发、绝不补换行——服务端把 \n 当 flush 边界，逐
+// token 补会切成一堆超短块，且模型慢吐时上一段播完下一段还没到，句间空档=卡顿。
 if (state.pendingNL || (typeof ch.index === "number" && ch.index !== state.lastIndex)) {
 state.sock.write("\n");
 state.lastIndex = ch.index;
 }
 state.pendingNL = false;
-state.sock.write(ch.text + "\n");
+state.sock.write(ch.text);
 state.streamed = true;
 });
 
