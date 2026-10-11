@@ -17,6 +17,8 @@ actor PlaybackQueue {
     private var currentTurn: String?
     /// 当前轮次是否仍在流式生成（true 时句间队列瞬时排空也不恢复音乐）
     private var turnOpen = false
+    /// processNext 在 turnOpen 下等待新 job 的挂起点；入队/结束/打断时恢复
+    private var jobWaiters: [CheckedContinuation<Void, Never>] = []
     private let player: AudioPlayer
     private let engine: TTSEngine
     private let media: MediaController
@@ -79,10 +81,11 @@ actor PlaybackQueue {
         turnOpen = true
     }
 
-    /// 流式轮次正常结束：放开音乐保活；若已播完则恢复音乐。
+    /// 流式轮次正常结束：放开音乐保活并唤醒管道，让其排空后退出、恢复音乐。
     func endTurn(_ id: String) async {
         guard currentTurn == id else { return }
         turnOpen = false
+        signalJobs()
         if jobs.isEmpty, currentTask == nil { await media.resume() }
     }
 
@@ -99,7 +102,15 @@ actor PlaybackQueue {
         currentTask?.cancel()
         currentTask = nil
         jobs.removeAll()
+        signalJobs()
         player.cancelPendingPlayback()
+    }
+
+    /// 恢复等待新 job 的管道（turnOpen 下 processNext 挂在 waitForJobs 上）。
+    private func signalJobs() {
+        let waiters = jobWaiters
+        jobWaiters.removeAll()
+        waiters.forEach { $0.resume() }
     }
 
     /// 批量入队：一次 append 完再启动处理。
@@ -121,6 +132,7 @@ actor PlaybackQueue {
             turnOpen = false
         }
         jobs.append(contentsOf: newJobs)
+        signalJobs()
         Log.debug("队列状态: pending=\(jobs.count) processing=\(currentTask != nil) turn=\(turnID ?? "-")")
 
         // 正在播就不打断；当前 task 跑完 processNext 的 while 会自动消费新 job
@@ -133,17 +145,28 @@ actor PlaybackQueue {
         await enqueue([job], turnID: job.turnID)
     }
 
+    /// 连续播放管道：跨所有 job 复用一条常驻 AudioPlayer，逐块合成→排队，从不逐句 drain。
+    /// turnOpen 下队列瞬时排空就挂起等下一批 job（保活音乐不恢复）；轮次结束且排空才退出。
     private func processNext() async {
         generation &+= 1
         let gen = generation
         await media.pause()
 
-        // peek + claim：队首 job 直到真正开始播放才拿出，避免 cancel 时丢段
-        while let job = jobs.first {
+        while !Task.isCancelled {
+            // 无 job：轮次仍开放就等下一批，否则管道结束
+            if jobs.isEmpty {
+                if turnOpen {
+                    await waitForJobs()   // 被入队/endTurn/打断恢复；循环顶部的 isCancelled 兜底
+                    continue
+                }
+                break
+            }
+
+            let job = jobs[0]
             let batchID = String(UUID().uuidString.prefix(6))
             Log.info("TTS 播放开始 [\(job.source)-\(batchID)]")
             let startedAt = Date()
-            var consumed = false   // job 是否已从 jobs 拿出
+            var claimed = false   // job 是否已从 jobs 拿出
 
             do {
                 try Task.checkCancellation()
@@ -151,38 +174,45 @@ actor PlaybackQueue {
                 try Task.checkCancellation()
 
                 let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
-                consumed = true
+                claimed = true
                 jobs.removeFirst()  // claim：拿到 stream 后才同步拿出，cancel 不会撞上
 
+                // 逐块排队；write 在高水位背压，设备边播边让位，下一句合成已提前进行
                 for try await pcm in stream {
                     try Task.checkCancellation()
-                    player.write(pcm)
+                    await player.write(pcm)
+                    try Task.checkCancellation()
                 }
-
                 try Task.checkCancellation()
-                try await player.drain()
+                // 注意：这里不 drain —— 下一句音频连续排队，设备零停顿；末端统一 drain
             } catch is CancellationError {
-                if consumed { player.cancelPendingPlayback() }
-                // 未 consumed 时队首 job 留在 jobs，新 task 会继续消费
+                // 播放在途音频的作废统一由 bargeIn/skipCurrent 的 cancelPendingPlayback 完成
                 Log.info("TTS 播放已取消 [\(job.source)-\(batchID)]")
                 currentTask = nil
-                // 媒体恢复交给 skipCurrent 统一处理，避免跟新 processNext 入口的 pause 竞速
                 return
             } catch {
-                if !consumed { jobs.removeFirst() }   // 合成失败时跳过此 job，避免死循环
-                player.cancelPendingPlayback()
+                if !claimed { jobs.removeFirst() }   // 合成失败时跳过此 job，避免死循环
                 Log.error("TTS 合成失败: \(error)")
             }
 
             let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
-            Log.info("TTS 播放完成 [\(job.source)-\(batchID)] \(elapsed)s")
+            Log.info("TTS 播放排队完成 [\(job.source)-\(batchID)] \(elapsed)s")
         }
 
+        // 整条管道末端：等所有已排队音频真正播完（含跨 job 的尾音）
+        try? await player.drain()
         currentTask = nil
         await Task.yield()
         // turnOpen 时同轮后续分块马上到，不能恢复音乐，否则句间反复 pause/resume
         if jobs.isEmpty, gen == generation, !turnOpen {
             await media.resume()
+        }
+    }
+
+    /// 挂起直到有新 job 入队 / 轮次结束 / 被打断（signalJobs 恢复）。
+    private func waitForJobs() async {
+        await withCheckedContinuation { continuation in
+            jobWaiters.append(continuation)
         }
     }
 
