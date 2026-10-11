@@ -15,16 +15,25 @@ public final class StreamBuffer: @unchecked Sendable {
     /// 含分号：分号隔开的是相对完整的并列小分句，播报场景提前切可降低首句延迟。
     private static let boundaryMarks: Set<Character> = ["。", "！", "？", "!", "?", "…", "；", ";", "\n"]
 
+    /// 最小 flush 颗粒（字符）。过短的句块（「好的。」「明白。」）单独合成会反复起停
+    /// MLX，听感一个字一个字蹦；攒到该长度才在最近边界吐出。残尾由 finish() 兜底。
+    private let minFlushChars: Int
+
     private let lock = NSLock()
     private var pending = ""   // 尚未确认成「完整句」的原文（含已确认句的尾巴）
 
-    public init() {}
+    public init(minFlushChars: Int = StreamBuffer.defaultMinFlushChars) {
+        self.minFlushChars = max(1, minFlushChars)
+    }
+
+    /// 默认最小颗粒：约 2~3 个短句，兼顾「快开口」与「不起停过碎」
+    public static let defaultMinFlushChars = 24
 
     /// 追加一段增量原文，返回本次新确认、可播报的原文块（可能为空、可能多块）。
     public func append(_ chunk: String) -> [String] {
         lock.lock(); defer { lock.unlock() }
         pending.append(chunk)
-        // 整段围栏未配平：安全前缀最多取到「进入未闭合围栏之前」，由 safeBoundary 决定。
+        // 整段围栏未配平：安全前缀最多取到「进入未闭合围栏之前」，由 flushBoundary 决定。
         return advance()
     }
 
@@ -37,11 +46,11 @@ public final class StreamBuffer: @unchecked Sendable {
         return trimmed.isEmpty ? nil : rest
     }
 
-    /// 找到最后一个「代码区外」的句末边界：吐出的前缀自身围栏必须配平，
-    /// 否则前缀只含开围栏不含闭围栏，cleanText 会把代码当正文念出来。
-    /// 边界之前（含）一次作为一个前缀吐出；之后的尾巴（半句/未闭合围栏）保留。
+    /// 在「代码区外、且前缀长度 ≥ minFlushChars」的最后一个句末边界切一刀。
+    /// 吐出的前缀自身围栏必须配平，否则只含开围栏不含闭围栏，cleanText 会把代码念出来。
+    /// 边界之后的尾巴（半句/未闭合围栏/攒不够长的短句）保留到下一帧。
     private func advance() -> [String] {
-        guard let boundary = safeBoundaryIndex(in: pending) else { return [] }
+        guard let boundary = flushBoundary(in: pending) else { return [] }
         let ready = String(pending[pending.startIndex...boundary])
         pending = String(pending[pending.index(after: boundary)...])
         // ready 可能含多个句子，但作为「一个完整前缀」交给调用方一次 cleanText+split，
@@ -49,10 +58,11 @@ public final class StreamBuffer: @unchecked Sendable {
         return ready.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? [] : [ready]
     }
 
-    private func safeBoundaryIndex(in s: String) -> String.Index? {
+    private func flushBoundary(in s: String) -> String.Index? {
         var outside = true
         var idx = s.startIndex
-        var lastSafe: String.Index?
+        var count = 0
+        var chosen: String.Index?
         while idx < s.endIndex {
             if s[idx] == "`" || s[idx] == "~" {
                 // 识别三连同字符围栏（``` 或 ~~~）
@@ -60,14 +70,18 @@ public final class StreamBuffer: @unchecked Sendable {
                 if n >= 3 {
                     outside.toggle()
                     idx = s.index(idx, offsetBy: n)
+                    count += n
                     continue
                 }
             }
-            if outside, Self.boundaryMarks.contains(s[idx]) { lastSafe = idx }
+            if outside, Self.boundaryMarks.contains(s[idx]), count + 1 >= minFlushChars {
+                chosen = idx
+            }
             idx = s.index(after: idx)
+            count += 1
         }
-        // 整段结束时仍在围栏内（未闭合）：lastSafe 只可能是进围栏之前的边界，安全。
-        return lastSafe
+        // 仍在围栏内（未闭合）时 chosen 只可能落在进围栏之前，天然安全。
+        return chosen
     }
 
     /// 返回 idx 处连续相同的 ` 或 ~ 的个数。

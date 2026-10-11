@@ -31,7 +31,7 @@ final class StreamBufferTests: XCTestCase {
     }
 
     func testHalfSentenceBufferedUntilBoundary() {
-        let buf = StreamBuffer()
+        let buf = StreamBuffer(minFlushChars: 1)
         XCTAssertTrue(buf.append("你好").isEmpty)          // 无句末边界
         let ready = buf.append("，世界。")
         XCTAssertEqual(ready.count, 1)
@@ -40,24 +40,44 @@ final class StreamBufferTests: XCTestCase {
     }
 
     func testCompleteSentenceFlushesHalfKept() {
-        let buf = StreamBuffer()
+        let buf = StreamBuffer(minFlushChars: 1)
         let ready = buf.append("你好。世界")                 // 完整句 + 半句
         XCTAssertEqual(ready, ["你好。"])
         XCTAssertEqual(buf.finish(), "世界")
     }
 
     func testSemicolonFlushesAsBoundary() {
-        let buf = StreamBuffer()
+        let buf = StreamBuffer(minFlushChars: 1)
         // 分号即边界：第一个并列分句立即吐出，后续半句保留
         XCTAssertEqual(buf.append("先修登录；"), ["先修登录；"])
         XCTAssertEqual(buf.finish(), nil)
-        let two = StreamBuffer()
+        let two = StreamBuffer(minFlushChars: 1)
         XCTAssertEqual(two.append("先修登录；再改支付"), ["先修登录；"])
         XCTAssertEqual(two.finish(), "再改支付")
     }
 
-    func testUnclosedFenceSuppressesFlush() {
+    // 默认最小颗粒：短句（好的。/明白。）攒到 minFlushChars 才吐，避免一个字一个字蹦
+    func testShortSentencesAccumulateToMinFlush() {
+        let buf = StreamBuffer()                 // 默认 24
+        XCTAssertTrue(buf.append("好的。").isEmpty)
+        XCTAssertTrue(buf.append("我明白了。").isEmpty)
+        // 攒够后在最近边界一次吐出（可能含两句）
+        let ready = buf.append("我们这就开始处理这个问题，请稍等。")
+        XCTAssertEqual(ready.count, 1)
+        XCTAssertTrue(ready[0].hasPrefix("好的。"))
+        XCTAssertTrue(ready[0].contains("请稍等。"))
+        XCTAssertNil(buf.finish())
+    }
+
+    // finish 不受最小颗粒限制：残尾（哪怕一两个短句）也全部播出
+    func testFinishFlushesBelowMinChars() {
         let buf = StreamBuffer()
+        XCTAssertTrue(buf.append("好的。").isEmpty)
+        XCTAssertEqual(buf.finish(), "好的。")
+    }
+
+    func testUnclosedFenceSuppressesFlush() {
+        let buf = StreamBuffer(minFlushChars: 1)
         XCTAssertTrue(buf.append("```swift\nlet x = 1\n").isEmpty)  // 围栏未闭合
         // 闭合后，连同正文一起吐出；代码经 cleanText 被剥离
         let ready = buf.append("```\n好的，做完了。")
@@ -68,19 +88,19 @@ final class StreamBufferTests: XCTestCase {
     }
 
     func testFinishFlushesTailWithoutTerminator() {
-        let buf = StreamBuffer()
+        let buf = StreamBuffer(minFlushChars: 1)
         _ = buf.append("就这一句没有句号")
         XCTAssertEqual(buf.finish(), "就这一句没有句号")
     }
 
     func testFinishEmptyAfterFullFlush() {
-        let buf = StreamBuffer()
+        let buf = StreamBuffer(minFlushChars: 1)
         _ = buf.append("完事。")
         XCTAssertNil(buf.finish())
     }
 
     func testCancelLikeDropDiscardsRest() {
-        let buf = StreamBuffer()
+        let buf = StreamBuffer(minFlushChars: 1)
         _ = buf.append("第一句。还没念的半句")
         // 取消语义由调用层丢弃 finish 结果；这里只验证缓冲确实还持有半句
         XCTAssertEqual(buf.finish(), "还没念的半句")

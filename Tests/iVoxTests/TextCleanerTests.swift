@@ -206,6 +206,13 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertFalse(got.contains("。 。"), "实际: \(got)")
     }
 
+    func testColonLeadInGetsNoPseudoPeriod() {
+        // 「如下：」引出列表，块末不应再补句号变成「如下：。」
+        let got = cleanText("主要改动如下：\n\n- 修了登录\n- 补了测试")
+        XCTAssertFalse(got.contains("：。"), "冒号引导段被补了伪句号: \(got)")
+        XCTAssertTrue(got.contains("如下："))
+    }
+
     func testEnglishPeriodNotDoubled() {
         XCTAssertEqual(cleanText("**x** The build finished."), "x The build finished.")
     }

@@ -75,8 +75,9 @@ private struct TextCollector: MarkupWalker {
     mutating func visitInlineHTML(_: InlineHTML) {} // 同上
     mutating func visitThematicBreak(_: ThematicBreak) {}
 
-    /// 句末标点：命中则不再补「。」（含英文句号/分号、省略号，避免 "finished.。" 双结尾）
-    private static let sentenceEnds = Set<Character>("。！？!?….;；\n")
+    /// 句末标点：命中则不再补「。」（含英文句号/分号、省略号，避免 "finished.。" 双结尾）。
+    /// 冒号也算：冒号是「引出下文」（如下：），块末补句号会产生「如下：。」的伪句号。
+    private static let sentenceEnds = Set<Character>("。！？!?….;；：:\n")
 
     private mutating func endBlock() {
         // 取最后一个非空白字符判断：嵌套块（ListItem 内含 Paragraph）下，若不跳过空白
