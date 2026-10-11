@@ -54,15 +54,40 @@ export default function (pi: ExtensionAPI) {
     if (sock && !socketDead && !sock.destroyed) sock.write(text + "\n");
   }
 
-  pi.on("turn_start", () => {
+  // 有交互 UI（tui/rpc）才播报；print/json/后台脚本不打扰
+  const hasUI = (ctx: unknown) =>
+    (ctx as { hasUI?: boolean } | undefined)?.hasUI !== false;
+
+  pi.on("turn_start", (_e: unknown, ctx: unknown) => {
+    if (!hasUI(ctx)) return;
     startTurn();
   });
 
-  pi.on("message_update", (event) => {
+  // 用户发新消息：立即打断上一轮（即使 assistant turn 尚未/未正常开始）
+  pi.on("message_start", (event: unknown, ctx: unknown) => {
+    if (!hasUI(ctx)) return;
+    if ((event as { message?: { role?: string } }).message?.role === "user") {
+      if (sock && !socketDead) sock.write("{cancel}\n");
+      closeSock();
+      stopPlayback();
+      startTurn();
+    }
+  });
+
+  // 发送全局停止哨兵（打断当前在播，barge-in）。用 socket 短连。
+  function stopPlayback() {
+    const s = createConnection(SOCKET_PATH);
+    s.on("error", () => {});
+    s.write("__IVOX_STOP_PLAYBACK__");
+    s.end();
+  }
+
+  pi.on("message_update", (event: unknown, ctx: unknown) => {
+    if (!hasUI(ctx)) return;
     const ev = event as { assistantMessageEvent?: { type?: string; contentIndex?: number; delta?: string } };
     const d = ev.assistantMessageEvent;
     if (!d || d.type !== "text_delta" || typeof d.delta !== "string") return; // 跳过 thinking/toolcall
-    if (!turnId) startTurn(); // 某些版本可能无 turn_start
+    if (!turnId) startTurn(); // 某些模式可能无 turn_start
     // 工具调用前后是不同文本块：块间补换行，避免两句话粘连
     if (d.contentIndex !== undefined && d.contentIndex !== lastContentIndex) {
       if (lastContentIndex !== -1) sendFrame("\n");
@@ -72,12 +97,14 @@ export default function (pi: ExtensionAPI) {
     streamed = true;
   });
 
-  pi.on("message_end", () => {
+  pi.on("message_end", (_e: unknown, ctx: unknown) => {
+    if (!hasUI(ctx)) return;
     if (sock && !socketDead) sock.write("{end}\n");
     closeSock();
   });
 
-  pi.on("agent_settled", async (event, ctx) => {
+  pi.on("agent_settled", async (event: unknown, ctx: unknown) => {
+    if (!hasUI(ctx)) return;
     const aborted = (event as { aborted?: boolean }).aborted === true;
     if (aborted) {
       // 用户中断：通知服务端丢弃本轮未播内容
@@ -89,7 +116,10 @@ export default function (pi: ExtensionAPI) {
 
     // 兜底：取最后一条 assistant 文本消息整段播报
     closeSock();
-    const entries = ctx.sessionManager.getEntries();
+    const entries = (ctx as { sessionManager: { getEntries(): Array<{
+      type: string;
+      message: { role: string; content?: Array<{ type: string; text?: string }> };
+    }> } }).sessionManager.getEntries();
     let lastText = "";
     for (let i = entries.length - 1; i >= 0; i--) {
       const entry = entries[i];
