@@ -16,6 +16,7 @@
 ### 变更
 
 - **离线环境变量** — `serve`（守护进程）启动最早期设置 `HF_HUB_OFFLINE=1`、`TRANSFORMERS_OFFLINE=1`。模型本就走「本地目录含 config.json」分支不联网，此为防御性设置（惠及子进程与未来组件）
+- **仓库布局：harness 适配层归拢到 `integrations/`** — 同类资产原先散在两处（pi 扩展混在 `scripts/ivox.ts` 工具脚本里，dsh 插件混在 Swift target 的 `Sources/iVox/Resources/dsh-plugin/`）。现统一到顶层 `integrations/`：`hook.sh`（claude/codex/qwen/dsh 共用 Stop hook）、`pi/ivox.ts`、`dsh/{ivox-tts.mjs,package.json}`。这些文件安装时由脚本 cp、运行时读 `~/.config/ivox/`，本就不进二进制 bundle，移出 `Resources/` 不影响打包（bundle 现只剩 assets/voices/Info.plist/配置模板）；`scripts/` 只留构建安装工具。同步更新 `runtime.sh`/`install-hooks.sh` 源路径与文档（git rename 保留历史）
 
 ## v3.5.0 — 2026-10-05
 

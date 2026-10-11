@@ -36,7 +36,7 @@ Sources/iVox/          — 主程序 target
   WeChat/              — 微信 ilink HTTP 客户端 + 长轮询平台
   Network/             — SocketServer（Unix domain socket IPC）
   Utilities/           — Version, 日志工具
-  Resources/          — hook.sh, assets, 默认音色
+  Resources/          — assets, 默认音色, Info.plist, 配置模板（编进二进制 bundle）
 
 Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   Config.swift         — JSON 配置模型
@@ -46,8 +46,13 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
 
 Sources/iVoxTests/     — 测试（仅依赖 iVoxKit）
 
+integrations/          — 各外部 agent 的对接适配层（安装时由脚本 cp，不编进二进制）
+  hook.sh              — 通用 Stop hook（claude/codex/qwen/dsh 共用）
+  pi/ivox.ts           — pi coding agent 流式扩展
+  dsh/                 — DeepSeek Harness cordis 插件（ivox-tts.mjs + package.json）
+
 docs/                  — architecture.md, socket-api.md, hook-chain.md, dsh-tts.md, playback-queue.md, CHANGELOG.md；archive/ 放历史复盘与调研
-scripts/               — runtime.sh, download-models.sh, install-*.sh
+scripts/               — runtime.sh, download-models.sh, install-*.sh（构建/安装工具脚本）
 ```
 
 ## 架构

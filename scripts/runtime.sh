@@ -38,7 +38,7 @@ init_config() {
     echo "[i] 配置已存在: ${CONFIG}"
   fi
 
-  cp "${ROOT}/Sources/iVox/Resources/hook.sh" "${HOOK_SH}"
+  cp "${ROOT}/integrations/hook.sh" "${HOOK_SH}"
   chmod 755 "${HOOK_SH}"
   echo "✓  hook: ${HOOK_SH}"
 

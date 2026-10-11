@@ -78,7 +78,7 @@ DSH 一轮结束
   └─ hook.sh 通用分支 → ivox speak --source dsh（湾湾音色）
 ```
 
-装在 `~/.dsh/profiles/desktop/plugins/ivox-tts.mjs`，由 `scripts/install-hooks.sh` 安装，源码在仓库 `Sources/iVox/Resources/dsh-plugin/`。
+装在 `~/.dsh/profiles/desktop/plugins/ivox-tts.mjs`，由 `scripts/install-hooks.sh` 安装，源码在仓库 `integrations/dsh/`。
 
 机制细节、安装步骤、踩坑清单（`.mjs` 后缀要求、匿名 `package.json`、子代理过滤、旧的 zstd 取文本方案为何废弃）见 **[`dsh-tts.md`](dsh-tts.md)**。
 

@@ -81,7 +81,7 @@ DSH_PATCH="$DSH_PROFILE_DIR/cordis.patch.yml"
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 DSH_PLUGIN_SRC=""
-for cand in "$SCRIPT_DIR/dsh-plugin" "$SCRIPT_DIR/../Sources/iVox/Resources/dsh-plugin"; do
+for cand in "$SCRIPT_DIR/../integrations/dsh"; do
   if [[ -f "$cand/ivox-tts.mjs" ]]; then
     DSH_PLUGIN_SRC="$cand"
     break
@@ -90,7 +90,7 @@ done
 
 if [[ -d "$DSH_PROFILE_DIR" ]]; then
   if [[ -z "$DSH_PLUGIN_SRC" ]]; then
-    echo "⚠️  未找到 dsh-plugin/ivox-tts.mjs，跳过 DSH 播报插件"
+    echo "⚠️  未找到 integrations/dsh/ivox-tts.mjs，跳过 DSH 播报插件"
   else
     mkdir -p "$DSH_PROFILE_DIR/plugins"
     cp "$DSH_PLUGIN_SRC/ivox-tts.mjs" "$DSH_PROFILE_DIR/plugins/ivox-tts.mjs"
@@ -129,8 +129,7 @@ fi
 
 # ── PI coding agent 扩展 ──
 PI_EXT_DIR="$HOME/.pi/agent/extensions"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-PI_EXT_SRC="$SCRIPT_DIR/ivox.ts"
+PI_EXT_SRC="$SCRIPT_DIR/../integrations/pi/ivox.ts"
 if [[ -d "$PI_EXT_DIR" && -f "$PI_EXT_SRC" ]]; then
   # 无条件覆盖：与 dsh 插件一致，否则仓库里更新了扩展也永远装不上去
   cp "$PI_EXT_SRC" "$PI_EXT_DIR/ivox.ts"

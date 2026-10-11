@@ -102,15 +102,15 @@ DSH 自带两个「Claude Code / Codex hook 兼容」桥接插件，但它们的
 scripts/install-hooks.sh ~/.config/ivox/hook.sh
 ```
 
-它会把插件从 `Sources/iVox/Resources/dsh-plugin/` 复制到 `~/.dsh/profiles/desktop/plugins/`（含匿名 `package.json`），并确保 `cordis.patch.yml` 里有 `ivox-tts` 挂载；同时清掉 `~/.dsh/hooks.json` 里失效的 Stop。
+它会把插件从 `integrations/dsh/` 复制到 `~/.dsh/profiles/desktop/plugins/`（含匿名 `package.json`），并确保 `cordis.patch.yml` 里有 `ivox-tts` 挂载；同时清掉 `~/.dsh/hooks.json` 里失效的 Stop。
 
 手工安装：
 
 ```bash
 D=~/.dsh/profiles/desktop
 mkdir -p "$D/plugins"
-cp Sources/iVox/Resources/dsh-plugin/ivox-tts.mjs "$D/plugins/"
-cp Sources/iVox/Resources/dsh-plugin/package.json "$D/plugins/"
+cp integrations/dsh/ivox-tts.mjs "$D/plugins/"
+cp integrations/dsh/package.json "$D/plugins/"
 printf '\n- insert:\n    - id: ivox-tts\n      name: "./plugins/ivox-tts.mjs"\n' >> "$D/cordis.patch.yml"
 ```
 
@@ -165,8 +165,8 @@ rm -rf "$D/plugins"
 
 | 路径 | 作用 |
 |---|---|
-| `Sources/iVox/Resources/dsh-plugin/ivox-tts.mjs` | 插件源码（仓库内，安装源） |
-| `Sources/iVox/Resources/dsh-plugin/package.json` | 匿名包模板 |
+| `integrations/dsh/ivox-tts.mjs` | 插件源码（仓库内，安装源） |
+| `integrations/dsh/package.json` | 匿名包模板 |
 | `~/.dsh/profiles/desktop/plugins/ivox-tts.mjs` | 实际被加载的插件 |
 | `~/.dsh/profiles/desktop/plugins/package.json` | 匿名包（清单校验豁免） |
 | `~/.dsh/profiles/desktop/cordis.patch.yml` | 挂载点 |
