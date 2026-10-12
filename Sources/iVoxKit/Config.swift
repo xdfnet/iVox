@@ -227,6 +227,9 @@ public func saveConfig(_ config: Config, to path: String? = nil) throws {
     text = text.replacingOccurrences(of: "\\/", with: "/")
     text.append("\n")
     try text.write(toFile: configPath, atomically: true, encoding: .utf8)
+    // 配置里有微信 token 等凭据，收到只有本人可读
+    try? FileManager.default.setAttributes(
+        [.posixPermissions: 0o600], ofItemAtPath: configPath)
 }
 
 public func validate(_ config: Config) throws {

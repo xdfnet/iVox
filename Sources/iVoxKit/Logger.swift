@@ -44,6 +44,9 @@ public enum Log {
             rotateIfNeeded()
             if !FileManager.default.fileExists(atPath: filePath) {
                 FileManager.default.createFile(atPath: filePath, contents: data)
+                // 日志含播报原文 / 微信消息 / ASR 转写，别让同机其他用户读到
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600], ofItemAtPath: filePath)
                 return
             }
             guard let handle = FileHandle(forWritingAtPath: filePath) else { return }

@@ -65,7 +65,18 @@ actor Daemon {
 
         let socketPath = AppPaths.socketPath
         let dir = AppPaths.configDir
-        try? FileManager.default.createDirectory(atPath: dir, withIntermediateDirectories: true, attributes: nil)
+        // 目录里躺着 config.json（含微信 token）与 daemon.log（含播报原文），只给本人
+        try? FileManager.default.createDirectory(
+            atPath: dir, withIntermediateDirectories: true, attributes: nil)
+        try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir)
+        // 目录权限只约束**新建**的文件；已经躺在里面的，每次启动补收一次
+        for name in ["config.json", "daemon.log", "daemon.log.old"] {
+            let path = (dir as NSString).appendingPathComponent(name)
+            if FileManager.default.fileExists(atPath: path) {
+                try? FileManager.default.setAttributes(
+                    [.posixPermissions: 0o600], ofItemAtPath: path)
+            }
+        }
 
         let handler = ConnectionHandler(
             queue: queue, config: config, asrEngine: asrEngine, engine: engine,
@@ -278,7 +289,7 @@ actor Daemon {
         self.mediaHTTPServer = httpServer
         switch httpServer.start() {
         case .success:
-            Log.info("媒体控制 Web UI: http://127.0.0.1:\(port)")
+            Log.info("媒体控制 Web UI: 端口 \(port)（监听所有网卡，手机同局域网可访问 http://<本机IP>:\(port)）")
         case .failure(let error):
             Log.error("媒体控制 HTTP 服务器启动失败: \(error.localizedDescription)")
         }

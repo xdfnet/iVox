@@ -74,7 +74,7 @@ final class MediaHTTPServer: @unchecked Sendable {
                 switch state {
                 case .ready:
                     server.setState(running: true, url: "http://127.0.0.1:\(server.port)")
-                    Log.info("媒体控制 HTTP 服务器已启动: http://127.0.0.1:\(server.port)")
+                    Log.info("媒体控制 HTTP 服务器已启动: 端口 \(server.port)（监听所有网卡，同局域网手机可访问 http://<本机IP>:\(server.port)）")
                 case .failed(let error):
                     server.setState(running: false, url: nil)
                     Log.error("HTTP 服务器启动失败: \(error.localizedDescription)")

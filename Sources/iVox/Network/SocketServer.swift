@@ -62,6 +62,15 @@ actor SocketServer {
             }
         }
         if clientFD >= 0 {
+            // 只认同一用户：socket 本身已是 0600，这道是纵深防御。
+            // getpeereid 拿的是对端 uid，同 UID 的野脚本连不上另外的账户。
+            var peerUID: uid_t = 0
+            var peerGID: gid_t = 0
+            if getpeereid(clientFD, &peerUID, &peerGID) == 0, peerUID != getuid() {
+                Log.warn("Socket: 拒绝非本用户的连接（uid=\(peerUID)）")
+                Darwin.close(clientFD)
+                return
+            }
             var on: Int32 = 1
             setsockopt(clientFD, SOL_SOCKET, SO_NOSIGPIPE, &on, socklen_t(MemoryLayout<Int32>.size))
             // 读超时 10s：坏客户端不关闭连接时，read 循环不会无限阻塞
