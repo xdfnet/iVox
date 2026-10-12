@@ -39,6 +39,22 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
 
 ## 子系统
 
+按**能力域**归类如下（源码目录、`ivox status`、README 功能表三处一致）：
+
+| 能力域 | 目录 | 子系统 |
+|---|---|---|
+| 自动播报 | `Sources/iVox/Playback/` | TTSEngine、PlaybackQueue、AudioPlayer |
+| 语音输入 | `Sources/iVox/SpeechInput/` | SpeechInput |
+| 划词翻译 | `Sources/iVox/Translation/` | Translation |
+| 快速操作 | `Sources/iVox/QuickActions/` | QuickActions |
+| 微信桥接 | `Sources/iVox/WeChat/` | WeChatPlatform、ClaudeAskService |
+| 媒体控制 | `Sources/iVox/MediaControl/` | MediaHTTPServer、MediaController |
+| （基础设施） | `HotKey/` `Network/` `Daemon/` `Commands/` `Utilities/` | GlobalKeyTap、SocketServer、Daemon |
+
+六个能力域**彼此平级**——运行时互相协作（播报会暂停音乐、语音输入会打断播报、划词翻译借播报念译文），但代码上无主从，各占一个目录。基础设施跨域共用，不归任何能力域。
+
+下面按子系统逐个说明（顺序同上表）。
+
 ### Daemon — 生命周期管理
 
 `Sources/iVox/Daemon/Daemon.swift`
