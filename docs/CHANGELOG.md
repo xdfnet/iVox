@@ -1,6 +1,6 @@
 # iVox 开发日志
 
-## Unreleased（下一版）
+## v3.6.1 — 2026-10-12
 
 - **发布包自包含集成资产，install/upgrade 自动同步 hook/pi/dsh** — 此前 release tarball 里只有一个 `ivox` 二进制，`ivox upgrade` 与 `install-binary.sh`（curl|bash）只解包二进制，刷不到 `hook.sh`/pi 扩展/dsh 插件；老用户走这两条路径升级后集成仍是旧版（v3.6.0 的 UserPromptSubmit 对他们不生效），且首次 curl|bash 安装压根不装任何集成。现 tarball 在根保留 `ivox` 外整包带上 `integrations/`（含分发器），安装/升级定向解包到权威源 **`~/.config/ivox/integrations/`**，再由幂等分发器铺到各 agent 实际位置（hook.sh → `~/.config/ivox/hook.sh`、pi/dsh 插件、Claude/Codex/Qwen 的 Stop+UserPromptSubmit 挂载）；未安装的 agent 安全跳过。同步只在 `make update` / `ivox upgrade` / `install-binary.sh` 三个显式时机发生，守护进程不自动同步。新增 `make package` 目标固化「二进制 + integrations」打包；`install-hooks.sh` 按自身位置探测素材源（部署态在 `integrations/` 内用同级目录，源码态在 `scripts/` 用 `../integrations`）
 
