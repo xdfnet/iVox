@@ -4,6 +4,7 @@ import MLXAudioCore
 import MLXAudioTTS
 import iVoxKit
 
+/// 本地 TTS 引擎：mlx-audio-swift 加载 Qwen3-TTS，流式产出 PCM。纯本地推理，不上传数据。
 actor TTSEngine {
     enum LoadState: Sendable {
         case notStarted

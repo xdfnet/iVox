@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
+/// `ivox off`：让守护进程退出。
 struct StopCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "off",

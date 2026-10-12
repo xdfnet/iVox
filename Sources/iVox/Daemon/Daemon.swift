@@ -3,6 +3,7 @@ import Darwin
 import Foundation
 import iVoxKit
 
+/// 守护进程本体：装配全部服务，启动 socket / 模型 / 微信 / 热键，并管理生命周期。
 actor Daemon {
     private let config: Config
     private let engine: TTSEngine

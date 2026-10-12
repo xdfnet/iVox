@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
+/// `ivox serve`（默认子命令）：前台运行守护进程本体。
 struct ServeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "serve",

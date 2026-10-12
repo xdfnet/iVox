@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
+/// `ivox voice`：列出 / 增删音色（直接改 `config.json`）。
 struct VoiceCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "voice",

@@ -1,5 +1,6 @@
 import ArgumentParser
 
+/// `ivox on`：启动守护进程（转发 `restart`）。
 struct StartCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "on",

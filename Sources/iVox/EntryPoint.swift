@@ -1,6 +1,8 @@
 import ArgumentParser
 import Foundation
 
+// CLI 入口：注册全部子命令，默认子命令是 serve。
+
 @main
 struct iVox: AsyncParsableCommand {
     static let configuration = CommandConfiguration(

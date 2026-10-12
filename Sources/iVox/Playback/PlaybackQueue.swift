@@ -1,6 +1,9 @@
 import Foundation
 import iVoxKit
 
+// 播报队列：单队列 + 连续播放管道，管轮次、打断与音乐保活。串行调度见 docs/playback-queue.md。
+
+/// 一条待播报的文本。
 struct PlaybackJob: Sendable {
     let text: String
     let voiceID: String

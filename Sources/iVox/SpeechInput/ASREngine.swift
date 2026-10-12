@@ -4,6 +4,7 @@ import MLXAudioCore
 import MLXAudioSTT
 import iVoxKit
 
+/// 本地语音识别：Qwen3-ASR 模型封装，`ivox listen` 与语音输入共用。
 actor ASREngine {
     private var model: Qwen3ASRModel?
     private let modelPath: String

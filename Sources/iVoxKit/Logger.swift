@@ -1,6 +1,8 @@
 import Foundation
 import os.log
 
+// 日志：同时写 os_log 与 ~/.config/ivox/daemon.log（0600，5MB 轮转）。
+
 private let maxLogSize: UInt64 = 5 * 1024 * 1024
 
 public enum Log {
