@@ -8,6 +8,7 @@ LAUNCHER="${HOME}/.local/bin/ivox"
 LABEL="com.user.ivox"
 CONFIG="${HOME}/.config/ivox/config.json"
 HOOK_SH="${HOME}/.config/ivox/hook.sh"
+INTEGRATIONS_DIR="${HOME}/.config/ivox/integrations"
 LOG="${HOME}/.config/ivox/daemon.log"
 SOCKET="${HOME}/.config/ivox/ivox.sock"
 VOICE_DIR="${HOME}/.config/ivox/voices"
@@ -38,12 +39,17 @@ init_config() {
     echo "[i] 配置已存在: ${CONFIG}"
   fi
 
-  cp "${ROOT}/integrations/hook.sh" "${HOOK_SH}"
-  chmod 755 "${HOOK_SH}"
-  echo "✓  hook: ${HOOK_SH}"
+  sync_integrations
+}
 
-
-  "${ROOT}/scripts/install-hooks.sh" "${HOOK_SH}"
+# 组装集成资产权威源（~/.config/ivox/integrations）并幂等分发到各 agent。
+# install（init）与 upgrade（deploy-bin）共用，保证升级即同步 hook/pi/dsh。
+sync_integrations() {
+  mkdir -p "${INTEGRATIONS_DIR}"
+  cp -R "${ROOT}/integrations/." "${INTEGRATIONS_DIR}/"
+  cp "${ROOT}/scripts/install-hooks.sh" "${INTEGRATIONS_DIR}/install-hooks.sh"
+  chmod 755 "${INTEGRATIONS_DIR}/hook.sh" "${INTEGRATIONS_DIR}/install-hooks.sh"
+  "${INTEGRATIONS_DIR}/install-hooks.sh" "${HOOK_SH}"
 }
 
 install_voices() {
@@ -98,15 +104,10 @@ deploy_bin() {
   fi
   sign_bin
 
-  # 升级也要刷新全部集成资产（make update 走这里，不走 init）：hook.sh 本体 +
-  # pi 扩展 + dsh 插件。install-hooks.sh 幂等——挂载配置已存在则跳过，资产无条件覆盖；
-  # 未安装的 agent（无 ~/.pi、~/.dsh 目录）安全跳过。
-  if [[ -f "${ROOT}/integrations/hook.sh" ]]; then
-    cp "${ROOT}/integrations/hook.sh" "${HOOK_SH}"
-    chmod 755 "${HOOK_SH}"
-    "${ROOT}/scripts/install-hooks.sh" "${HOOK_SH}" >/dev/null 2>&1 || true
-    echo "✓  集成资产已同步: hook / pi / dsh"
-  fi
+  # 升级也要刷新全部集成资产（make update 走这里，不走 init）：权威源 integrations/
+  # 整体重铺，再幂等分发 hook/pi/dsh（挂载已存在则跳过，未安装的 agent 安全跳过）。
+  sync_integrations >/dev/null 2>&1 || true
+  echo "✓  集成资产已同步: hook / pi / dsh"
 }
 
 uninstall_runtime() {

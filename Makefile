@@ -1,4 +1,4 @@
-.PHONY: all install update check init models voices assets build uninstall run sign test version clean help
+.PHONY: all install update check init models voices assets build package uninstall run sign test version clean help
 
 SWIFT := xcrun --toolchain swift-latest swift
 SWIFT_RELEASE_FLAGS := -c release -Xswiftc -Osize
@@ -44,6 +44,18 @@ assets: voices
 
 build:
 	$(SWIFT) build $(SWIFT_RELEASE_FLAGS)
+
+# 打发布包：二进制 + 自包含集成资产（install/upgrade 解包后自动分发 hook/pi/dsh）
+VERSION ?= $(shell sed -n 's/.*iVoxVersion = "\(.*\)"/\1/p' Sources/iVox/Utilities/Version.swift)
+PKG := ivox-v$(VERSION)-macos-arm64
+package: build
+	@rm -rf /tmp/$(PKG) && mkdir -p /tmp/$(PKG)/integrations
+	@cp .build/release/ivox /tmp/$(PKG)/ivox
+	@cp -R integrations/. /tmp/$(PKG)/integrations/
+	@cp scripts/install-hooks.sh /tmp/$(PKG)/integrations/install-hooks.sh
+	@cd /tmp/$(PKG) && tar czf $(CURDIR)/.build/release/$(PKG).tar.gz ivox integrations
+	@rm -rf /tmp/$(PKG)
+	@echo "✓  .build/release/$(PKG).tar.gz"
 
 uninstall:
 	@$(RUNTIME) uninstall

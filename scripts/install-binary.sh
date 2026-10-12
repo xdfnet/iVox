@@ -56,11 +56,14 @@ if [[ -z "$ASSET_URL" ]]; then
 fi
 
 echo "   来自: $ASSET_URL"
+mkdir -p "$BIN_DIR" "$CONFIG_DIR"
 curl -fL --progress-bar -o /tmp/ivox-pkg.tar.gz "$ASSET_URL"
-tar xzf /tmp/ivox-pkg.tar.gz -C "$BIN_DIR"
+tar xzf /tmp/ivox-pkg.tar.gz -C "$BIN_DIR" ivox
+# 集成资产（旧包可能不含，失败不影响二进制安装）
+tar xzf /tmp/ivox-pkg.tar.gz -C "$CONFIG_DIR" integrations 2>/dev/null || true
 chmod 755 "$BIN_DIR/ivox"
 rm -f /tmp/ivox-pkg.tar.gz
-ok "iVox $(du -h "$BIN_DIR/ivox" | cut -f1) + Metal shader"
+ok "iVox $(du -h "$BIN_DIR/ivox" | cut -f1)"
 
 # ── 3.5. ad-hoc 签名 ──
 section "ad-hoc 签名"
@@ -68,6 +71,19 @@ if codesign --force --sign - "$BIN_DIR/ivox" 2>/dev/null; then
   ok "ad-hoc 签名完成"
 else
   info "ad-hoc 签名跳过（无 Xcode 命令行工具）"
+fi
+
+# ── 3.6 集成资产（hook/pi/dsh）幂等分发到各 agent ──
+section "集成安装"
+INSTALLER="$CONFIG_DIR/integrations/install-hooks.sh"
+if [[ -f "$INSTALLER" ]]; then
+  if bash "$INSTALLER" "$CONFIG_DIR/hook.sh"; then
+    ok "hook / pi / dsh 已同步（已安装的 agent 生效，未安装的自动跳过）"
+  else
+    info "集成同步有警告，可稍后手动重跑 bash $INSTALLER"
+  fi
+else
+  info "该版本包不含集成资产，跳过（hook/pi/dsh 需从源码安装）"
 fi
 
 # ── 4. 配置 ──

@@ -129,8 +129,8 @@ make version V=v1.2.0    # 更新 Version.swift, 提交并打 tag
 # 1. 确认所有改动已 commit
 git status
 
-# 2. 打包二进制
-cd .build/release && tar czf ivox-vX.X.X-macos-arm64.tar.gz ivox
+# 2. 打包二进制 + 自包含集成资产（产物在 .build/release/）
+make package
 
 # 3. 打版本 tag（自动 commit + tag）
 make version V=vX.X.X

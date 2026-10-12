@@ -4,6 +4,23 @@ set -euo pipefail
 
 HOOK_SH="${1:?用法: install-hooks.sh <hook-sh-path>}"
 
+# ── 素材源目录探测 ──
+# 部署态：本脚本就在 ~/.config/ivox/integrations/ 内，pi/、dsh/、hook.sh 与它同级；
+# 源码态：本脚本在 scripts/，素材在 ../integrations。
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+if [[ -d "$SCRIPT_DIR/pi" && -d "$SCRIPT_DIR/dsh" ]]; then
+  SRC="$SCRIPT_DIR"
+else
+  SRC="$(cd "$SCRIPT_DIR/../integrations" && pwd)"
+fi
+
+# hook.sh 本体从素材源铺到部署路径（挂载配置里写死引用 HOOK_SH）
+if [[ -f "$SRC/hook.sh" ]]; then
+  mkdir -p "$(dirname "$HOOK_SH")"
+  cp "$SRC/hook.sh" "$HOOK_SH"
+  chmod 755 "$HOOK_SH"
+fi
+
 # ── 公共函数：用 jq 或 python3 安全写入 hook 配置 ──
 # 用法：write_hook <config> <source> <timeout> [event]
 #   event 默认 Stop（念回复）；UserPromptSubmit 用固定命令 hook.sh stop（打断旧播报）
@@ -100,15 +117,11 @@ write_prompt_hook "$QWEN_JSON" 60
 # 桥接插件（dsh-hooks-claude-code）的 Stop payload 不含回复文本，故不再使用。
 DSH_PROFILE_DIR="$HOME/.dsh/profiles/desktop"
 DSH_PATCH="$DSH_PROFILE_DIR/cordis.patch.yml"
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 
 DSH_PLUGIN_SRC=""
-for cand in "$SCRIPT_DIR/../integrations/dsh"; do
-  if [[ -f "$cand/ivox-tts.mjs" ]]; then
-    DSH_PLUGIN_SRC="$cand"
-    break
-  fi
-done
+if [[ -f "$SRC/dsh/ivox-tts.mjs" ]]; then
+  DSH_PLUGIN_SRC="$SRC/dsh"
+fi
 
 if [[ -d "$DSH_PROFILE_DIR" ]]; then
   if [[ -z "$DSH_PLUGIN_SRC" ]]; then
@@ -151,7 +164,7 @@ fi
 
 # ── PI coding agent 扩展 ──
 PI_EXT_DIR="$HOME/.pi/agent/extensions"
-PI_EXT_SRC="$SCRIPT_DIR/../integrations/pi/ivox.ts"
+PI_EXT_SRC="$SRC/pi/ivox.ts"
 if [[ -d "$PI_EXT_DIR" && -f "$PI_EXT_SRC" ]]; then
   # 无条件覆盖：与 dsh 插件一致，否则仓库里更新了扩展也永远装不上去
   cp "$PI_EXT_SRC" "$PI_EXT_DIR/ivox.ts"

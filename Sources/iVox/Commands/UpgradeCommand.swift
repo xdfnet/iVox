@@ -112,10 +112,12 @@ struct UpgradeCommand: AsyncParsableCommand {
             print("旧版已备份到 \(backupPath)")
         }
 
-        // 6. 解包替换（tar 根即 ivox 可执行文件）
+        // 6. 定向解包：ivox → binDir，integrations/ → 配置目录（自包含发布包）
+        let configDir = AppPaths.configDir
+        try? FileManager.default.createDirectory(atPath: configDir, withIntermediateDirectories: true)
         let tar = Process()
         tar.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        tar.arguments = ["xzf", tarURL.path, "-C", binDir]
+        tar.arguments = ["xzf", tarURL.path, "-C", binDir, "ivox"]
         do { try tar.run(); tar.waitUntilExit() } catch {
             print("错误: 解包失败：\(error)")
             throw ExitCode.failure
@@ -124,6 +126,12 @@ struct UpgradeCommand: AsyncParsableCommand {
             print("错误: 解包后未找到 \(binPath)，可从备份恢复：\(backupPath)")
             throw ExitCode.failure
         }
+        // 集成资产（旧包可能不含，解包失败不阻断二进制升级）
+        let tarInt = Process()
+        tarInt.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
+        tarInt.arguments = ["xzf", tarURL.path, "-C", configDir, "integrations"]
+        try? tarInt.run()
+        tarInt.waitUntilExit()
 
         // 7. 权限 + ad-hoc 重签（每次构建签名会变，不重签可能被 Gatekeeper/TCC 拦）
         try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: binPath)
@@ -134,6 +142,21 @@ struct UpgradeCommand: AsyncParsableCommand {
         sign.waitUntilExit()
         if sign.terminationStatus != 0 {
             print("警告: ad-hoc 重签失败（退出码 \(sign.terminationStatus)），如遇权限异常可手动执行 codesign --force --sign - \(binPath)")
+        }
+
+        // 7.5 同步集成资产（hook/pi/dsh）到各 agent；幂等，失败仅告警不阻断升级
+        let installer = configDir + "/integrations/install-hooks.sh"
+        if FileManager.default.fileExists(atPath: installer) {
+            let sync = Process()
+            sync.executableURL = URL(fileURLWithPath: "/bin/bash")
+            sync.arguments = [installer, configDir + "/hook.sh"]
+            try? sync.run()
+            sync.waitUntilExit()
+            if sync.terminationStatus == 0 {
+                print("✓ 集成资产已同步（hook / pi / dsh）")
+            } else {
+                print("警告: 集成资产同步失败（退出码 \(sync.terminationStatus)），可稍后重跑安装脚本")
+            }
         }
 
         // 8. 原本在运行则重启
