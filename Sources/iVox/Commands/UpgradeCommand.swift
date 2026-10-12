@@ -71,10 +71,18 @@ struct UpgradeCommand: AsyncParsableCommand {
         print("发现新版本 v\(latest)（当前 v\(iVoxVersion)），开始下载 \(asset.name)")
 
         // 3. 下载到临时文件
+        guard let downloadURL = URL(string: asset.browserDownloadUrl) else {
+            print("错误: Release 里的下载地址无效：\(asset.browserDownloadUrl)")
+            throw ExitCode.failure
+        }
+        // tag 来自远端，别让它带路径分隔符拼进文件名
+        let safeTag = latest
+            .replacingOccurrences(of: "/", with: "_")
+            .replacingOccurrences(of: "..", with: "_")
         let tarURL: URL
         do {
-            let (tmpURL, _) = try await URLSession.shared.download(for: URLRequest(url: URL(string: asset.browserDownloadUrl)!))
-            let dest = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ivox-upgrade-\(latest).tar.gz")
+            let (tmpURL, _) = try await URLSession.shared.download(for: URLRequest(url: downloadURL))
+            let dest = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ivox-upgrade-\(safeTag).tar.gz")
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: tmpURL, to: dest)
             tarURL = dest

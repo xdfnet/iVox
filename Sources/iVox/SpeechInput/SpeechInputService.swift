@@ -290,8 +290,8 @@ final class SpeechInputService: @unchecked Sendable {
             return false
         case .notDetermined:
             let semaphore = DispatchSemaphore(value: 0)
-            final class _Box: @unchecked Sendable { var value = false }
-            let box = _Box()
+            final class PermissionBox: @unchecked Sendable { var value = false }
+            let box = PermissionBox()
             AVCaptureDevice.requestAccess(for: .audio) { g in
                 box.value = g
                 semaphore.signal()
