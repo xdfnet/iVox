@@ -217,7 +217,7 @@ actor ConnectionHandler {
         }
         Log.debug("清洗后内容: source=\(source) cleaned=\(logPreview(cleaned))")
 
-        // 分块入队：整条一次合成会长时间占住播放，「↓ 跳过当前段」也失去意义
+        // 分块入队：整条一次合成会长时间占住播放（且要等整段合成完才出声），逐句入队才能边合成边播
         let chunks = splitSentences(cleaned)
         let jobs = chunks.map { PlaybackJob(text: $0, voiceID: voiceID, source: source) }
         Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(cleaned.count) 分块=\(jobs.count)")

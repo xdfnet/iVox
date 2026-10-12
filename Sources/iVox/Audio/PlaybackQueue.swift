@@ -211,11 +211,12 @@ actor PlaybackQueue {
                 turnOpen = true
             }
         } else {
-            // 普通 ivox speak / hook.sh：作为新一轮打断当前在播，此前流式轮一律作废
-            buryAllTurns()
-            await bargeIn()
-            await awaitCurrentPipelineFinished()
-            turnOpen = false
+            // 无轮次的普通播报（hook.sh / ivox speak）：**排队，不抢麦**。
+            // 打断权只属于「用户开口」——右⌘、`hook.sh interrupt` 哨兵、pi/dsh 的新轮，
+            // 各自走 `cancelAll()` / `beginTurn()` 里的 bargeIn。回复到达时的播报若再抢一次，
+            // 两个后台会话收尾就会互相掐掉对方的内容：实测一条 868 字长回复被 199ms 后到达的
+            // 84 字短回复整条掐掉（`TTS 合成已取消`），而用户全程没开口。
+            // 这里只 append + signalJobs，由末尾「无管道则起管道」复用现有管道顺序播完。
         }
         jobs.append(contentsOf: newJobs)
         signalJobs()

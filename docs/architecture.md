@@ -113,10 +113,10 @@ Daemon (actor)
 
 - Actor，管理播报队列
 - **连续播放管道**：`processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，句间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
-- `enqueue` 追加到队列尾部，同 `turnID` 不打断；新 turn / 无 turn 的普通 speak 触发 `bargeIn` 打断旧轮
+- `enqueue` 追加到队列尾部，同 `turnID` 不打断；新 turn（用户发言）触发 `bargeIn` 打断旧轮；**无 turn 的普通播报（hook.sh / `ivox speak`）只排队，不打断**
 - **过期轮次静默丢弃**：`currentTurn` 已切到新轮后，旧轮的迟到帧/`endTurn`（含旧连接 EOF 残尾）一律 no-op、不再 `bargeIn`，避免旧轮残音反杀新轮（真人对话：你一开口对方就停）
 - 流式轮次（`turnOpen`）队列瞬时排空时挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐；`endTurn` 后排空才收尾
-- 打断只有两个途径：**开口说话**（right⌘ 录音触发 `cancelAll()`）与**新轮次**（新 turn / 无 turn 普通 speak 触发 `bargeIn`）；不再有「跳段」语义
+- 打断只有两个途径，且都源于**用户开口**：**说话/提交**（right⌘ 录音与 `hook.sh interrupt` 哨兵都触发 `cancelAll()`）与**新轮次**（用户给 pi/dsh 发言，新 turn 触发 `bargeIn`）；agent 回复到达的普通播报只排队。不再有「跳段」语义
 - `cancelAll()` 清空队列 + 取消全部播放（bargeIn + 清 turn 状态）
 - 等待 TTS 模型就绪后再开始合成
 - 播报前通过 `MediaController` 暂停音乐，播完恢复
@@ -145,7 +145,7 @@ Daemon (actor)
 - `CGEvent.tapCreate()` **只监听 `flagsChanged`**（right ⌘ 或 right ⌃），不再监听任何普通 `keyDown`——打字、Esc、方向键全部原样透传（GUI 客户端里打字不等于要它闭嘴，Esc 还要留给 agent 取消生成）
 - **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」，这是唯一的键盘打断途径）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 另一条打断途径是新轮次入队自动 bargeIn，无需按键
+- 另一条打断途径是用户给 pi/dsh 发言时新轮次入队自动 bargeIn，无需按键
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 

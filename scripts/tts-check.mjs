@@ -272,8 +272,9 @@ async function runCase(c) {
     await closeAllStreams();
   }
   // 外部播报干扰：run 期间别的 agent（Claude/Codex 的 Stop hook、用户手动 speak）恰好开口，
-  // 普通 speak 会 bargeIn 并把本用例自己的流式轮次作废，断言必然失真。检测到则把失败降级为
-  // skip 并显式打出证据——只降级失败，通过的不动；不掩盖，也别把它当产品缺陷。
+  // 会插进用例自己的音频窗口，尾音/收尾/时长类断言失真。检测到则把失败降级为 skip 并显式
+  // 打出证据——只降级失败，通过的不动；不掩盖，也别把它当产品缺陷。
+  //（普通播报已不再 bargeIn，因此不再作废用例的流式轮次；保留此项是因为它仍会插播。）
   const foreign = log.grep(new RegExp(`队列入队: source=(?!c\\d\\d${runId})`), t0);
   // 外部停止哨兵（别的会话的 `hook.sh interrupt` / `ivox quiet`）会在用例播到一半时
   // 掐掉本轮，尾音/收尾/恢复类断言必然失真——同样降级为 skip 并给出证据。

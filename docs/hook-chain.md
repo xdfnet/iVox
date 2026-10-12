@@ -178,9 +178,9 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 
 - `actor` 保证线程安全
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
-- **轮次（turn）语义**：同一 `turnID` 的分块顺序 append 不打断；新 turn 或无 turn 的普通 `ivox speak` 触发 `bargeIn`，取消在播 + 清空旧轮队列
+- **轮次（turn）语义**：同一 `turnID` 的分块顺序 append 不打断；新 turn（用户发言）触发 `bargeIn`，取消在播 + 清空旧轮队列；**无 turn 的普通播报（`ivox speak` / hook.sh）只 append 排队，不抢麦**
 - 流式轮次未结束（`turnOpen`）时队列排空就挂起等下一批，不恢复音乐；轮次结束排空后才收尾
-- 打断只有两途径：right⌘ 开口说话触发 `cancelAll()`（清空并取消全部），或新轮次 `bargeIn`；普通键/Esc/方向键不打断
+- 打断只有两途径，且都源于**用户开口**：right⌘ 说话与 `hook.sh interrupt` 哨兵（提交即打断）都触发 `cancelAll()`（清空并取消全部 + 作废全部流式轮），或用户给 pi/dsh 发言时的新轮次 `bargeIn`；普通键/Esc/方向键不打断，**agent 回复到达时的普通播报也不打断（排队）**
 
 ### 7. MediaController
 
