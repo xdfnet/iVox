@@ -28,18 +28,22 @@ make run
 ```
 Sources/iVox/          — 主程序 target
   EntryPoint.swift     — @main, ArgumentParser 子命令
-  Commands/            — ServeCommand, SpeakCommand, WeChatCommand 等
-  Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop
-  TTS/                 — TTSEngine（mlx-audio-swift 流式合成）
-  Audio/               — AudioPlayer, PlaybackQueue, MediaController, MediaHTTPServer
-  HotKey/              — GlobalKeyTap：键盘事件层（独占 tap，按归属路由给下面三家）
-  SpeechInput/         — 右⌘/右⌃ 语音输入（ASR + 浮窗），事件由 HotKey 层送来
+
+  ── 六个能力域（目录与 README 功能表、ivox status 一一对应）──
+  Playback/            — 自动播报：TTSEngine（mlx-audio-swift 流式合成）+ PlaybackQueue + AudioPlayer
+  SpeechInput/         — 语音输入：右⌘/右⌃ 录音 + ASR + 浮窗（事件由 HotKey 层送来）
   Translation/         — 划词翻译（Cmd+D）：复制 → 翻译 → 浮窗 + 朗读
-  QuickActions/        — Finder/终端快捷（Opt+Z/A/Q/W/C）
-  WeChat/              — 微信 ilink HTTP 客户端 + 长轮询平台
+  QuickActions/        — 快速操作：Finder/终端快捷（Opt+Z/A/Q/W/C）
+  WeChat/              — 微信桥接：ilink HTTP 客户端 + 长轮询平台
+  MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI）+ MediaController
+
+  ── 基础设施（跨能力域）──
+  HotKey/              — GlobalKeyTap：键盘事件层（独占 tap，按归属路由给上面几家）
   Network/             — SocketServer（Unix domain socket IPC）
+  Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop；装配与热键分派
+  Commands/            — ServeCommand, SpeakCommand, TranslateCommand 等
   Utilities/           — Version, 日志工具
-  Resources/          — assets, 默认音色, Info.plist, 配置模板（编进二进制 bundle）
+  Resources/           — assets, 默认音色, Info.plist, 配置模板（编进二进制 bundle）
 
 Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   Config.swift         — JSON 配置模型

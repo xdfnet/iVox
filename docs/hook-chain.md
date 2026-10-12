@@ -174,7 +174,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 
 ### 6. PlaybackQueue
 
-`Sources/iVox/Audio/PlaybackQueue.swift`
+`Sources/iVox/Playback/PlaybackQueue.swift`
 
 - `actor` 保证线程安全
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
@@ -184,7 +184,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 
 ### 7. MediaController
 
-`Sources/iVox/Audio/MediaController.swift`
+`Sources/iVox/MediaControl/MediaController.swift`
 
 - 播放前调 iDict HTTP API → 暂停音乐
 - 播放完调 iDict HTTP API → 恢复音乐
@@ -194,7 +194,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 
 ### 8. TTSEngine
 
-`Sources/iVox/TTS/TTSEngine.swift`
+`Sources/iVox/Playback/TTSEngine.swift`
 
 - 调用 MLX 本地模型：Qwen3-TTS-12Hz-1.7B-Base-8bit
 - **纯本地推理，不上传任何数据**
@@ -206,7 +206,7 @@ Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义
 
 ### 9. AudioPlayer
 
-`Sources/iVox/Audio/AudioPlayer.swift`
+`Sources/iVox/Playback/AudioPlayer.swift`
 
 - 基于 `AVAudioEngine` + 单个常驻 `AVAudioPlayerNode`
 - `scheduleBuffer` 连续排队，整条播报复用、句间不重启设备

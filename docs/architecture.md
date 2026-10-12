@@ -101,7 +101,7 @@ Daemon (actor)
 
 ### TTSEngine — 本地语音合成
 
-`Sources/iVox/TTS/TTSEngine.swift`
+`Sources/iVox/Playback/TTSEngine.swift`
 
 - `mlx-audio-swift` 加载本地 Qwen3-TTS 模型
 - `generateStream()` 流式合成 float32 PCM → 重采样 48kHz → int16
@@ -110,7 +110,7 @@ Daemon (actor)
 
 ### PlaybackQueue — 播放调度
 
-`Sources/iVox/Audio/PlaybackQueue.swift`
+`Sources/iVox/Playback/PlaybackQueue.swift`
 
 - Actor，管理播报队列
 - **连续播放管道**：`processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，句间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
@@ -124,7 +124,7 @@ Daemon (actor)
 
 ### AudioPlayer — 音频播放
 
-`Sources/iVox/Audio/AudioPlayer.swift`
+`Sources/iVox/Playback/AudioPlayer.swift`
 
 - `AVAudioEngine` + 单个常驻 `AVAudioPlayerNode.scheduleBuffer()`，整条播报复用、句间不重启
 - **高低水位背压**：已排队音频 >4s 暂停合成、降到 2s 放行（`pendingFrames` 随 `dataConsumed` 回调核减）
@@ -134,7 +134,7 @@ Daemon (actor)
 
 ### MediaController — 系统媒体控制
 
-`Sources/iVox/Audio/MediaController.swift`
+`Sources/iVox/MediaControl/MediaController.swift`
 
 - `MRMediaRemoteSendCommand` 系统框架直接控制媒体播放
 - 支持播放/暂停/切换/下一曲，无需设备控制与数据访问权限
@@ -181,7 +181,7 @@ Daemon (actor)
 
 ### MediaHTTPServer — Web UI
 
-`Sources/iVox/Audio/MediaHTTPServer.swift`
+`Sources/iVox/MediaControl/MediaHTTPServer.swift`
 
 - 嵌入式 HTTP 服务器，端口 8888
 - Web UI：播放/暂停/下一曲控制 + 状态展示
