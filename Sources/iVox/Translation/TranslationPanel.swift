@@ -85,17 +85,20 @@ final class TranslationPanel {
 
     /// 深色圆角容器 + 自动换行的文本，尺寸随内容量出来。
     ///
-    /// 尺寸用 `boundingRect` 自己算，不依赖 `NSTextField.sizeToFit()`——多行时后者
-    /// 不按 `preferredMaxLayoutWidth` 折行，量出来的高度是错的（踩过：长译文只显示一行、
-    /// 超出部分被裁掉）。
+    /// 宽高都用 `boundingRect` 自己算，不依赖 `NSTextField.sizeToFit()`（多行时不按上限
+    /// 折行、高度量错，长译文只显示一行）。**宽度分两步**：先量「不折行」的自然宽度，
+    /// 只有它超过上限时才折行——直接拿上限当约束去量，单行短文本也会返回上限宽，
+    /// 弹窗就是固定的宽条（踩过）。
     private func makeContentView(text: String) -> NSView {
         let font = NSFont.systemFont(ofSize: Self.fontSize)
+        let attributed = NSAttributedString(string: text, attributes: [.font: font])
         let maxTextWidth = Self.maxTextWidth - Self.padding * 2
-        let bounds = NSAttributedString(string: text, attributes: [.font: font]).boundingRect(
-            with: NSSize(width: maxTextWidth, height: .greatestFiniteMagnitude),
+        let width = min(ceil(attributed.size().width), maxTextWidth)
+        let bounds = attributed.boundingRect(
+            with: NSSize(width: width, height: .greatestFiniteMagnitude),
             options: [.usesLineFragmentOrigin, .usesFontLeading]
         )
-        let textSize = NSSize(width: ceil(bounds.width), height: ceil(bounds.height))
+        let textSize = NSSize(width: width, height: ceil(bounds.height))
 
         let size = NSSize(
             width: textSize.width + Self.padding * 2,
