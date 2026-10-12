@@ -1,4 +1,4 @@
-.PHONY: all install update check init models voices assets build package uninstall run sign test version clean help
+.PHONY: all install update check check-tts init models voices assets build package uninstall run sign test version clean help
 
 SWIFT := xcrun --toolchain swift-latest swift
 SWIFT_RELEASE_FLAGS := -c release -Xswiftc -Osize
@@ -70,6 +70,10 @@ sign:
 test:
 	$(SWIFT) test
 
+# 播报黑盒自检（压真实 daemon，需先 ivox on 且模型就绪）。用法: make check-tts / ARGS="-f protocol"
+check-tts:
+	@scripts/tts-check.sh $(ARGS)
+
 version:
 	@if [ -z "$(V)" ]; then \
 		echo "用法: make version V=v1.x.x"; exit 1; \
@@ -92,6 +96,7 @@ help:
 	@echo "  make update         = 停服 + 编译 + 部署 + 启动"
 	@echo "  make run            = 编译 + 前台调试"
 	@echo "  make test           = 运行测试"
+	@echo "  make check-tts      = 播报黑盒自检（真实 daemon，发版前手动跑）"
 	@echo "  make build          = 编译 release"
 	@echo "  make version        = 发版"
 	@echo "  make uninstall      = 停服务 + 删 runtime"

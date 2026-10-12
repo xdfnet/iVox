@@ -149,4 +149,43 @@ final class StreamBufferTests: XCTestCase {
     func testStreamedCleaningEqualsWholeWithEmoji() {
         assertConsistent("👌 好的，我这就去办。🎉 搞定了，记得跑测试。")
     }
+
+    // 边缘一致性：URL 查询串含 ?/&，任意切点下流式清洗都不得把参数当正文念出。
+    func testStreamedCleaningEqualsWholeWithURLQuery() {
+        assertConsistent("接口在 https://a.b/path?x=1&y=2&token=abc 这里，记得带上参数。")
+    }
+
+    // Markdown 表格跨行、且 | 分隔行可能恰好落在切点上：任何切点都必须念出单元格正文、
+    // 不念表格符号。注：表格在切点 flush 时的 Markdown AST 块边界与整段解析不同，块末补的
+    // 句号位置会有差异（如「数量。苹果 3」vs「数量 苹果 3。」），属可接受差异，故这里只卡
+    // 「念对话、不读符号」的稳健不变量，不要求与整段逐字一致。
+    func testStreamedTableSpeaksCellsNotSymbols() {
+        let table = """
+        结果如下：
+
+        | 项目 | 数量 |
+        | --- | --- |
+        | 苹果 | 3 |
+        | 香蕉 | 5 |
+
+        都在表里了。
+        """
+        for size in [1, 2, 3, 7] {
+            let spoken = stream(table, chunkSize: size).map { cleanText($0) }.joined()
+            XCTAssertFalse(spoken.contains("|"), "切分\(size): 念出了表格竖线\n\(spoken)")
+            XCTAssertFalse(spoken.contains("---"), "切分\(size): 念出了分隔行\n\(spoken)")
+            XCTAssertTrue(spoken.contains("苹果"), "切分\(size): 漏播表格正文\n\(spoken)")
+            XCTAssertTrue(spoken.contains("香蕉"), "切分\(size): 漏播表格正文\n\(spoken)")
+            XCTAssertTrue(spoken.contains("都在表里了"), "切分\(size): 漏播收尾正文\n\(spoken)")
+        }
+    }
+
+    // 长 hex / UUID / JSON 在任意安全切点分块喂入，流式清洗结果仍与整段一致。
+    func testStreamedCleaningEqualsWholeWithHexUUIDJSON() {
+        let text = "标识是 550e8400-e29b-41d4-a716-446655440000，" +
+                   "哈希为 deadBEEFcafe0123，负载 " +
+                   #"{"name":"ivox","version":3,"ok":true,"tags":["tts","mlx"]}"# +
+                   "，处理完了。"
+        assertConsistent(text)
+    }
 }

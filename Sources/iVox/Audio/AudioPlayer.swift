@@ -16,6 +16,8 @@ final class AudioPlayer: @unchecked Sendable {
     private var generation = 0      // 世代：cancelPendingPlayback 递增，旧 buffer 回调据此丢弃
     private var started = false
     private var drainedContinuation: CheckedContinuation<Void, Never>?
+    private var drainSeq: UInt = 0         // drain 序号：让超时兜底只对自己的那次 drain 生效
+    private var drainTailSec: Double = 0   // 本次 drain 入口的快照尾音秒数（正常排空时打日志）
     /// 背压等待者：每个挂起的 writer 独立槽。密集打断时新旧管道的 writer 可能短暂同时
     /// 在场，用数组而非单槽——单槽会被后到者覆盖，先到者的 continuation 永不 resume（泄漏）。
     private var backpressureWaiters: [CheckedContinuation<Void, Never>] = []
@@ -101,10 +103,12 @@ final class AudioPlayer: @unchecked Sendable {
             guard self.generation == enterGen else { return }
             if !ensureHealthy() { return }
 
-            // 前导静音：唤醒休眠的 player node，避免首个 audio chunk 被跳过。
+            // 前导静音：唤醒被系统音频电源管理挂起的 player node，避免首个 audio chunk 被跳过。
             // 连续排队时 pendingCount 句间不归零，这里整轮只会触发一次。
+            // 长时间空闲（实测十几分钟）后 50ms 太短、首句开头仍会被吞，故用 200ms，并在排
+            // 缓冲前显式 node.play()（幂等，playing 中调用无副作用）确保节点真正进入渲染。
             if needsPrime {
-                let primeFrames = AVAudioFrameCount(format.sampleRate / 20)  // 50ms 静音
+                let primeFrames = AVAudioFrameCount(format.sampleRate / 5)  // 200ms 静音
                 guard let primeBuf = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: primeFrames) else {
                     Log.warn("前导静音 buffer 分配失败，跳过唤醒")
                     return
@@ -113,6 +117,8 @@ final class AudioPlayer: @unchecked Sendable {
                 if let dst = primeBuf.int16ChannelData?.pointee {
                     dst.initialize(repeating: 0, count: Int(primeFrames))
                 }
+                node.play()
+                waitForNodePlaying()
                 let gen = generation
                 pendingCount += 1
                 pendingFrames += Int(primeFrames)
@@ -123,7 +129,7 @@ final class AudioPlayer: @unchecked Sendable {
                         self.onConsumed(frames: Int(primeFrames))
                     }
                 }
-                Log.debug("前导静音已调度唤醒 player node")
+                Log.debug("前导静音已调度唤醒 player node (200ms)")
                 needsPrime = false
             }
 
@@ -194,6 +200,7 @@ final class AudioPlayer: @unchecked Sendable {
             needsPrime = true   // 设备真正播空：下次写入重新唤醒（覆盖电源管理休眠）
             if let cont = drainedContinuation {
                 drainedContinuation = nil
+                Log.info(String(format: "播放收尾完成: 尾音=%.2fs", drainTailSec))
                 cont.resume()
             }
         }
@@ -201,28 +208,34 @@ final class AudioPlayer: @unchecked Sendable {
 
     /// 等所有已排队音频播完（只在整条管道末端调用一次，不再逐句调用）。
     func drain() async throws {
-        let deadline = serialQueue.sync { () -> DispatchTime in
+        // 入口快照尾部排队 PCM 秒数：正常收尾时打点（供黑盒播报自检断言尾音没被提前掐掉）。
+        let tailAtEntry = serialQueue.sync { () -> (DispatchTime, Double) in
             let ms = Int((Double(pendingFrames) / format.sampleRate + Self.drainSlack) * 1000)
-            return DispatchTime.now() + .milliseconds(ms)
+            let tailSec = Double(pendingFrames) / format.sampleRate
+            return (DispatchTime.now() + .milliseconds(ms), tailSec)
         }
+        let deadline = tailAtEntry.0
+        let tailSecAtEntry = tailAtEntry.1
         await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            let wasDrained = serialQueue.sync { () -> Bool in
-                if pendingCount == 0 { return true }
+            let pending = serialQueue.sync { () -> UInt? in
+                if pendingCount == 0 { return nil }
+                drainSeq &+= 1
                 drainedContinuation = continuation
-                return false
+                drainTailSec = tailSecAtEntry   // 供 onConsumed 正常排空时打点
+                return drainSeq
             }
-            if wasDrained {
+            guard let mySeq = pending else {
+                Log.info(String(format: "播放收尾完成: 尾音=%.2fs", tailSecAtEntry))
                 continuation.resume()
-            } else {
-                // buffer 播放回调丢失（如 AudioEngine 被系统事件停止）时兜底，避免管道永久阻塞
-                serialQueue.asyncAfter(deadline: deadline) { [weak self] in
-                    guard let self else { return }
-                    if let cont = self.drainedContinuation {
-                        self.drainedContinuation = nil
-                        Log.warn("drain 超时强制返回（pendingCount=\(self.pendingCount)）")
-                        cont.resume()
-                    }
-                }
+                return
+            }
+            // buffer 播放回调丢失（如 AudioEngine 被系统事件停止）时兜底，避免管道永久阻塞。
+            // 只对自己的那次 drain 生效：上一次 drain 遗留的计时器不得误放行本次（序号校验）。
+            serialQueue.asyncAfter(deadline: deadline) { [weak self] in
+                guard let self, self.drainSeq == mySeq, let cont = self.drainedContinuation else { return }
+                self.drainedContinuation = nil
+                Log.warn("drain 超时强制返回（pendingCount=\(self.pendingCount) 尾音=\(String(format: "%.2f", tailSecAtEntry))s）")
+                cont.resume()
             }
         }
     }

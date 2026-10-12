@@ -12,11 +12,19 @@ struct PlaybackJob: Sendable {
 actor PlaybackQueue {
     private var jobs: [PlaybackJob] = []
     private var currentTask: Task<Void, Never>?
+    /// 管道代号：起新管道 / bargeIn 作废时递增。在跑管道靠「自己的代号是否已过期」判断
+    /// 该不该继续——非结构化 `Task {}` 的子任务不继承取消，单靠 cancel 停不住它们。
+    private var pipelineSeq: UInt = 0
+    /// `currentTask` 的代号，用于身份校验：仅当代号仍指向自己时才允许清空/接管。
+    private var currentTaskSeq: UInt = 0
     private var generation: UInt = 0
     /// 当前播报所属轮次；与新请求的 turnID 不同即触发打断
     private var currentTurn: String?
     /// 当前轮次是否仍在流式生成（true 时句间队列瞬时排空也不恢复音乐）
     private var turnOpen = false
+    /// 最近出现过的流式轮次（后出现者在后，容量有上限）。迟到帧据此判定：
+    /// 未登记的 turnID = 新轮（接管）；已登记但非 currentTurn = 被顶掉的旧轮（静默丢弃）。
+    private var recentTurns: [String] = []
     /// processNext 在 turnOpen 下等待新 job 的挂起点；入队/结束/打断时恢复
     private var jobWaiters: [CheckedContinuation<Void, Never>] = []
     private let player: AudioPlayer
@@ -33,6 +41,7 @@ actor PlaybackQueue {
 
     func shutdown() {
         Log.info("PlaybackQueue 退出")
+        pipelineSeq &+= 1      // 让在跑管道的 producer/consumer 退出
         currentTask?.cancel()
         jobs.removeAll()
         player.cancelPendingPlayback()
@@ -50,6 +59,7 @@ actor PlaybackQueue {
         await bargeIn()
         currentTurn = nil
         turnOpen = false
+        await pumpOrResume()   // 全局停止后不应把音乐卡在暂停
     }
 
     /// 空闲时恢复音乐（由外部调用，如语音输入结束后）
@@ -60,12 +70,13 @@ actor PlaybackQueue {
 
     /// 流式轮次开始（首帧）：打断旧轮/普通播报，标记本轮仍在生成（句间不恢复音乐）。
     func beginTurn(_ id: String) async {
-        if currentTurn != id {
-            await bargeIn()
-            await awaitCurrentPipelineFinished()   // 否则同轮首个 enqueue 可能误复用已取消的旧管道
-        }
+        guard currentTurn != id else { turnOpen = true; return }
+        guard adoptTurn(id) else { return }   // 已见过的旧轮：忽略
         currentTurn = id
         turnOpen = true
+        await bargeIn()
+        await awaitCurrentPipelineFinished()
+        startPipelineIfPending()   // 拆旧管道期间到达的本轮分块已在 jobs，需有人起管道
     }
 
     /// 流式轮次正常结束：放开音乐保活并唤醒管道，让其排空后退出、恢复音乐。
@@ -74,7 +85,18 @@ actor PlaybackQueue {
         guard currentTurn == id else { return }
         turnOpen = false
         signalJobs()
-        if jobs.isEmpty, currentTask == nil { await media.resume() }
+        await pumpOrResume()
+    }
+
+    /// 收敛兜底：还有待播 job 却没有管道在跑（顶替时序可能留下这种孤儿态）就补起管道，
+    /// 否则视为已排空、恢复音乐。保证任何路径结束后不留「有活没人干」的挂起。
+    private func pumpOrResume() async {
+        guard currentTask == nil else { return }
+        if !jobs.isEmpty {
+            startPipeline()
+        } else {
+            await media.resume()
+        }
     }
 
     /// 流式轮次被取消（用户 Escape）：丢弃本轮未播内容并恢复音乐。
@@ -90,6 +112,7 @@ actor PlaybackQueue {
     /// 必须 `await currentTask?.value`（线性化点），否则新旧两个 consumer 会并发 write
     /// 同一个 player、争夺单一背压 continuation 槽，造成 continuation 泄漏/竞态。
     private func bargeIn() async {
+        pipelineSeq &+= 1      // 作废在跑管道：其 producer/consumer 靠代号不等立即停止
         currentTask?.cancel()
         jobs.removeAll()
         signalJobs()
@@ -100,8 +123,30 @@ actor PlaybackQueue {
     /// 线性化点：等当前管道（producer+consumer）彻底退出后再起新的。
     private func awaitCurrentPipelineFinished() async {
         guard let old = currentTask else { return }
+        let seq = currentTaskSeq
         _ = await old.value
-        currentTask = nil
+        if currentTaskSeq == seq { currentTask = nil }   // 挂起期间若已起新管道，别把它清掉
+    }
+
+    /// 登记并判定轮次：返回 true = 首次出现的新轮（已登记，应接管）；false = 已见过的旧轮（丢弃）。
+    private func adoptTurn(_ id: String) -> Bool {
+        if recentTurns.contains(id) { return false }
+        recentTurns.append(id)
+        if recentTurns.count > 64 { recentTurns.removeFirst() }
+        return true
+    }
+
+    /// 起一条新管道（producer+consumer），并登记其身份序号。
+    private func startPipeline() {
+        pipelineSeq &+= 1
+        let seq = pipelineSeq
+        currentTaskSeq = seq
+        currentTask = Task { await processNext(seq: seq) }
+    }
+
+    /// 仅在无管道且有活时起新管道（拆旧管道后的补起）。
+    private func startPipelineIfPending() {
+        if currentTask == nil, !jobs.isEmpty { startPipeline() }
     }
 
     /// 恢复等待新 job 的管道（turnOpen 下 processNext 挂在 waitForJobs 上）。
@@ -117,34 +162,33 @@ actor PlaybackQueue {
     /// - Parameter turnID: 流式轮次。与当前轮不同（含 nil 普通播报）先打断旧轮；同轮追加。
     func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async {
         guard !newJobs.isEmpty else { return }
-        var mustStart = false
         if let turnID {
-            // 已被更新轮次顶掉的旧轮：迟到帧（含 EOF 残尾）静默丢弃，
-            // 不 bargeIn——否则旧轮残音会反杀新轮，用户会听到上一轮冒半句。
-            if let cur = currentTurn, cur != turnID { return }
-            if currentTurn == nil {
+            if currentTurn != turnID {
+                // 已被更新轮次顶掉的旧轮：迟到帧（含 EOF 残尾）静默丢弃，
+                // 不 bargeIn——否则旧轮残音会反杀新轮，用户会听到上一轮冒半句。
+                guard adoptTurn(turnID) else { return }
+                // 首次出现的新轮：就在此处驱动轮次切换，不依赖 beginTurn 是否已先跑
+                //（二者是各自独立的 Task，调度顺序无保证）。
+                currentTurn = turnID
+                turnOpen = true
                 await bargeIn()
                 await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
-                currentTurn = turnID
-                mustStart = true
+            } else {
+                turnOpen = true
             }
-            turnOpen = true
         } else {
             // 普通 ivox speak / hook.sh：作为新一轮打断当前在播
             await bargeIn()
             await awaitCurrentPipelineFinished()
             currentTurn = nil
             turnOpen = false
-            mustStart = true
         }
         jobs.append(contentsOf: newJobs)
         signalJobs()
         Log.debug("队列状态: pending=\(jobs.count) processing=\(currentTask != nil) turn=\(turnID ?? "-")")
 
         // 打断后必须新起；同轮追加则复用正在跑的管道（while 自动消费新 job）
-        if mustStart || currentTask == nil {
-            currentTask = Task { await processNext() }
-        }
+        if currentTask == nil { startPipeline() }
     }
 
     func enqueue(_ job: PlaybackJob) async {
@@ -156,7 +200,7 @@ actor PlaybackQueue {
     ///   开下一句），因此始终领先播放一两句，设备不会在句间播空；
     /// - 播放 task 只负责 `player.write`，背压只阻塞播放、不再挡合成。
     /// turnOpen 下队列瞬时排空，合成 task 挂起等下一批 job（保活音乐不恢复）；轮次结束且排空才收尾。
-    private func processNext() async {
+    private func processNext(seq: UInt) async {
         generation &+= 1
         let gen = generation
         await media.pause()
@@ -168,6 +212,7 @@ actor PlaybackQueue {
         let producer = Task {
             defer { pcmContinuation.finish() }
             while !Task.isCancelled {
+                if pipelineSeq != seq { return }   // 已被 bargeIn 作废：立即退出，不再合成
                 if jobs.isEmpty {
                     if turnOpen {
                         await waitForJobs()   // 被入队/endTurn/打断恢复
@@ -177,7 +222,12 @@ actor PlaybackQueue {
                 }
                 // 门控/等待可能挂起较久，返回后先看取消：已被 bargeIn 就别再发起合成
                 try Task.checkCancellation()
-                let job = jobs[0]
+                guard let job = jobs.first else { continue }  // 等待期间可能已被 bargeIn 清空
+                // 过期轮次残留（顶替时序竞态）：一律静默丢弃，绝不合成
+                if let t = job.turnID, t != currentTurn {
+                    jobs.removeFirst()
+                    continue
+                }
                 let batchID = String(UUID().uuidString.prefix(6))
                 Log.info("TTS 合成开始 [\(job.source)-\(batchID)] chars=\(job.text.count)")
                 let startedAt = Date()
@@ -190,13 +240,17 @@ actor PlaybackQueue {
                     try await player.awaitPrefetchCapacity()
                     try Task.checkCancellation()   // 门控返回时可能已被取消，绝不带取消进模型
 
-                    jobs.removeFirst()  // claim：确定要合成才拿出
+                    // claim：门控挂起期间 bargeIn 可能已 removeAll（取消状态尚在传播窗口），
+                    // 绝不能对空数组 removeFirst（曾致 EXC_BREAKPOINT「removeFirst from empty」）。
+                    // 只在队首仍是我读到的那个 job 时才弹出。
+                    guard jobs.first?.text == job.text else { continue }
+                    jobs.removeFirst()
                     claimed = true
                     let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
 
                     for try await pcm in stream {
-                        // MLX 流不响应中途取消：一旦发起本句只能跑完，但取消后不再向下游灌 PCM
-                        if Task.isCancelled { break }
+                        // MLX 流不响应中途取消：一旦发起本句只能跑完，但被作废后不再向下游灌 PCM
+                        if Task.isCancelled || pipelineSeq != seq { break }
                         pcmContinuation.yield(pcm)
                     }
                     try Task.checkCancellation()
@@ -235,7 +289,7 @@ actor PlaybackQueue {
         if !Task.isCancelled, gen == generation {
             try? await player.drain()
         }
-        currentTask = nil
+        if currentTaskSeq == seq { currentTask = nil }   // 已被新管道顶替则不清
         await Task.yield()
         // turnOpen 时同轮后续分块马上到，不能恢复音乐，否则句间反复 pause/resume
         if jobs.isEmpty, gen == generation, !turnOpen, !Task.isCancelled {
