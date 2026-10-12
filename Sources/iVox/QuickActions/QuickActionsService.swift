@@ -68,6 +68,7 @@ final class QuickActionsService {
         let dir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Library/Caches/ivox", isDirectory: true)
         try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
+        cleanupOldCommandFiles(in: dir)
 
         let url = dir.appendingPathComponent("quickaction-\(UUID().uuidString.prefix(8)).command")
         let script = """
@@ -77,6 +78,21 @@ final class QuickActionsService {
         try script.write(to: url, atomically: true, encoding: .utf8)
         try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
         return url
+    }
+
+    /// 回收上次留下的 `.command`：它们只是把命令喂给 Terminal 的载体，喂完就没用了。
+    /// 只删**超过 1 分钟**的——刚写下的那个可能正被 Terminal 读取，删早了会执行到空文件。
+    private func cleanupOldCommandFiles(in dir: URL) {
+        let fm = FileManager.default
+        guard let items = try? fm.contentsOfDirectory(
+            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
+        for url in items where url.lastPathComponent.hasPrefix("quickaction-") {
+            guard let mtime = try? url.resourceValues(forKeys: [.contentModificationDateKey])
+                .contentModificationDate else { continue }
+            if Date().timeIntervalSince(mtime) > 60 {
+                try? fm.removeItem(at: url)
+            }
+        }
     }
 
     // MARK: - 复制路径

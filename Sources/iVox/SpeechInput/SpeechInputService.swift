@@ -81,10 +81,9 @@ final class SpeechInputService: @unchecked Sendable {
             Task { await queue.cancelAll() }
             Log.debug("语音输入: right ⌘/⌃ 按下 → 暂停音乐 → 取消 TTS → 开始录音")
 
-            guard let (recorder, url) = startRecording() else { return }
-            stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
-            showOverlay(.listening)
-            startLevelMetering()
+            // 建目录 + 建 AVAudioRecorder 是同步 IO，而这里跑在 GlobalKeyTap 的事件线程上
+            // （它监听的是**全系统**键盘）——必须挪出去，否则按键瞬间整机输入都会卡顿。
+            Task { self.beginRecording() }
         } else {
             // 松开 right ⌘/⌃：检查状态，只有 recording 才能结束
             let job = stateQueue.sync { () -> (AVAudioRecorder, URL)? in
@@ -104,6 +103,17 @@ final class SpeechInputService: @unchecked Sendable {
     }
 
     // MARK: - Recording
+
+    /// 在后台真正开始录音（从事件线程 offload 出来）。挂起期间状态可能已变，再确认一次。
+    private func beginRecording() {
+        let canStart: Bool = stateQueue.sync {
+            if case .idle = state { return true } else { return false }
+        }
+        guard canStart, let (recorder, url) = startRecording() else { return }
+        stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
+        showOverlay(.listening)
+        startLevelMetering()
+    }
 
     private func startRecording() -> (AVAudioRecorder, URL)? {
         try? FileManager.default.createDirectory(at: recordDir, withIntermediateDirectories: true)

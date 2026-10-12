@@ -18,6 +18,12 @@ actor ConnectionHandler {
         self.statusProvider = statusProvider
     }
 
+    /// 单连接的防御上限。socket 已 `chmod 0600` 挡住其他用户，但同一 UID 下的野脚本
+    /// 仍能连上来：无上限的累积会被撑爆内存（曾有的写法里，`L` 帧长度还会整数溢出崩溃）。
+    private nonisolated static let maxHeaderBytes = 64 * 1024
+    private nonisolated static let maxBodyBytes = 64 * 1024 * 1024
+    private nonisolated static let maxFrameBytes = 32 * 1024 * 1024
+
     nonisolated func handle(fd: Int32) {
         var buf = [UInt8](repeating: 0, count: 65536)
 
@@ -28,6 +34,11 @@ actor ConnectionHandler {
             let n = Darwin.read(fd, &buf, buf.count)
             if n <= 0 { break }
             data.append(contentsOf: buf[0..<n])
+            if data.count > Self.maxHeaderBytes {
+                Log.warn("Socket 接入: 首行超长（\(data.count) 字节），丢弃连接 fd=\(fd)")
+                Darwin.close(fd)
+                return
+            }
             if let idx = data.firstIndex(of: 0x0A) { firstNL = idx }
         }
         Log.info("Socket 接入: fd=\(fd) bytes=\(data.count)")
@@ -37,7 +48,10 @@ actor ConnectionHandler {
                   .trimmingCharacters(in: .whitespaces),
               header.hasPrefix("{") else {
             // 无 header：读到 EOF，走传统整段播报
-            drainToEOF(fd: fd, into: &data, buf: &buf)
+            guard drainToEOF(fd: fd, into: &data, buf: &buf) else {
+                Darwin.close(fd)
+                return
+            }
             handleTTS(fd: fd, data: data)
             return
         }
@@ -48,7 +62,10 @@ actor ConnectionHandler {
         }
 
         // 其余请求读完 body 到 EOF 后分发
-        drainToEOF(fd: fd, into: &data, buf: &buf)
+        guard drainToEOF(fd: fd, into: &data, buf: &buf) else {
+            Darwin.close(fd)
+            return
+        }
         guard let nl2 = data.firstIndex(of: 0x0A) else {
             handleTTS(fd: fd, data: data)
             return
@@ -68,11 +85,16 @@ actor ConnectionHandler {
         }
     }
 
-    private nonisolated func drainToEOF(fd: Int32, into data: inout Data, buf: inout [UInt8]) {
+    /// 读到 EOF。超过 `maxBodyBytes` 视为异常客户端，返回 false（调用方丢弃连接）。
+    private nonisolated func drainToEOF(fd: Int32, into data: inout Data, buf: inout [UInt8]) -> Bool {
         while true {
             let n = Darwin.read(fd, &buf, buf.count)
-            if n <= 0 { break }
+            if n <= 0 { return true }
             data.append(contentsOf: buf[0..<n])
+            if data.count > Self.maxBodyBytes {
+                Log.warn("Socket 接入: body 超长（>\(Self.maxBodyBytes) 字节），丢弃连接 fd=\(fd)")
+                return false
+            }
         }
     }
 
@@ -103,6 +125,11 @@ actor ConnectionHandler {
         // 返回 false 表示收到结束/取消控制帧，停止读取。
         func feed(_ chunk: Data) -> Bool {
             acc.append(chunk)
+            // 帧迟迟不完整时也不能让 acc 无限涨
+            guard acc.count <= Self.maxBodyBytes else {
+                Log.warn("流式连接缓冲超长（\(acc.count) 字节），停止读取")
+                return false
+            }
             while true {
                 // ── 长度帧正文消费中：按剩余字节数精确切，正文可含任意字节（含 \n/{end}）──
                 if let need = expectBytes {
@@ -157,15 +184,17 @@ actor ConnectionHandler {
         }
     }
 
-    /// 解析长度头数字部分（调用方已确认行首为 'L'）；空/非数字返回 nil。
+    /// 解析长度头数字部分（调用方已确认行首为 'L'）；空 / 非数字 / 超限返回 nil。
+    /// 先卡位数再算：否则 `L` 跟一长串数字会让 `n * 10` 溢出，直接 trap 崩掉整个守护进程
+    /// （而守护进程没有自恢复），这是同 UID 进程最容易踩到的一脚。
     private nonisolated func parseLengthPrefix(_ data: Data) -> Int? {
-        guard !data.isEmpty else { return nil }
+        guard !data.isEmpty, data.count <= 10 else { return nil }
         var n = 0
         for b in data {
             guard b >= 0x30, b <= 0x39 else { return nil }
             n = n * 10 + Int(b - 0x30)
         }
-        return n
+        return n <= Self.maxFrameBytes ? n : nil
     }
 
     private nonisolated func emitStreamBlock(_ raw: String, source: String,

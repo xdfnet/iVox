@@ -92,13 +92,16 @@ actor ClaudeAskService {
         p.currentDirectoryURL = URL(fileURLWithPath: workDir)
         p.environment = ProcessInfo.processInfo.environment
 
-        let inPipe = Pipe(), outPipe = Pipe()
+        let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
         p.standardInput = inPipe
         p.standardOutput = outPipe
-        p.standardError = Pipe()
+        // stderr 必须有人读：管道写满（约 64KB）会让 claude 阻塞在写 stderr 上，
+        // ask() 的 continuation 就永不完成，只能干等到超时。转进日志即可。
+        p.standardError = errPipe
         Self.installStdoutReader(on: outPipe.fileHandleForReading) { [weak self] chunk in
             Task { await self?.consume(chunk: chunk) }
         }
+        Self.installStderrReader(on: errPipe.fileHandleForReading)
 
         try p.run()
         proc = p
@@ -146,6 +149,17 @@ actor ClaudeAskService {
     }
 
     // MARK: - stdout 解析
+
+    /// stderr 不参与协议，只把管道读空并记进日志（截断），避免子进程写满阻塞。
+    private nonisolated static func installStderrReader(on handle: FileHandle) {
+        handle.readabilityHandler = { handle in
+            let chunk = handle.availableData
+            guard !chunk.isEmpty else { return }
+            let text = String(data: chunk, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+            if !text.isEmpty { Log.debug("claude stderr: \(text.prefix(500))") }
+        }
+    }
 
     private nonisolated static func installStdoutReader(
         on handle: FileHandle,
