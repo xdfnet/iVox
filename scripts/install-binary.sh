@@ -99,7 +99,6 @@ if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
     "ttsPath": "${HOME}/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
   },
   "tts": { "language": "Chinese", "streamingInterval": 0.08, "maxRetries": 2, "retryDelayMs": 500, "outputSampleRate": 48000 },
-  "playback": { "interruptCurrent": true, "idleReviveSeconds": 600, "drainBaseTimeoutSeconds": 10 },
   "mediaControl": { "enabled": true, "httpServerEnabled": true, "baseURL": "http://127.0.0.1:8888", "pausePath": "/api/pause", "resumePath": "/api/play" },
   "speechInput": { "enabled": true, "language": "zh", "autoEnter": true, "maxRecordingSeconds": 30 },
   "defaultVoice": "taozi",
@@ -190,8 +189,8 @@ fi
 # ── 6. 服务管理 ──
 section "服务管理（不注册 launchd 自启）"
 echo "  ivox 不再注册 launchd 自启动，需要时手动控制:"
-echo "    启动: ${BIN_DIR}/ivox start"
-echo "    停止: ${BIN_DIR}/ivox stop"
+echo "    启动: ${BIN_DIR}/ivox on"
+echo "    停止: ${BIN_DIR}/ivox off"
 echo "    状态: ${BIN_DIR}/ivox status"
 
 # ── 完成 ──

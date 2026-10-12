@@ -35,11 +35,8 @@ actor PlaybackQueue {
     private let player: AudioPlayer
     private let engine: TTSEngine
     private let media: MediaController
-    private let config: PlaybackConfig
-
-    init(engine: TTSEngine, config: PlaybackConfig, mediaController: MediaController) {
+    init(engine: TTSEngine, mediaController: MediaController) {
         self.engine = engine
-        self.config = config
         self.player = AudioPlayer()
         self.media = mediaController
     }

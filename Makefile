@@ -19,7 +19,7 @@ install:
 	@$(MAKE) models
 	@$(MAKE) build voices
 	@$(RUNTIME) deploy-bin
-	@echo "✓  iVox 已就绪（手动启动: ~/.local/bin/ivox start）"
+	@echo "✓  iVox 已就绪（手动启动: ~/.local/bin/ivox on）"
 
 update:
 	@~/.local/bin/ivox off 2>/dev/null || true

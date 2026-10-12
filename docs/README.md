@@ -10,6 +10,7 @@
 | [dsh-tts.md](dsh-tts.md) | DeepSeek Harness 语音播报接入方案 |
 | [playback-queue.md](playback-queue.md) | PlaybackQueue 状态机与媒体控制场景矩阵 |
 | [CHANGELOG.md](CHANGELOG.md) | 开发日志与版本变更 |
+| [research-native-bridge.md](research-native-bridge.md) | 微信桥「Swift 直连 claude」的方案调研与实测细节 |
 
 ## archive/ — 历史复盘与调研
 

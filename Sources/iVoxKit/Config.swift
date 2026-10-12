@@ -25,18 +25,6 @@ public struct TTSConfig: Codable, Sendable {
     )
 }
 
-public struct PlaybackConfig: Codable, Sendable {
-    public var interruptCurrent: Bool
-
-    public init(interruptCurrent: Bool) {
-        self.interruptCurrent = interruptCurrent
-    }
-
-    public static let `default` = PlaybackConfig(
-        interruptCurrent: true
-    )
-}
-
 public struct MediaControlConfig: Codable, Sendable {
     public var enabled: Bool
     public var httpServerEnabled: Bool?
@@ -136,7 +124,6 @@ public struct VoiceInfo: Codable, Sendable {
 public struct Config: Codable, Sendable {
     public var models: ModelConfig?
     public var tts: TTSConfig? = nil
-    public var playback: PlaybackConfig? = nil
     public var mediaControl: MediaControlConfig? = nil
     public var defaultVoice: String
     public var sourceVoices: [String: String]
@@ -157,14 +144,12 @@ public struct Config: Codable, Sendable {
     }
 
     public var resolvedTTS: TTSConfig { tts ?? .default }
-    public var resolvedPlayback: PlaybackConfig { playback ?? .default }
     public var resolvedMediaControl: MediaControlConfig { mediaControl ?? .default }
     public var resolvedTranslation: TranslationConfig { translation ?? .default }
 
     private enum CodingKeys: String, CodingKey {
         case models
         case tts
-        case playback
         case mediaControl
         case speechInput
         case wechat

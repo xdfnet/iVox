@@ -80,13 +80,13 @@ struct StatusCommand: ParsableCommand {
         print("iVox \(s.version)")
         print()
         print("功能")
+        // 顺序与 README 功能表一致
         print("  自动播报    \(health(s.features.playback))")
+        print("  媒体控制    \(health(s.features.mediaControl))")
         print("  语音输入    \(health(s.features.speechInput))")
         print("  划词翻译    \(health(s.features.translation))")
         print("  快速操作    \(health(s.features.quickActions))")
         print("  微信桥接    \(health(s.features.wechat))")
-        // 媒体控制就是那个 Web 控制台（远程控制音乐），所以健康度即 Web 服务
-        print("  媒体控制    \(health(s.features.mediaControl))")
         print()
         print("权限")
         print("  麦克风      \(micText(s.permissions.microphone))")

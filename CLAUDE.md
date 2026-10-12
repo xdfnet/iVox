@@ -48,8 +48,13 @@ Sources/iVox/          — 主程序 target
 Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   Config.swift         — JSON 配置模型
   Logger.swift         — Log.{info,debug,warn,error}
+  DaemonStatus.swift   — {type:status} 的返回体（六个能力域健康度）
+  SocketClient.swift   — AppPaths + socket 客户端
   TextCleaner.swift    — Markdown + 噪音过滤（给 TTS 用）
   TextSplitter.swift   — 流式文本分块
+  StreamBuffer.swift   — 流式 turn 的安全边界切分
+  StreamFrame.swift    — 长度帧协议
+  AudioPipeline.swift  — 重采样
   Translation/         — 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗
   WindowPlacement.swift— 浮窗锚定几何（纯函数，含副屏坐标修正）
 

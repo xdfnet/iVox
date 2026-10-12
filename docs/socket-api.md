@@ -186,16 +186,18 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 {type:status}
 ```
 
-回复为 `DaemonStatus` JSON（字段语义：功能健康值 `ok` / `off` / `error:<原因>`；麦克风 `authorized` / `denied` / `notDetermined` / `restricted`）：
+回复为 `DaemonStatus` JSON（字段语义：功能健康值 `ok` / `off` / `loading` / `error:<原因>`；麦克风 `authorized` / `denied` / `notDetermined` / `restricted`）：
 
 ```json
 {
-  "version": "3.2.0",
+  "version": "3.6.1",
   "features": {
+    "playback": "ok",
     "speechInput": "ok",
+    "translation": "ok",
+    "quickActions": "ok",
     "wechat": "ok",
-    "mediaControl": "ok",
-    "mediaHTTP": "ok"
+    "mediaControl": "ok"
   },
   "permissions": {
     "microphone": "authorized",
@@ -203,6 +205,8 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
   }
 }
 ```
+
+> `features` 对应六个能力域，彼此平级。`mediaControl` 就是那个 Web 控制台（打开 `http://<本机IP>:8888` 远程控制音乐），它的健康度即 Web 服务的健康度。
 
 权限状态由 daemon 进程自查，反映 daemon 自身授权（非调用方终端）。`ivox status` 即此接口的中文渲染。
 

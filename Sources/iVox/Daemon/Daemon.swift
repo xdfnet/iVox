@@ -32,7 +32,6 @@ actor Daemon {
         self.mediaController = MediaController(config: config.resolvedMediaControl)
         self.queue = PlaybackQueue(
             engine: ttsEngine,
-            config: config.resolvedPlayback,
             mediaController: mediaController
         )
 

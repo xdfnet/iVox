@@ -122,7 +122,7 @@ Daemon (actor)
 - `mlx-audio-swift` 加载本地 Qwen3-TTS 模型
 - `generateStream()` 流式合成 float32 PCM → 重采样 48kHz → int16
 - 按音色读取 `refAudio` + `refText` 做声音克隆
-- 可配置重试（`maxRetries`、`retryDelayMs`）、流式间隔（`streamingInterval`）
+- 流式间隔由 `streamingInterval` 控制
 
 ### PlaybackQueue — 播放调度
 
@@ -144,7 +144,7 @@ Daemon (actor)
 
 - `AVAudioEngine` + 单个常驻 `AVAudioPlayerNode.scheduleBuffer()`，整条播报复用、句间不重启
 - **高低水位背压**：已排队音频 >4s 暂停合成、降到 2s 放行（`pendingFrames` 随 `dataConsumed` 回调核减）
-- prime 静音（50ms，唤醒电源管理休眠的 node）只在设备真正播空 / 取消后补一次
+- prime 静音（200ms，唤醒电源管理休眠的 node）只在设备真正播空 / 取消后补一次
 - `drain()` 仅在整条管道末端调用一次，等待跨 job 的尾音播完；带超时兜底防回调丢失
 - `cancelPendingPlayback()` 递增 `generation` 作废旧缓冲回调，并恢复背压挂起点
 
@@ -153,7 +153,7 @@ Daemon (actor)
 `Sources/iVox/MediaControl/MediaController.swift`
 
 - `MRMediaRemoteSendCommand` 系统框架直接控制媒体播放
-- 支持播放/暂停/切换/下一曲，无需设备控制与数据访问权限
+- 播放 / 暂停 / 切歌走 `MRMediaRemoteSendCommand`（免权限）；音量 / 静音 / 方向键 / 锁屏走 `CGEvent`，要「设备控制与数据访问」
 
 ### SpeechInput — 语音输入
 
@@ -209,10 +209,17 @@ Daemon (actor)
 
 | 文件 | 职责 |
 |------|------|
-| `Config.swift` | JSON 配置模型（TTS/ASR 路径、音色、媒体控制、微信等） |
-| `Logger.swift` | 日志工具，输出到 daemon.log，5MB 轮转 |
+| `Config.swift` | JSON 配置模型（TTS/ASR 路径、音色、媒体控制、微信、划词翻译等） |
+| `Logger.swift` | 日志工具，输出到 daemon.log（0600），5MB 轮转 |
+| `DaemonStatus.swift` | `{type:status}` 的返回体：六个能力域的健康度 + 权限 |
+| `SocketClient.swift` | `AppPaths`（socket / 配置目录）+ socket 客户端 |
 | `TextCleaner.swift` | Markdown AST 过滤（跳过代码块）+ 行内噪音（URL/路径/哈希/UUID/JSON/ANSI/进度）+ emoji |
-| `AudioPipeline.swift` | 音频格式转换工具 |
+| `TextSplitter.swift` | 切句（句末边界，合并到 ≤80 字） |
+| `StreamBuffer.swift` | 流式 turn 的安全边界切分（句末 / 代码围栏配平 / `minFlushChars`） |
+| `StreamFrame.swift` | 长度帧协议（`L<n>` + 正文 + end 标记） |
+| `AudioPipeline.swift` | 音频格式转换工具（重采样） |
+| `WindowPlacement.swift` | 浮窗锚定几何（纯函数，含副屏坐标修正） |
+| `Translation/` | 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗 |
 | `TextSplitter.swift` | 按句切分并合并到 ≤80 字，供播报分块 |
 
 ## 并发模型

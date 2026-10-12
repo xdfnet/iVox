@@ -10,9 +10,6 @@
     "retryDelayMs": 500,
     "outputSampleRate": 48000
   },
-  "playback": {
-    "interruptCurrent": true
-  },
   "mediaControl": {
     "enabled": true,
     "httpServerEnabled": true

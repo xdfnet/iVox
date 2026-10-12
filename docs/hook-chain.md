@@ -158,7 +158,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 | 规则 | 匹配内容 | 处理 |
 |------|----------|------|
 | URL | `https://...` | 删除 |
-| 路径 | 绝对/家目录路径（`/Users/...`、`~/...`）、多段相对路径（`Sources/iVox/TextCleaner.swift`） | 只保留文件名（`TextCleaner.swift`）——念文件名有用，念整条路径没用 |
+| 路径 | 绝对/家目录路径（`/Users/...`、`~/...`）、多段相对路径（`Sources/iVoxKit/TextCleaner.swift`） | 只保留文件名（`TextCleaner.swift`）——念文件名有用，念整条路径没用 |
 | UUID | `xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx` | 删除（须排在 hash 规则之前，否则末段 12 位会先被吃掉） |
 | Commit Hash | ≥12 位、且至少含一个字母的十六进制串 | 删除；纯数字长串（订单号/时间戳）保留 |
 | ANSI 转义 | `\x1b[31m` | 删除 |
@@ -186,11 +186,10 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 
 `Sources/iVox/MediaControl/MediaController.swift`
 
-- 播放前调 iDict HTTP API → 暂停音乐
-- 播放完调 iDict HTTP API → 恢复音乐
-- 地址、暂停路径、恢复路径由 `mediaControl` 配置控制
-- 不需要媒体控制时可设置 `mediaControl.enabled=false`
-- 不依赖设备控制与数据访问权限
+- **本地直接控制**：`MRMediaRemoteSendCommand`（播放 / 暂停 / 切歌）与 `CGEvent`（音量 / 静音 / 方向键 / 锁屏）
+- 播报前 `pause()` 暂停音乐，播完 `resume()` 恢复
+- 不需要媒体控制时可设置 `mediaControl.enabled = false`
+- 只有 play/pause/next/prev 免权限；音量 / 静音 / 方向键 / 锁屏要「设备控制与数据访问」（`MediaHTTPServer` 对这几个动作会做权限校验）
 
 ### 8. TTSEngine
 
@@ -200,7 +199,6 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - **纯本地推理，不上传任何数据**
 - 流式生成 PCM chunk，间隔由 `tts.streamingInterval` 控制
 - 按模型采样率重采样到 `tts.outputSampleRate`，再转为 int16 PCM
-- 重试次数和间隔由 `tts.maxRetries` / `tts.retryDelayMs` 控制
 
 Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义和标点控制。
 
@@ -211,7 +209,7 @@ Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义
 - 基于 `AVAudioEngine` + 单个常驻 `AVAudioPlayerNode`
 - `scheduleBuffer` 连续排队，整条播报复用、句间不重启设备
 - **高低水位背压**：已排队音频 >4s 暂停合成、降到 2s 放行
-- prime 静音（50ms）只在设备真正播空 / 取消后补一次
+- prime 静音（200ms，即 `sampleRate / 5`）只在设备真正播空 / 取消后补一次
 - `drain()` 仅在整条管道末端调用一次（超时兜底，防回调丢失）
 - `ensureHealthy()` 在写入前自检 engine/node，异常时重建
 
@@ -222,12 +220,13 @@ Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义
 关键追踪点：
 
 ```
-Socket 收到 → "{source:claude}文本..."
-source=claude, voice=taozi       # ConnectionHandler 解析
-队列状态: pending=0 processing=0  # PlaybackQueue 状态
-TTS 播放开始 [claude] "文本..."   # 开始合成
-播放写入: chunks=123 bytes=...   # 流式写入完毕
-TTS 播放完成 [claude] 3.2s       # 播放结束
+Socket 接入: fd=22 bytes=1791             # ConnectionHandler 收到连接
+请求解析: source=claude voice=taozi       # 解析出来源与音色
+队列入队: source=claude … 分块=13          # 入队
+队列状态: pending=13 processing=false     # PlaybackQueue 状态
+TTS 合成开始 [claude-B5AAC5] chars=11     # 开始合成（带批次号）
+TTS 合成完成 [claude-B5AAC5] 2.2s         # 本句合成完
+播放收尾完成: 尾音=0.8s                    # 整轮播完
 ```
 
 ## 代码签名
@@ -242,7 +241,7 @@ macOS 要求所有可执行文件有效签名。iVox 的开发签名证书 Hash�
 codesign --force --sign 4A287668E97BC130AA6D19F4D64799394CAACBAD ~/.local/share/ivox/runtime/iVox
 ```
 
-**注意**：`make deploy` 会重新编译二进制并覆盖签名，部署后需要重新签名。
+**注意**：`make update` 会重新编译二进制并 ad-hoc 重签（`runtime.sh deploy-bin`），签名变了 TCC 权限可能要重勾。
 
 验证签名：
 
@@ -259,7 +258,7 @@ codesign -dv ~/.local/share/ivox/runtime/iVox 2>&1 | grep -E 'flags|Signature|Te
 | 日志空 | daemon 是否在运行？`pgrep -fl "ivox serve"` |
 | 日志有收到但没播放 | 代码签名失效？`codesign -dv ~/.local/share/ivox/runtime/iVox` |
 | 日志有播放但没声音 | AudioPlayer 引擎异常？音量设置？扬声器？ |
-| 播放完音乐没恢复 | iDict 是否运行？`curl http://127.0.0.1:8888/api/ping` |
+| 播放完音乐没恢复 | 日志里有没有「媒体控制: 恢复」；Web 服务在不在 `curl http://127.0.0.1:8888/health` |
 | Hook 不触发 | settings.json / hooks.json 配置是否正确？Shell 权限？ |
 | DSH 播报不触发 | `~/.dsh/profiles/desktop/plugins/ivox-tts.mjs` 在不在？`cordis.patch.yml` 有没有 `ivox-tts` 挂载？改完重启 dsh 了没？ |
 | DSH 每次请求都在 prepare 阶段报错（如 auto-review REQUEST_EXTENSION） | `plugins/package.json` 匿名包缺失，原因见 [`dsh-tts.md`](dsh-tts.md) |
