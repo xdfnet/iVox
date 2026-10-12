@@ -13,6 +13,7 @@ actor Daemon {
     /// 键盘事件层：一个 tap 服务多个消费者（右⌘ 语音 + 各组热键）
     private let keyTap = GlobalKeyTap()
     private var translationCoordinator: TranslationCoordinator?
+    private var finderShortcuts: FinderShortcuts?
     private let mediaController: MediaController
     private var wechat: WeChatPlatform?
     private var claudeAsk: ClaudeAskService?
@@ -80,7 +81,7 @@ actor Daemon {
             startMediaHTTPServer()
         }
         startModelLoading()
-        await setUpTranslation()
+        await setUpHotKeys()
 
         // 启动微信轮询
         if let wechat {
@@ -232,21 +233,30 @@ actor Daemon {
     }
 
     /// 启动媒体控制 HTTP 服务器（提供 Web UI），端口由配置指定。
-    /// 装配划词翻译：建协调器，把热键接进键盘事件层。
-    private func setUpTranslation() async {
-        guard config.resolvedTranslation.enabled else {
-            Log.info("划词翻译未启用")
-            return
-        }
+    /// 装配热键：键盘事件层收到组合键后，按**能力归属**分派给各自的服务。
+    /// 划词翻译与 Finder 快捷是两个独立能力域，这里只做分发，不把逻辑揉在一起。
+    private func setUpHotKeys() async {
         let coordinator = await MainActor.run {
             TranslationCoordinator(config: config, queue: queue)
         }
+        let finder = await MainActor.run { FinderShortcuts() }
         translationCoordinator = coordinator
+        finderShortcuts = finder
+
         keyTap.onHotKey = { hotKey, location in
-            Task { @MainActor in await coordinator.handle(hotKey: hotKey, at: location) }
+            Task { @MainActor in
+                switch hotKey {
+                case .translate:
+                    guard coordinator.isEnabled else { return }
+                    await coordinator.translateSelection(mouseLocation: location)
+                case .openTerminal, .openTerminalClaude, .openTerminalQwen,
+                     .openTerminalCodex, .copyPath:
+                    await finder.handle(hotKey, at: location)
+                }
+            }
         }
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
-        Log.info("划词翻译已装配（Cmd+D 划词，\(speak)）")
+        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/W/C Finder）")
     }
 
     private func startMediaHTTPServer() {

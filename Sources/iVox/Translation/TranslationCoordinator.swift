@@ -27,16 +27,6 @@ final class TranslationCoordinator {
 
     var isEnabled: Bool { translateConfig.enabled }
 
-    /// 热键分派入口（由 `GlobalKeyTap` 触发）。
-    func handle(hotKey: GlobalKeyTap.HotKey, at location: CGPoint) async {
-        switch hotKey {
-        case .translate:
-            await translateSelection(mouseLocation: location)
-        case .openTerminal, .openTerminalClaude, .openTerminalQwen, .openTerminalCodex, .copyPath:
-            Log.debug("Finder 热键尚未接入: \(hotKey)")
-        }
-    }
-
     /// 翻译当前选中文本：浮窗显示译文，按配置决定是否朗读。
     func translateSelection(mouseLocation: CGPoint) async {
         guard translateConfig.enabled, !inFlight else { return }
