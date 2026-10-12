@@ -21,7 +21,7 @@ actor WeChatPlatform {
     private var contextToken = ""
     private var dedup: [String: Date] = [:]
 
-    // Typing
+    // 「正在输入」指示器
     private var typingTicket: TypingTicketCache?
     private let typingTTL: TimeInterval = 600 // 10 min
 

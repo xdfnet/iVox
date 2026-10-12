@@ -100,6 +100,17 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
 
 - **日志**：`~/.config/ivox/daemon.log`（nohup 的 stdout/stderr）。使用 `Log.{info,debug,warn,error}`。
 
+## 注释约定
+
+与现有代码保持一致，新代码照此写：
+
+- **中文**为主；`// MARK: -` 保留英文（Swift 惯例）。
+- **解释「为什么」，不复述代码**。把下一行翻译一遍的注释应当删掉。
+- **坑点写清后果与历史**——这是本仓最有价值的注释风格：「曾致 `EXC_BREAKPOINT`」「蓝牙断流实测必现」「顺序不可调换，否则 URL 会被当路径砍成残片」。难缠的时序/边界问题，踩坑结论写进注释，别只留在 commit message 里。
+- **对外可见的 API 用 `///`**；iVoxKit 的 public 符号带参数说明（`- Parameter`）。
+- **常量与魔法值就地说明来源**（如「3 秒是直连探测超时，理由是…」）。
+- 标点不强制统一，**但同一文件内保持一致**；不为了统一标点去翻改老代码。
+
 ## 已知问题
 
 ### Swift 6.4 快照版编译器崩溃（已修复）
