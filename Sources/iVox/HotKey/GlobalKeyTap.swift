@@ -117,6 +117,18 @@ final class GlobalKeyTap: @unchecked Sendable {
         let callback: CGEventTapCallBack = { _, type, event, refcon in
             guard let refcon else { return Unmanaged.passUnretained(event) }
             let tap = Unmanaged<GlobalKeyTap>.fromOpaque(refcon).takeUnretainedValue()
+
+            // 系统会在回调超时或输入风暴时**自动禁用** tap（并送来这两类事件）。
+            // 不在这里重新启用的话，热键就永久失效——而 `isMonitoring` 查不出来
+            // （被禁用的 tap 仍然非 nil，status 显示一切正常）。踩过。
+            if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+                if let port = tap.eventTap {
+                    CGEvent.tapEnable(tap: port, enable: true)
+                    Log.warn("键盘事件层: tap 被系统禁用，已重新启用（type=\(type.rawValue)）")
+                }
+                return Unmanaged.passUnretained(event)
+            }
+
             guard !tap.isStopped else { return Unmanaged.passUnretained(event) }
             return tap.handle(type: type, event: event)
                 ? nil                                  // 命中组合热键：吃掉
