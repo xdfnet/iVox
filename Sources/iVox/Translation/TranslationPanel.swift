@@ -94,20 +94,27 @@ final class TranslationPanel {
 
     /// 深色圆角容器 + 自动换行的文本，尺寸随内容量出来。
     ///
-    /// 宽高都用 `boundingRect` 自己算，不依赖 `NSTextField.sizeToFit()`（多行时不按上限
-    /// 折行、高度量错，长译文只显示一行）。**宽度分两步**：先量「不折行」的自然宽度，
-    /// 只有它超过上限时才折行——直接拿上限当约束去量，单行短文本也会返回上限宽，
-    /// 弹窗就是固定的宽条（踩过）。
+    /// **尺寸交给 label 自己量**（`sizeToFit`），不要用 `NSAttributedString.boundingRect`
+    /// 代算——`NSTextField` 的 cell 有几像素内边距，`boundingRect` 不含它，算出来的可用
+    /// 面积偏大：实际排版会多折一行，最后一行超出容器被裁（踩过：总是差最后一个字，
+    /// 加 2px 补偿也不够）。
+    ///
+    /// 分两步量：先量不折行的自然尺寸；只有超过上限时才按上限折行重排（否则短文本
+    /// 也会被撑成固定宽条）。
     private func makeContentView(text: String) -> NSView {
-        let font = NSFont.systemFont(ofSize: Self.fontSize)
-        let attributed = NSAttributedString(string: text, attributes: [.font: font])
+        let label = NSTextField(wrappingLabelWithString: text)
+        label.font = NSFont.systemFont(ofSize: Self.fontSize)
+        label.textColor = .white
+        label.alignment = .center
+        label.lineBreakMode = .byWordWrapping
+
         let maxTextWidth = Self.maxTextWidth - Self.padding * 2
-        let width = min(ceil(attributed.size().width), maxTextWidth)
-        let bounds = attributed.boundingRect(
-            with: NSSize(width: width, height: .greatestFiniteMagnitude),
-            options: [.usesLineFragmentOrigin, .usesFontLeading]
-        )
-        let textSize = NSSize(width: width, height: ceil(bounds.height))
+        label.sizeToFit()
+        if label.frame.width > maxTextWidth {
+            label.preferredMaxLayoutWidth = maxTextWidth
+            label.sizeToFit()
+        }
+        let textSize = label.frame.size
 
         let size = NSSize(
             width: textSize.width + Self.padding * 2,
@@ -118,12 +125,7 @@ final class TranslationPanel {
         container.layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.96).cgColor
         container.layer?.cornerRadius = Self.cornerRadius
 
-        let label = NSTextField(labelWithString: text)
-        label.font = font
-        label.textColor = .white
-        label.lineBreakMode = .byWordWrapping
-        label.maximumNumberOfLines = 0
-        label.frame = NSRect(origin: NSPoint(x: Self.padding, y: Self.padding), size: textSize)
+        label.setFrameOrigin(NSPoint(x: Self.padding, y: Self.padding))
         container.addSubview(label)
         return container
     }
