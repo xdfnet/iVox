@@ -227,8 +227,8 @@ actor Daemon {
         if config.speechInput?.enabled ?? SpeechInputConfig.default.enabled {
             speechInput?.start()
         }
-        // 键盘事件层与语音输入无关：热键（Cmd+D / Opt+Z…）即使语音关掉也该能用
-        keyTap.start()
+        // 键盘事件层**不在这里**启动：等 setUpHotKeys() 把处理器装好再开 tap，
+        // 否则启动瞬间到达的按键会撞上「tap 已开、handler 还是 nil」的窗口。
         }
     }
 
@@ -276,6 +276,8 @@ actor Daemon {
                 }
             }
         }
+        // 处理器都装好了，这时才开 tap（顺序反了会让启动瞬间的按键落到 nil handler 上）
+        keyTap.start()
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
         Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/W/C QuickActions）")
     }

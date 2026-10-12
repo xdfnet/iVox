@@ -211,7 +211,7 @@ actor ClaudeAskService {
     }
 
     private nonisolated static func resolveClaude(preferred: String) -> String {
-        let candidates = [preferred, "/Users/admin/.local/bin/claude", "/usr/local/bin/claude", "/opt/homebrew/bin/claude"]
+        let candidates = [preferred, "\(NSHomeDirectory())/.local/bin/claude", "/usr/local/bin/claude", "/opt/homebrew/bin/claude"]
         if let found = candidates.first(where: { FileManager.default.isExecutableFile(atPath: $0) }) {
             return found
         }
@@ -225,7 +225,7 @@ actor ClaudeAskService {
         p.waitUntilExit()
         let out = String(data: pipe.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-        return out.isEmpty ? "/Users/admin/.local/bin/claude" : out
+        return out.isEmpty ? "\(NSHomeDirectory())/.local/bin/claude" : out
     }
 }
 

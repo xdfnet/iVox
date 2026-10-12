@@ -11,7 +11,9 @@ enum OverlayState: Sendable {
     case error(String)
 }
 
-// 所有方法只从 MainActor 调用（调用方负责）
+// 所有方法只从 MainActor 调用（调用方负责）。
+// 不标 @MainActor：本面板由 SpeechInputService（非 MainActor 类）持有，标注会把它一起拖上
+// MainActor；调用点已统一走 `Task { @MainActor in overlay.show(...) }`。
 final class OverlayPanel: @unchecked Sendable {
     private static let panelSize = NSSize(width: 248, height: 66)
 

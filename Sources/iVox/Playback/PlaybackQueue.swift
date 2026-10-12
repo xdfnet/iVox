@@ -178,7 +178,8 @@ actor PlaybackQueue {
         if deadTurns.count > 64 { deadTurns.removeFirst() }
     }
 
-    /// 作废全部流式轮次（普通 speak 是新一轮发言，此前所有流式轮一律不再开口）。
+    /// 作废全部流式轮次（「用户开口」时用：此前所有流式轮一律不再开口）。
+    /// 调用方只有 `cancelAll()` 与 `speakUserInitiated()`——普通播报（无 turnID）现在只排队，不经过这里。
     private func buryAllTurns() {
         turnStack.forEach { bury($0) }
         turnStack.removeAll()
