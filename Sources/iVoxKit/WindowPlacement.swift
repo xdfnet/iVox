@@ -9,7 +9,8 @@ import CoreGraphics
 /// 这里自始至终只用**全局坐标**，夹紧边界一律取自 `visibleFrame` 的 min/max，天然正确。
 ///
 /// - Parameters:
-///   - anchor: 锚点（通常是鼠标位置），全局坐标
+///   - anchor: 锚点（通常是鼠标位置）。**必须是 AppKit 全局坐标（左下原点）**——
+///     `NSEvent.mouseLocation` 可以直接用；`CGEvent.location` 是左上原点，得先转
 ///   - visibleFrame: 所在屏幕的可见区（已避开菜单栏 / Dock），全局坐标
 ///   - size: 浮窗尺寸
 ///   - offset: 浮窗与锚点的间距

@@ -30,7 +30,7 @@ final class TranslationCoordinator {
     var isEnabled: Bool { translateConfig.enabled }
 
     /// 翻译当前选中文本：浮窗显示译文，按配置决定是否朗读。
-    func translateSelection(mouseLocation: CGPoint) async {
+    func translateSelection() async {
         guard translateConfig.enabled, !inFlight else { return }
         inFlight = true
         defer { inFlight = false }
@@ -39,7 +39,7 @@ final class TranslationCoordinator {
         let raw = await ClipboardReader.copyAndRead()
         guard let raw, let text = validateSelectionText(raw) else {
             Log.info("划词翻译: 没有取到可用文本（读到 \(raw.map { "\($0.count) 字" } ?? "nil")）")
-            panel.show(text: "没有取到选中文本", near: mouseLocation, timeoutSeconds: 3)
+            panel.show(text: "没有取到选中文本", timeoutSeconds: 3)
             return
         }
         Log.info("划词翻译: 取到 \(text.count) 字，开始翻译")
@@ -47,15 +47,13 @@ final class TranslationCoordinator {
         switch await service.translate(text) {
         case .success(let translated):
             Log.info("划词翻译: 完成 → \(translated.prefix(40))")
-            panel.show(text: translated, near: mouseLocation,
-                       timeoutSeconds: translateConfig.panelTimeoutSeconds)
+            panel.show(text: translated, timeoutSeconds: translateConfig.panelTimeoutSeconds)
             if translateConfig.speechEnabled {
                 await speak(translated)
             }
         case .failed(_, let error):
             Log.warn("划词翻译: 失败 \(error)")
-            panel.show(text: error, near: mouseLocation,
-                       timeoutSeconds: translateConfig.panelTimeoutSeconds)
+            panel.show(text: error, timeoutSeconds: translateConfig.panelTimeoutSeconds)
         }
     }
 

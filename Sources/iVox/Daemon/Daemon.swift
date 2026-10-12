@@ -271,7 +271,7 @@ actor Daemon {
                 switch hotKey {
                 case .translate:
                     guard coordinator.isEnabled else { return }
-                    await coordinator.translateSelection(mouseLocation: location)
+                    await coordinator.translateSelection()
                 case .openTerminal, .openTerminalClaude, .openTerminalQwen,
                      .openTerminalCodex, .copyPath:
                     await quickActionsService.handle(hotKey, at: location)
