@@ -80,7 +80,7 @@ make check-tts # 播报黑盒自检（压真实 daemon，发版前手动跑）
 make clean     # 清除 .build
 ```
 
-> `make check-tts` 需先 `ivox on` 且模型就绪（缺 node 会提示 `brew install node`）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 10 项，**静音运行、不进设备**，无音频设备的环境自动 skip 相关用例。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
+> `make check-tts` 需先 `ivox on` 且模型就绪（缺 node 会提示 `brew install node`）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 11 项，**静音运行、不进设备**，无音频设备的环境自动 skip 相关用例。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
 
 > 需要 Swift 6.4 开发快照（`swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`）。早期快照的编译器崩溃已在该版本修复，详见 [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)。
 

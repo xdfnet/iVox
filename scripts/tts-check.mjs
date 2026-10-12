@@ -271,8 +271,13 @@ async function runCase(c) {
   } finally {
     await closeAllStreams();
   }
+  // 外部播报干扰：run 期间别的 agent（Claude/Codex 的 Stop hook、用户手动 speak）恰好开口，
+  // 普通 speak 会 bargeIn 并把本用例自己的流式轮次作废，断言必然失真。检测到则把失败降级为
+  // skip 并显式打出证据——只降级失败，通过的不动；不掩盖，也别把它当产品缺陷。
+  const foreign = log.grep(new RegExp(`队列入队: source=(?!c\\d\\d${runId})`), t0);
   return { name: c.name, advisory: !!c.advisory, needsAudio: !!c.needsAudio, failures: ctx.failures,
-           window: ctx.failures.length ? ctx.windowLogs() : [], ms: nowMs() - t0 };
+           interfered: foreign.length ? foreign[0].msg : "", ms: nowMs() - t0,
+           window: ctx.failures.length ? ctx.windowLogs() : [] };
 }
 
 let runnerLog;
@@ -418,6 +423,35 @@ const cases = [
       ctx.check(!!settled, "未收尾");
       const enq = ctx.log.grep(new RegExp(`流式入队: turn=${ctx.turn}`), ctx.t0);
       ctx.check(enq.length >= 1, "残尾未 flush 入队");
+      ctx.noBad();
+    },
+  },
+
+  // ───────── E6：停止哨兵与新轮并行（pi 会开两条流，其中一条刚开就被 {cancel}）─────────
+  // 回归：曾把「见过」当「被顶掉」——并行那条空流一取消，就把真正在跑的这条判成过期旧轮，
+  // 后续正文全部静默丢弃（整轮没声音，日志里连「队列状态」都没有）。
+  {
+    name: "E6-stop-sentinel-keeps-live-turn",
+    async run(ctx) {
+      const t1 = ctx.turn;              // 真正承载正文的连接
+      const t2 = ctx.ids().turn;        // 并行的第二条流
+      const A = await ctx.openStream(t1);
+      await sleep(60);
+      const B = await ctx.openStream(t2);
+      await sleep(60);
+      B.cancel();                       // 它立刻 {cancel}
+      await sleep(30);
+      await ctx.quiet();                // 紧接着 __IVOX_STOP_PLAYBACK__
+      await sleep(200);
+      A.sendText("这条正文在停止哨兵之后到达，仍应被完整念出来。");
+      A.endFrame();
+      const start = await ctx.log.waitFor(new RegExp(`合成开始 \\[${ctx.source}-`), { sinceTs: ctx.t0, timeout: 30000 });
+      ctx.check(!!start, "新轮正文被静默丢弃（入队后无合成开始）：哨兵/并行取消把在跑的轮次一起作废了");
+      await sleep(500);
+      const stray = ctx.log.grep(new RegExp(`流式入队: turn=${t2}`), ctx.t0);
+      ctx.check(stray.length === 0, "被取消的并行轮次不该入队");
+      const settled = await ctx.settled(40000);
+      ctx.check(!!settled, "未收尾");
       ctx.noBad();
     },
   },
@@ -596,6 +630,13 @@ async function main() {
     const r = await runCase(c);
     let status = "ok";
     if (r.failures.length) status = r.advisory && !STRICT ? "advisory" : "not ok";
+    if (status === "advisory" && r.interfered) status = "skip";
+    // 外部播报干扰导致的失败降级为 skip（显式列出证据，仍算非产品问题）
+    if (status === "not ok" && r.interfered) {
+      console.log(`ok ${n} ${c.name} # SKIP 外部播报干扰（${r.interfered}）`);
+      results.push({ name: c.name, status: "skip", ms: r.ms });
+      continue;
+    }
     r.status = status;
     results.push(r);
     if (status === "ok") {

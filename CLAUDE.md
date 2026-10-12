@@ -114,11 +114,11 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLea
 测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
 
 ```bash
-make check-tts                      # 播报黑盒自检：压真实 daemon，10 个用例（需先 ivox on，模型就绪）
+make check-tts                      # 播报黑盒自检：压真实 daemon，11 个用例（需先 ivox on，模型就绪）
 make check-tts ARGS="-f tail"       # 只跑匹配用例；--strict 让 advisory 计入失败；--managed 自行重启守护进程
 ```
 
-`scripts/tts-check.mjs`（零依赖 Node，仅用 `node:` 内置模块）经 Unix socket 发流式帧、`GET /health` 探运行态、增量 tail `daemon.log` 断言：协议正确性、合成时长、轮次隔离、取消丢弃迟到帧、EOF 残尾、密集打断压测、打断后活性、尾音完整（`needsAudio`，无设备自动 skip）。**改 PlaybackQueue/AudioPlayer/流式协议后跑它回归**。
+`scripts/tts-check.mjs`（零依赖 Node，仅用 `node:` 内置模块）经 Unix socket 发流式帧、`GET /health` 探运行态、增量 tail `daemon.log` 断言：协议正确性、合成时长、轮次隔离、取消丢弃迟到帧、EOF 残尾、哨兵与新轮并行（pi 复现）、密集打断压测、打断后活性、尾音完整（`needsAudio`，无设备自动 skip）。**改 PlaybackQueue/AudioPlayer/流式协议后跑它回归**。
 
 ## 版本号
 

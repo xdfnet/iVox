@@ -161,7 +161,7 @@ final class SpeechInputService: @unchecked Sendable {
             }
 
             Task { await media.pause() }
-            Task { await queue.cancelAll() }
+            Task { await queue.cancelAll(dropsTurn: true) }
             Log.debug("语音输入: right ⌘/⌃ 按下 → 暂停音乐 → 取消 TTS → 开始录音")
 
             guard let (recorder, url) = startRecording() else { return }

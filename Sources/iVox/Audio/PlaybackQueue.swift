@@ -18,13 +18,18 @@ actor PlaybackQueue {
     /// `currentTask` 的代号，用于身份校验：仅当代号仍指向自己时才允许清空/接管。
     private var currentTaskSeq: UInt = 0
     private var generation: UInt = 0
-    /// 当前播报所属轮次；与新请求的 turnID 不同即触发打断
-    private var currentTurn: String?
+    /// 当前播报所属轮次 = 轮次栈顶。被取消的轮出栈后属主自动交还给被它顶掉的那一轮——
+    /// 只发了个头就取消的连接（pi 一个用户消息会开两条流、其中一条立刻 `{cancel}`）
+    /// 不该把真正在跑的这条也拖成哑巴。
+    private var currentTurn: String? { turnStack.last }
     /// 当前轮次是否仍在流式生成（true 时句间队列瞬时排空也不恢复音乐）
     private var turnOpen = false
-    /// 最近出现过的流式轮次（后出现者在后，容量有上限）。迟到帧据此判定：
-    /// 未登记的 turnID = 新轮（接管）；已登记但非 currentTurn = 被顶掉的旧轮（静默丢弃）。
-    private var recentTurns: [String] = []
+    /// 轮次栈：按认领顺序排列，**栈顶即当前属主轮**（`currentTurn`）。被顶掉的旧轮（非栈顶）
+    /// 其迟到帧一律静默丢弃（真人对话：你一开口，对方就别说了）。
+    private var turnStack: [String] = []
+    /// 已作废轮次墓碑（容量有上限）：`{cancel}`、语音打断、普通 speak 之后，该轮不再开口
+    /// （含客户端关闭连接后 EOF 兜底补出的残尾）。
+    private var deadTurns: [String] = []
     /// processNext 在 turnOpen 下等待新 job 的挂起点；入队/结束/打断时恢复
     private var jobWaiters: [CheckedContinuation<Void, Never>] = []
     private let player: AudioPlayer
@@ -54,10 +59,13 @@ actor PlaybackQueue {
     /// 是否有正在处理的播报（/health 用）
     var isProcessing: Bool { currentTask != nil }
 
-    /// 取消所有播放（正在播的和队列中等待的）
-    func cancelAll() async {
+    /// 取消所有播放（正在播的和队列中等待的）。
+    /// - Parameter dropsTurn: 是否连轮次身份一起作废。语音打断（right⌘，用户开口）为 true——
+    ///   该轮后续增量必须彻底闭嘴；`__IVOX_STOP_PLAYBACK__` 哨兵为 false——它常与新轮开流
+    ///   并行送达（pi 先发流首帧、再发哨兵），连轮次一起作废会把刚到的新轮也掐成哑巴。
+    func cancelAll(dropsTurn: Bool = false) async {
+        if dropsTurn { buryAllTurns() }
         await bargeIn()
-        currentTurn = nil
         turnOpen = false
         await pumpOrResume()   // 全局停止后不应把音乐卡在暂停
     }
@@ -71,8 +79,7 @@ actor PlaybackQueue {
     /// 流式轮次开始（首帧）：打断旧轮/普通播报，标记本轮仍在生成（句间不恢复音乐）。
     func beginTurn(_ id: String) async {
         guard currentTurn != id else { turnOpen = true; return }
-        guard adoptTurn(id) else { return }   // 已见过的旧轮：忽略
-        currentTurn = id
+        guard claimTurn(id) else { return }   // 已作废 / 被顶掉的旧轮：忽略
         turnOpen = true
         await bargeIn()
         await awaitCurrentPipelineFinished()
@@ -100,10 +107,13 @@ actor PlaybackQueue {
     }
 
     /// 流式轮次被取消（用户 Escape）：丢弃本轮未播内容并恢复音乐。
+    /// 被取消的轮没有内容需要保护，故出栈把属主交还给被它顶掉的那一轮（可能是真正在跑的连接）。
     func cancelTurn(_ id: String) async {
         guard currentTurn == id else { return }
         await bargeIn()
         turnOpen = false
+        bury(id)
+        if turnStack.last == id { turnStack.removeLast() }
         await media.resume()
     }
 
@@ -128,12 +138,29 @@ actor PlaybackQueue {
         if currentTaskSeq == seq { currentTask = nil }   // 挂起期间若已起新管道，别把它清掉
     }
 
-    /// 登记并判定轮次：返回 true = 首次出现的新轮（已登记，应接管）；false = 已见过的旧轮（丢弃）。
-    private func adoptTurn(_ id: String) -> Bool {
-        if recentTurns.contains(id) { return false }
-        recentTurns.append(id)
-        if recentTurns.count > 64 { recentTurns.removeFirst() }
+    /// 认领轮次：true = 可播（首次出现的新轮，或属主被清空后交还的最新轮）；
+    /// false = 已作废的轮，或仍挂在栈里但被更新轮顶掉的旧轮（一律静默丢弃）。
+    private func claimTurn(_ id: String) -> Bool {
+        if deadTurns.contains(id) { return false }
+        if let idx = turnStack.firstIndex(of: id) {
+            return idx == turnStack.count - 1   // 在栈中：仅当仍是最新轮才可播
+        }
+        turnStack.append(id)
+        if turnStack.count > 64 { turnStack.removeFirst() }
         return true
+    }
+
+    /// 给轮次立墓碑：此后该轮（含关闭连接后 EOF 兜底补出的残尾）不再开口。
+    private func bury(_ id: String) {
+        guard !deadTurns.contains(id) else { return }
+        deadTurns.append(id)
+        if deadTurns.count > 64 { deadTurns.removeFirst() }
+    }
+
+    /// 作废全部流式轮次（普通 speak 是新一轮发言，此前所有流式轮一律不再开口）。
+    private func buryAllTurns() {
+        turnStack.forEach { bury($0) }
+        turnStack.removeAll()
     }
 
     /// 起一条新管道（producer+consumer），并登记其身份序号。
@@ -164,12 +191,11 @@ actor PlaybackQueue {
         guard !newJobs.isEmpty else { return }
         if let turnID {
             if currentTurn != turnID {
-                // 已被更新轮次顶掉的旧轮：迟到帧（含 EOF 残尾）静默丢弃，
+                // 已作废 / 被更新轮次顶掉的旧轮：迟到帧（含 EOF 残尾）静默丢弃，
                 // 不 bargeIn——否则旧轮残音会反杀新轮，用户会听到上一轮冒半句。
-                guard adoptTurn(turnID) else { return }
+                guard claimTurn(turnID) else { return }
                 // 首次出现的新轮：就在此处驱动轮次切换，不依赖 beginTurn 是否已先跑
                 //（二者是各自独立的 Task，调度顺序无保证）。
-                currentTurn = turnID
                 turnOpen = true
                 await bargeIn()
                 await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
@@ -177,10 +203,10 @@ actor PlaybackQueue {
                 turnOpen = true
             }
         } else {
-            // 普通 ivox speak / hook.sh：作为新一轮打断当前在播
+            // 普通 ivox speak / hook.sh：作为新一轮打断当前在播，此前流式轮一律作废
+            buryAllTurns()
             await bargeIn()
             await awaitCurrentPipelineFinished()
-            currentTurn = nil
             turnOpen = false
         }
         jobs.append(contentsOf: newJobs)

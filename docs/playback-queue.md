@@ -42,10 +42,12 @@
 - 队列瞬时排空时：`turnOpen == true`（流式轮次还在生成）→ 挂起在 `waitForJobs()`（continuation 存入 `jobWaiters`），**不退出、不恢复音乐**；`turnOpen == false` → 退出循环 → consumer 排空 → 末端 drain → 恢复音乐。
 - `signalJobs()` resume 并清空所有 `jobWaiters`，调用点只有：`enqueue`（新 job 到达）、`endTurn`（轮次结束）、`bargeIn`（打断/取消）。三者覆盖了挂起的全部唤醒路径，无 continuation 泄漏。
 - 轮次语义：`beginTurn/new turn` 打断旧轮；同 `turnID` 的分块顺序 append；普通 `ivox speak`/hook.sh（turnID=nil）作为新一轮打断当前在播。
-- **轮次身份靠 `recentTurns` 判定，不靠「是否等于 currentTurn」**：`recentTurns`（容量 64）登记见过的 turnID。`enqueue`/`beginTurn` 遇到 `currentTurn != 自己` 时先 `adoptTurn(id)`：
-  - **未登记 = 首次出现的新轮** → 登记、`currentTurn = id`、`bargeIn()` + `awaitCurrentPipelineFinished()`，由自己驱动轮次切换（`beginTurn` 与 `enqueue` 是各自独立的 `Task {}`，调度顺序无保证，谁先到谁切）。
-  - **已登记但非当前轮 = 被顶掉的旧轮** → 静默 return，**绝不 bargeIn**（否则旧轮残音会反杀、打断刚开的新轮）。旧连接被 destroy 后 EOF 触发的残尾 flush 也走这条。
-  只判「不等于 currentTurn」是不够的：那会把新轮的首帧和旧轮的迟到帧混为一谈。
+- **轮次身份靠「轮次栈 + 墓碑」判定，不靠「是否等于 currentTurn」**（`turnStack` / `deadTurns`）：
+  - **栈顶 = 当前属主**（`currentTurn` 是 `turnStack.last` 的派生值）；非栈顶的历史轮 = 被更新轮顶掉的旧轮，其迟到帧（含 EOF 残尾）静默 return，**绝不 bargeIn**（否则旧轮残音会反杀、打断刚开的新轮）。
+  - **`{cancel}` 的轮出栈**：被取消的轮没有内容需要保护，属主交还给被它顶掉的那一轮。**这条是 pi 「整轮没声音」的修复关键**：pi 一个用户消息会开两条流、其中一条刚开就被 `{cancel}`，而承载正文的是先开的那条——若取消的轮继续占着栈顶，正文那条就被永久判成过期旧轮、整轮哑掉。
+  - **墓碑 `deadTurns`**：`{cancel}`、语音打断（`cancelAll(dropsTurn: true)`）、普通 speak（`buryAllTurns()`）之后该轮不再开口，含客户端关闭连接后 EOF 兜底补出的残尾。容量 64，防止无限增长。
+  只判「不等于 currentTurn」是不够的：那会把新轮的首帧和旧轮的迟到帧混为一谈；只按「见过没见过」判也不行：会把**并行那条空流**的取消算到真正在跑的轮头上。
+- **`cancelAll` 不再清属主，只停播放**：`__IVOX_STOP_PLAYBACK__` 哨兵常与新轮开流**并行送达**（pi 先发流首帧、再发哨兵），清属主/作废轮次会把刚到的新轮也掐成哑巴。需要「用户开口后本轮彻底闭嘴」的语音打断走 `cancelAll(dropsTurn: true)` 显式作废整轮。
 - **`pipelineSeq` 代号作废在途管道（修「旧 producer 消费新轮任务」）**：`Task {}` 是结构化外的子任务，**不继承取消**——`bargeIn` 的 `currentTask?.cancel()` 根本停不住已进 MLX 的 producer。故 `bargeIn`/`shutdown` 递增 `pipelineSeq`，producer 每轮循环、consumer 每次循环都比对「代号是否仍是自己的」，不等即立即退场。`currentTaskSeq` 同理：管道收尾只在 `currentTaskSeq == 自己` 时才清 `currentTask`，防止旧管道把新起的管道清掉。
 - **收敛兜底 `pumpOrResume()`**：轮次顶替时序可能留下「有 job 但没管道」的孤儿态。`endTurn`/`cancelAll` 收尾统一走它——无管道且有活就 `startPipeline()`，否则才 `media.resume()`。任何路径结束都不会挂住。
 - **`drain()` 超时定时器绑定自身序号 `drainSeq`**：超时兜底的 `asyncAfter` 闭包必须校验 `drainSeq == 自己`，否则**上一次 drain 遗留的定时器会提前放行下一次 drain**，表现为尾音被掐（曾实测 `drain 超时强制返回（pendingCount=28 尾音=1.12s）`）。
