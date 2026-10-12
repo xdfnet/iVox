@@ -139,6 +139,14 @@ actor Daemon {
             webUI = "error:Web 服务未监听"
         }
 
+        // 自动播报：取决于 TTS 模型是否就绪
+        let playbackHealth: String
+        switch await engine.state {
+        case .ready: playbackHealth = "ok"
+        case .failed(let message): playbackHealth = "error:\(message)"
+        case .notStarted, .loading: playbackHealth = "loading"
+        }
+
         // 划词翻译与快速操作都与语音输入共用同一套键盘监听（依赖同一权限）
         let translationHealth: String
         if !config.resolvedTranslation.enabled {
@@ -153,6 +161,7 @@ actor Daemon {
         return DaemonStatus(
             version: iVoxVersion,
             features: .init(
+                playback: playbackHealth,
                 speechInput: speech,
                 wechat: wechatHealth,
                 mediaControl: mc.enabled ? "ok" : "off",

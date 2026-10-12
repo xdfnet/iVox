@@ -7,6 +7,7 @@ public struct DaemonStatus: Codable, Sendable {
 
     /// 每项功能的健康结论：ok(正常) | off(未启用) | 以 "error:" 开头的异常原因
     public struct Features: Codable, Sendable {
+        public var playback: String
         public var speechInput: String
         public var wechat: String
         public var mediaControl: String
@@ -14,7 +15,8 @@ public struct DaemonStatus: Codable, Sendable {
         public var translation: String
         public var quickActions: String
 
-        public init(speechInput: String, wechat: String, mediaControl: String, mediaHTTP: String, translation: String = "off", quickActions: String = "off") {
+        public init(playback: String = "off", speechInput: String, wechat: String, mediaControl: String, mediaHTTP: String, translation: String = "off", quickActions: String = "off") {
+            self.playback = playback
             self.speechInput = speechInput
             self.wechat = wechat
             self.mediaControl = mediaControl

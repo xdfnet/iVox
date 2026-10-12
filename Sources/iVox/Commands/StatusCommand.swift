@@ -80,22 +80,27 @@ struct StatusCommand: ParsableCommand {
         print("iVox \(s.version)")
         print()
         print("功能")
+        // 面向用户的能力
+        print("  自动播报    \(health(s.features.playback))")
         print("  语音输入    \(health(s.features.speechInput))")
-        print("  微信桥接    \(health(s.features.wechat))")
-        print("  媒体控制    \(health(s.features.mediaControl))")
-        print("  Web UI      \(health(s.features.mediaHTTP))")
         print("  划词翻译    \(health(s.features.translation))")
         print("  快速操作    \(health(s.features.quickActions))")
+        print("  微信桥接    \(health(s.features.wechat))")
+        print()
+        // 配套子系统（不是能力，但对上面几项有影响）
+        print("  媒体控制    \(health(s.features.mediaControl))")
+        print("  Web UI      \(health(s.features.mediaHTTP))")
         print()
         print("权限")
         print("  麦克风      \(micText(s.permissions.microphone))")
         print("  设备控制    \(s.permissions.deviceControl ? "已授权" : "未授权")")
     }
 
-    /// ok → 正常；off → 未启用；error:xxx → 异常(xxx)
+    /// ok → 正常；off → 未启用；loading → 加载中；error:xxx → 异常(xxx)
     private func health(_ value: String) -> String {
         if value == "ok" { return "✓ 正常" }
         if value == "off" { return "— 未启用" }
+        if value == "loading" { return "… 加载中" }
         if value.hasPrefix("error:") { return "✗ 异常（\(value.dropFirst(6))）" }
         return value
     }
