@@ -368,6 +368,14 @@ private extension String {
                     lastWasSpace = true
                     continue
                 }
+                // swift-markdown 会把 -- 智能替换成排版 en-dash（–），无听感收益且引入非 ASCII 符，
+                // 归一为单个半角连字符（与单词内单个 - 行为一致，如 --verbose → -verbose）
+                if v == 0x2013 {
+                    if lastWasSpace { result.append(" ") }
+                    result.append("-")
+                    lastWasSpace = false
+                    continue
+                }
                 if lastWasSpace { result.append(" ") }
                 result.append(Character(s))
                 lastWasSpace = false

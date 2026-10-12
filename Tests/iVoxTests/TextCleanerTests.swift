@@ -49,6 +49,14 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(cleanText("嘿～在吗"), "嘿 在吗")
     }
 
+    func testEnDashNormalizedToHyphen() {
+        // 粗体触发 AST：swift-markdown 把 -- 转成排版 en-dash，清洗后应归一为半角连字符
+        let got = cleanText("**x** 加 --verbose 或 a--b 看详情")
+        XCTAssertFalse(got.contains("–"), "en-dash 不应残留，实际: \(got)")
+        XCTAssertTrue(got.contains("-verbose"), "实际: \(got)")
+        XCTAssertTrue(got.contains("a-b"), "实际: \(got)")
+    }
+
     func testNormalizesWhitespace() {
         // Tab 与 NBSP 当空格合并，前后不留
         let input = "**a\tb\u{00A0}c\u{3000}d**"
