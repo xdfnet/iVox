@@ -13,7 +13,7 @@ actor Daemon {
     /// 键盘事件层：一个 tap 服务多个消费者（右⌘ 语音 + 各组热键）
     private let keyTap = GlobalKeyTap()
     private var translationCoordinator: TranslationCoordinator?
-    private var finderShortcuts: FinderShortcuts?
+    private var quickActions: QuickActionsService?
     private let mediaController: MediaController
     private var wechat: WeChatPlatform?
     private var claudeAsk: ClaudeAskService?
@@ -239,9 +239,9 @@ actor Daemon {
         let coordinator = await MainActor.run {
             TranslationCoordinator(config: config, queue: queue)
         }
-        let finder = await MainActor.run { FinderShortcuts() }
+        let quickActionsService = await MainActor.run { QuickActionsService() }
         translationCoordinator = coordinator
-        finderShortcuts = finder
+        quickActions = quickActionsService
 
         keyTap.onHotKey = { hotKey, location in
             Task { @MainActor in
@@ -251,12 +251,12 @@ actor Daemon {
                     await coordinator.translateSelection(mouseLocation: location)
                 case .openTerminal, .openTerminalClaude, .openTerminalQwen,
                      .openTerminalCodex, .copyPath:
-                    await finder.handle(hotKey, at: location)
+                    await quickActionsService.handle(hotKey, at: location)
                 }
             }
         }
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
-        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/W/C Finder）")
+        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/W/C QuickActions）")
     }
 
     private func startMediaHTTPServer() {
