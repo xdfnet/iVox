@@ -43,14 +43,6 @@ enum MediaControllerError: LocalizedError, Sendable {
         }
     }
 
-    var recoverySuggestion: String? {
-        switch self {
-        case .permissionDenied:
-            return "请前往「系统设置」> 「隐私与安全性」> 「设备控制与数据访问」启用权限"
-        case .eventCreationFailed, .eventPostFailed:
-            return "请尝试重启应用"
-        }
-    }
 }
 
 // MARK: - 媒体键虚拟码
@@ -63,28 +55,18 @@ private enum MediaKey: Int32 {
     case space = 49
 }
 
-// MARK: - 远程模式状态（@unchecked Sendable: 仅从 send() 串行访问）
-
-private final class RemoteState: @unchecked Sendable {
-    var lastFailureTime: Date?
-    init() {}
-}
-
 // MARK: - MediaController
 
-/// 媒体控制器，支持双模式：
-/// - **本地模式**（`baseURL` 为空）：通过 MediaRemote / CGEvent 直接控制
-/// - **远程模式**（`baseURL` 非空）：通过 HTTP 调用外部 API（向后兼容）
+/// 媒体控制器：通过 MediaRemote / CGEvent 直接控制系统媒体。
+/// （早期还有一套「远程模式」——`baseURL` 非空时改走 HTTP 调外部服务；从未被调用，已删除。）
 struct MediaController {
     private let config: MediaControlConfig
-    private let remote = RemoteState()
-    private let cooldownInterval: TimeInterval = 5.0
 
     init(config: MediaControlConfig) {
         self.config = config
     }
 
-    // MARK: - 双模调度
+    // MARK: - 调度
 
     /// 暂停音乐 (TTS 播报前调用)
     func pause() async {
@@ -99,48 +81,6 @@ struct MediaController {
         Log.info("媒体控制: 恢复")
         if case .failure(let err) = await Self.play() {
             Log.warn("媒体控制: 恢复失败 \(err.localizedDescription)")
-        }
-    }
-
-    // MARK: - 远程模式
-
-    private func send(_ path: String) async {
-        guard config.enabled else { return }
-        guard let url = URL(string: config.baseURL + path) else {
-            Log.error("媒体控制: 无效 URL \(config.baseURL + path)")
-            return
-        }
-
-        if let lastFail = remote.lastFailureTime,
-           Date().timeIntervalSince(lastFail) < cooldownInterval {
-            return
-        }
-
-        var request = URLRequest(url: url)
-        request.httpMethod = "GET"
-        request.timeoutInterval = 2
-
-        for attempt in 0...1 {
-            do {
-                let (_, response) = try await URLSession.shared.data(for: request)
-                if let http = response as? HTTPURLResponse, http.statusCode != 200 {
-                    Log.error("媒体控制返回非 200: \(http.statusCode)")
-                    if attempt == 0 {
-                        Log.info("媒体控制请求失败，500ms 后重试")
-                        try await Task.sleep(nanoseconds: 500_000_000)
-                        continue
-                    }
-                }
-                return
-            } catch {
-                remote.lastFailureTime = Date()
-                Log.error("媒体控制请求失败: \(error.localizedDescription)")
-                if attempt == 0 {
-                    Log.info("媒体控制请求失败，500ms 后重试")
-                    try? await Task.sleep(nanoseconds: 500_000_000)
-                    continue
-                }
-            }
         }
     }
 
