@@ -80,15 +80,15 @@ struct StatusCommand: ParsableCommand {
         print("iVox \(s.version)")
         print()
         print("功能")
-        // 面向用户的能力
+        // 面向用户的能力（媒体控制紧跟播报：播报前暂停音乐、播完恢复）
         print("  自动播报    \(health(s.features.playback))")
+        print("  媒体控制    \(health(s.features.mediaControl))")
         print("  语音输入    \(health(s.features.speechInput))")
         print("  划词翻译    \(health(s.features.translation))")
         print("  快速操作    \(health(s.features.quickActions))")
         print("  微信桥接    \(health(s.features.wechat))")
         print()
-        // 配套子系统（不是能力，但对上面几项有影响）
-        print("  媒体控制    \(health(s.features.mediaControl))")
+        // 配套子系统（不是能力，但会影响上面几项）
         print("  Web UI      \(health(s.features.mediaHTTP))")
         print()
         print("权限")
