@@ -85,6 +85,7 @@ struct StatusCommand: ParsableCommand {
         print("  媒体控制    \(health(s.features.mediaControl))")
         print("  Web UI      \(health(s.features.mediaHTTP))")
         print("  划词翻译    \(health(s.features.translation))")
+        print("  快速操作    \(health(s.features.quickActions))")
         print()
         print("权限")
         print("  麦克风      \(micText(s.permissions.microphone))")

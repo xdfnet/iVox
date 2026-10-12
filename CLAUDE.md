@@ -32,7 +32,10 @@ Sources/iVox/          — 主程序 target
   Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop
   TTS/                 — TTSEngine（mlx-audio-swift 流式合成）
   Audio/               — AudioPlayer, PlaybackQueue, MediaController, MediaHTTPServer
-  SpeechInput/         — macOS 语音识别，Cmd 键监听 via CGEvent
+  HotKey/              — GlobalKeyTap：键盘事件层（独占 tap，按归属路由给下面三家）
+  SpeechInput/         — 右⌘/右⌃ 语音输入（ASR + 浮窗），事件由 HotKey 层送来
+  Translation/         — 划词翻译（Cmd+D）：复制 → 翻译 → 浮窗 + 朗读
+  QuickActions/        — Finder/终端快捷（Opt+Z/A/Q/W/C）
   WeChat/              — 微信 ilink HTTP 客户端 + 长轮询平台
   Network/             — SocketServer（Unix domain socket IPC）
   Utilities/           — Version, 日志工具
@@ -43,6 +46,8 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   Logger.swift         — Log.{info,debug,warn,error}
   TextCleaner.swift    — Markdown + 噪音过滤（给 TTS 用）
   TextSplitter.swift   — 流式文本分块
+  Translation/         — 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗
+  WindowPlacement.swift— 浮窗锚定几何（纯函数，含副屏坐标修正）
 
 Tests/iVoxTests/       — 测试（仅依赖 iVoxKit）
 
@@ -64,7 +69,10 @@ Claude Code/Codex/Qwen/DSH → hook.sh(Stop) ┐
 pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬─ PlaybackQueue (actor)
 微信 ilink 长轮询                          ┘                       │   ├─ TTSEngine (mlx-audio-swift)
                                                                    │   └─ AudioPlayer (AVAudioEngine)
-                                                                   ├─ SpeechInputService (Cmd 键 + ASR)
+                                                                   ├─ GlobalKeyTap (键盘事件层，一个 tap)
+                                                                   │    ├─ SpeechInputService (右⌘/右⌃ + ASR)
+                                                                   │    ├─ TranslationService (Cmd+D 划词翻译)
+                                                                   │    └─ QuickActionsService (Opt+Z/A/Q/W/C)
                                                                    └─ MediaHTTPServer (端口 8888, Web UI)
 ```
 
@@ -76,6 +84,8 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
   - *第一层（切句/清洗，真源只在 Swift 一份）*：文本先 `cleanText`（Markdown AST 去噪 + URL/路径/ANSI/emoji 处理）再 `splitSentences`（句末边界 `。！？!?…；;\n`，合并到 ≤80 字；英文 `.` 不切以保小数/缩写）。TS 扩展和 hook **绝不在客户端切句**（会破坏 AST 块末补句号与跨行规则）。
   - *第二层（连续播放管道）*：`PlaybackQueue.processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，**句间不 drain**；`AudioPlayer` 用单个常驻 `AVAudioPlayerNode` 连续 `scheduleBuffer`，4s/2s 高低水位背压（`pendingFrames` 随 `dataConsumed` 核减），prime 静音仅在设备播空/取消后补一次，`drain()` 只在整轮末端调一次。改这里务必读 `docs/playback-queue.md`，不要重新引入逐句 drain（会导致逐字卡顿）。
 - **流式 turn 协议**：pi 扩展经一条长连接按 `\n` 分帧：首帧 `{type:stream,source,turn}` → 原文增量帧（仅 text_delta）→ `{end}`/`{cancel}`，EOF=end。服务端 `StreamBuffer`（iVoxKit 纯逻辑）累积原文，只在安全边界（句末/段落、代码围栏配平、≥`minFlushChars`=24）抽出整段复用同一套 cleanText→splitSentences。`PlaybackJob.turnID`：新 turn（用户发言）打断旧轮（bargeIn），同 turn 顺序追加；无 turn 的普通播报（`ivox speak`/hook.sh）只排队、不抢麦——打断权只属于「用户开口」（右⌘ / `hook.sh interrupt` 哨兵 / pi·dsh 新轮）；`turnOpen` 时队列排空挂起 `waitForJobs` 等下一批、不恢复音乐。连接内这四类操作经 `ConnectionHandler.StreamOpChain` **按帧序执行**（乱序会让 `{end}` 之后到达的同轮分块把已关轮次重新打开、管道永久挂起）。详见 `docs/socket-api.md`。
+
+- **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者三名：右⌘/右⌃ → `SpeechInputService`，`Cmd+D` → `TranslationService`，`Opt+Z/A/Q/W/C` → `QuickActionsService`（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `GlobalKeyTap.bindings` 加一条 + 在 `setUpHotKeys` 加一个消费者。** 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Cmd+D 毫无反应"。
 
 - **配置**：`~/.config/ivox/config.json`，所有运行时文件在 `~/.config/ivox/` 下。
 

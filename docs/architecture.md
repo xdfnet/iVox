@@ -2,7 +2,7 @@
 
 ## 概览
 
-macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、Codex、Qwen Code、DeepSeek Harness、PI coding agent）和微信，输出侧走本地 MLX TTS/ASR + 系统媒体控制。
+macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、Codex、Qwen Code、DeepSeek Harness、PI coding agent）、微信与全局热键，输出侧走本地 MLX TTS/ASR + 系统媒体控制；另有划词翻译（`Cmd+D`）与 Finder/终端快捷（QuickActions）。
 
 ```
                           用户
@@ -22,7 +22,8 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
               │                     │
               │  WeChatPlatform ←──┤
               │  SocketServer ←────┤
-              │  SpeechInput ←─────┤  ←  ⌘ 键 CGEvent 监听
+              │  GlobalKeyTap ←────┤  ←  键盘事件层：一个 tap，按归属路由
+              │                     │      右⌘/右⌃ 语音 · Cmd+D 翻译 · Opt+Z/A/Q/W/C 快捷
               │  MediaHTTPServer   │  →  Web UI (8888)
               │         │          │
               │         ▼          │
@@ -142,12 +143,41 @@ Daemon (actor)
 
 `Sources/iVox/SpeechInput/`
 
-- `CGEvent.tapCreate()` **只监听 `flagsChanged`**（right ⌘ 或 right ⌃），不再监听任何普通 `keyDown`——打字、Esc、方向键全部原样透传（GUI 客户端里打字不等于要它闭嘴，Esc 还要留给 agent 取消生成）
-- **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」，这是唯一的键盘打断途径）
+- 键盘监听由 `HotKey/GlobalKeyTap` **独占**（一个 tap 服务多个消费者，见下节），本服务只订阅**修饰键**：右⌘(0x36) / 右⌃(0x3E) 的状态变化由它回调进来
+- **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」——语音打断的唯一按键途径）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
 - 另一条打断途径是用户给 pi/dsh 发言时新轮次入队自动 bargeIn，无需按键
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
+
+### GlobalKeyTap — 键盘事件层
+
+`Sources/iVox/HotKey/GlobalKeyTap.swift`
+
+- 独占一个 CGEvent tap 与**专用线程的 run loop**，只按事件类型 / keyCode **路由**，不含任何业务判断
+- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/Q/W/C` → `QuickActionsService`
+- 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
+- ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
+- 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Cmd+D` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
+
+### Translation — 划词翻译
+
+`Sources/iVox/Translation/`（AppKit/CG 侧）+ `Sources/iVoxKit/Translation/`（纯逻辑，可单测）
+
+- `Cmd+D` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 鼠标旁浮窗（`TranslationPanel`，NSPanel 非激活浮层）+ 可选朗读
+- 翻译走 `iVoxKit.TranslationService`（`actor`）：Google 主/备**双通道容灾**，或 OpenAI 兼容；**直连失败自动走兜底代理**（`translation.proxyURL`），直连用短超时探测（`directProbeTimeoutSeconds`），成功后记住「该走代理」
+- 朗读走 `PlaybackQueue.speakUserInitiated()`：**用户开口 → 抢麦**（与 hook 汇报的「只排队」语义相反）
+- 浮窗**刻意不做**拖拽 / 点击外部关闭 / 文本选择——这三样都要 key window，当前无 `NSApplication` 事件循环的形态给不了
+- CLI 侧 `ivox translate <text> [--selection] [--json]`**不依赖 daemon**，是整条链路的可验证接缝
+
+### QuickActions — Finder/终端快捷
+
+`Sources/iVox/QuickActions/QuickActionsService.swift`
+
+- `Opt+Z` 在 Finder 当前目录开终端；`Opt+A`/`Opt+Q`/`Opt+W` 开终端并执行 `claude`/`qwen`/`codex`；`Opt+C` 把选中项路径写进剪贴板
+- 控 Terminal **不用 AppleScript `do script`**（那要 Terminal 的 Automation 授权，且 iDict 时代有双窗问题）：开终端用 `open -a Terminal <dir>`，要跑命令就先写一个临时 `.command` 再 `open` 它
+- 取 Finder 路径仍走 AppleScript（唯一需要 Automation 授权的点，面积很小）
+- 选中项是**文件**时：开终端取它的**所在目录**，复制路径取**文件本身**
 
 ### MediaHTTPServer — Web UI
 

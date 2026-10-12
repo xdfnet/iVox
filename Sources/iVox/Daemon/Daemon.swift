@@ -139,7 +139,7 @@ actor Daemon {
             webUI = "error:Web 服务未监听"
         }
 
-        // 划词翻译：与语音输入共用同一套键盘监听（依赖同一权限）
+        // 划词翻译与快速操作都与语音输入共用同一套键盘监听（依赖同一权限）
         let translationHealth: String
         if !config.resolvedTranslation.enabled {
             translationHealth = "off"
@@ -148,6 +148,7 @@ actor Daemon {
         } else {
             translationHealth = "ok"
         }
+        let quickActionsHealth = keyTap.isMonitoring ? "ok" : "error:键盘监听未运行"
 
         return DaemonStatus(
             version: iVoxVersion,
@@ -156,7 +157,8 @@ actor Daemon {
                 wechat: wechatHealth,
                 mediaControl: mc.enabled ? "ok" : "off",
                 mediaHTTP: webUI,
-                translation: translationHealth
+                translation: translationHealth,
+                quickActions: quickActionsHealth
             ),
             permissions: .init(
                 microphone: mic,
