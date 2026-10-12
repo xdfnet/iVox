@@ -40,6 +40,15 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertEqual(cleanText("**x86-64**"), "x86-64。")
     }
 
+    func testTildeBecomesSpace() {
+        // 半角 ~ 与全角 ～ 统一转空格：语气号不发声，也不粘连前后词；尾随空格被 trim
+        XCTAssertEqual(cleanText("好的~"), "好的")
+        XCTAssertEqual(cleanText("加油～～"), "加油")
+        XCTAssertEqual(cleanText("a~b"), "a b")
+        // 句中波浪号转单个空格，不粘连
+        XCTAssertEqual(cleanText("嘿～在吗"), "嘿 在吗")
+    }
+
     func testNormalizesWhitespace() {
         // Tab 与 NBSP 当空格合并，前后不留
         let input = "**a\tb\u{00A0}c\u{3000}d**"

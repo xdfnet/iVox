@@ -334,6 +334,7 @@ private extension String {
 
     /// 过滤 emoji + 非文字符号，只保留文字（字母/数字/中文）+ 语气标点。
     /// 各类空白（Tab / NBSP / 全角空格 / 连续半角空格）统一折叠成一个空格；emoji 修饰符直接砍。
+    /// 半角 `~` 与全角 `～` 统一转空格（语气号不发声，避免前后词粘连）。
     var removingEmoji: String {
         // . / ! % ? , - : ; " ' + 中文句末/语气标点。冒号分号是停顿标记，保留给 TTS 断句
         let allowedPunct: Set<UInt32> = [46, 47, 33, 37, 63, 44, 45, 58, 59, 34, 39, 12290, 65281, 65311, 8212]
@@ -361,6 +362,11 @@ private extension String {
                 let p = s.properties
                 if p.isEmoji || p.isEmojiModifier || p.isEmojiModifierBase || p.isEmojiPresentation {
                     continue  // emoji 主字 + 修饰符 + 肤色 + 展示序列
+                }
+                // 全角波浪号 ～ 与半角 ~ 统一转空格（语气号不发声、避免前后词粘连）
+                if v == 0xFF5E {
+                    lastWasSpace = true
+                    continue
                 }
                 if lastWasSpace { result.append(" ") }
                 result.append(Character(s))
