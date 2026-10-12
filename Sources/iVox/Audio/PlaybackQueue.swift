@@ -97,11 +97,17 @@ actor PlaybackQueue {
 
     /// 收敛兜底：还有待播 job 却没有管道在跑（顶替时序可能留下这种孤儿态）就补起管道，
     /// 否则视为已排空、恢复音乐。保证任何路径结束后不留「有活没人干」的挂起。
+    /// 管道仍在退出中时多半直接返回（正常收尾的管道自己会恢复音乐）；但**已被取消且无待播**
+    /// 的管道按设计不恢复（收尾里的 `!Task.isCancelled`），恢复只能由调用方补——此时若也直接
+    /// 返回，恢复就永远丢了：外部停止哨兵（`hook.sh stop`/`ivox quiet`/pi 发言）恰落在旧管道
+    /// 退出窗口时必现「音乐卡在暂停」。所以这种情形等它退净（已取消，退出很快）再补恢复。
     private func pumpOrResume() async {
-        guard currentTask == nil else { return }
+        if let task = currentTask, task.isCancelled, jobs.isEmpty {
+            await awaitCurrentPipelineFinished()
+        }
         if !jobs.isEmpty {
-            startPipeline()
-        } else {
+            startPipelineIfPending()
+        } else if currentTask == nil {
             await media.resume()
         }
     }
@@ -297,6 +303,10 @@ actor PlaybackQueue {
         let consumer = Task {
             for await pcm in pcmAsync {
                 if Task.isCancelled { break }
+                // 已被 bargeIn 作废：立刻停止灌 PCM。write 是「进入时取世代」，作废后再进来的
+                // write 会取到新世代、通过世代校验，把旧轮的缓冲 PCM 排进播放器——旧音频因此继续
+                // 响（打断失效），旧管道也迟迟不退出（新轮在 awaitCurrentPipelineFinished 干等）。
+                if pipelineSeq != seq { break }
                 await player.write(pcm)
             }
         }
@@ -309,6 +319,7 @@ actor PlaybackQueue {
         _ = try? await producer.value
         if Task.isCancelled { consumer.cancel() }
         _ = try? await consumer.value
+
 
         // 整条管道末端：等所有已排队音频真正播完（含跨 job 的尾音）；在途音频作废由
         // bargeIn/cancelAll 的 cancelPendingPlayback 完成（其已递增 generation）。

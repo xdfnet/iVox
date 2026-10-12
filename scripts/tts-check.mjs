@@ -275,8 +275,12 @@ async function runCase(c) {
   // 普通 speak 会 bargeIn 并把本用例自己的流式轮次作废，断言必然失真。检测到则把失败降级为
   // skip 并显式打出证据——只降级失败，通过的不动；不掩盖，也别把它当产品缺陷。
   const foreign = log.grep(new RegExp(`队列入队: source=(?!c\\d\\d${runId})`), t0);
+  // 外部停止哨兵（别的会话的 `hook.sh stop` / `ivox quiet` / pi 用户发言）会在用例播到一半时
+  // 掐掉本轮，尾音/收尾/恢复类断言必然失真——同样降级为 skip 并给出证据。
+  const sentinel = log.grep(/收到停止播放指令/, t0);
+  const hit = foreign[0] ?? sentinel[0];
   return { name: c.name, advisory: !!c.advisory, needsAudio: !!c.needsAudio, failures: ctx.failures,
-           interfered: foreign.length ? foreign[0].msg : "", ms: nowMs() - t0,
+           interfered: hit ? hit.msg : "", ms: nowMs() - t0,
            window: ctx.failures.length ? ctx.windowLogs() : [] };
 }
 

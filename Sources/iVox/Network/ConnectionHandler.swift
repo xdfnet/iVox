@@ -90,7 +90,9 @@ actor ConnectionHandler {
             return
         }
         Log.info("流式开始: source=\(source) voice=\(voiceID) turn=\(turn)")
-        Task { await queue.beginTurn(turn) }
+        // 本连接的入队/结束/取消全部串到同一根链上：帧序 = 执行序（见 StreamOpChain）
+        let chain = StreamOpChain()
+        chain.hop { await self.queue.beginTurn(turn) }
 
         let sb = StreamBuffer()
         var acc = Data()
@@ -110,7 +112,7 @@ actor ConnectionHandler {
                     expectBytes = nil
                     if let text = String(data: payload, encoding: .utf8), !text.isEmpty {
                         for block in sb.append(text) {
-                            emitStreamBlock(block, source: source, voiceID: voiceID, turn: turn)
+                            emitStreamBlock(block, source: source, voiceID: voiceID, turn: turn, chain: chain)
                         }
                     }
                     continue
@@ -130,16 +132,16 @@ actor ConnectionHandler {
                 // 控制帧 / 旧裸文本（兼容老客户端）
                 guard let frame = String(data: line, encoding: .utf8) else { continue }
                 if frame == "{end}" {
-                    finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn)
+                    finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn, chain: chain)
                     return false
                 }
                 if frame.hasPrefix("{cancel") {
                     Log.info("流式取消: turn=\(turn)")
-                    Task { await queue.cancelTurn(turn) }
+                    chain.hop { await self.queue.cancelTurn(turn) }
                     return false
                 }
                 for block in sb.append(frame + "\n") {
-                    emitStreamBlock(block, source: source, voiceID: voiceID, turn: turn)
+                    emitStreamBlock(block, source: source, voiceID: voiceID, turn: turn, chain: chain)
                 }
             }
         }
@@ -151,7 +153,7 @@ actor ConnectionHandler {
             if !feed(Data(buf[0..<n])) { closed = true; break }
         }
         if !closed {  // EOF 兜底：正常结束 flush 残尾
-            finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn)
+            finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn, chain: chain)
         }
     }
 
@@ -167,22 +169,22 @@ actor ConnectionHandler {
     }
 
     private nonisolated func emitStreamBlock(_ raw: String, source: String,
-                                             voiceID: String, turn: String) {
+                                             voiceID: String, turn: String, chain: StreamOpChain) {
         let cleaned = cleanText(raw)
         guard !cleaned.isEmpty else { return }
         let jobs = splitSentences(cleaned).map {
             PlaybackJob(text: $0, voiceID: voiceID, source: source, turnID: turn)
         }
         Log.info("流式入队: turn=\(turn) 分块=\(jobs.count) chars=\(cleaned.count)")
-        Task { await queue.enqueue(jobs, turnID: turn) }
+        chain.hop { await self.queue.enqueue(jobs, turnID: turn) }
     }
 
     private nonisolated func finishStream(sb: StreamBuffer, source: String,
-                                          voiceID: String, turn: String) {
+                                          voiceID: String, turn: String, chain: StreamOpChain) {
         if let tail = sb.finish() {
-            emitStreamBlock(tail, source: source, voiceID: voiceID, turn: turn)
+            emitStreamBlock(tail, source: source, voiceID: voiceID, turn: turn, chain: chain)
         }
-        Task { await queue.endTurn(turn) }
+        chain.hop { await self.queue.endTurn(turn) }
         Log.info("流式结束: turn=\(turn)")
     }
 
@@ -348,5 +350,23 @@ actor ConnectionHandler {
         let limit = 2000
         guard value.count > limit else { return oneLine(value) }
         return oneLine(String(value.prefix(limit))) + "…（共 \(value.count) 字，日志已截断）"
+    }
+}
+
+/// 单连接内的队列操作串行链：让首帧 / 入队 / `{end}` / `{cancel}` 严格按**帧序**落地。
+/// 原先这四处各自 `Task {}`，落到 PlaybackQueue 的顺序全凭调度器——实测 `{end}` 的 Task
+/// 抢在同一连接后一个入队 Task 之前执行：轮次已被 `{end}` 关闭（turnOpen=0），迟到的同轮
+/// 入队又把它打开且再无人关，管道把分块播完后永久停在「等新 job」（/health 恒 playing=true、
+/// queued=0，看门狗与 drain 都够不着）。黑盒 A-tail/E3 用例抓到的「未收尾」即此。
+/// `hop` 只在连接自己的读取线程（`handle` → `feed`）调用，故无需同步。
+private final class StreamOpChain {
+    private var tail: Task<Void, Never>?
+
+    func hop(_ op: @escaping @Sendable () async -> Void) {
+        let prev = tail
+        tail = Task {
+            if let prev { _ = await prev.value }
+            await op()
+        }
     }
 }

@@ -14,6 +14,7 @@ final class AudioPlayer: @unchecked Sendable {
     private var pendingCount = 0
     private var pendingFrames = 0   // 已排队未被设备消费的帧数（实时，背压 + drain 估算共用）
     private var generation = 0      // 世代：cancelPendingPlayback 递增，旧 buffer 回调据此丢弃
+    private var lastConsumedAt = DispatchTime.now()   // 上次设备消费回调时刻（断流看门狗用）
     private var started = false
     private var drainedContinuation: CheckedContinuation<Void, Never>?
     private var drainSeq: UInt = 0         // drain 序号：让超时兜底只对自己的那次 drain 生效
@@ -26,6 +27,8 @@ final class AudioPlayer: @unchecked Sendable {
     /// 同样用等待者数组，避免多 producer 极端时序下互相覆盖泄漏。
     private var prefetcherWaiters: [CheckedContinuation<Void, Never>] = []
     private static let drainSlack: TimeInterval = 2.0   // drain 超时余量（秒）
+    /// 设备断流判定门槛（秒）：有排队音频却这么久无任何消费回调 = 设备已死（正常消费是连续的）
+    private static let stallGrace: TimeInterval = 10
     private var needsPrime = true  // 是否需要先调度前导静音 buffer 唤醒 player node
     // 背压水位：排队音频超过 4s 暂停合成，降到 2s 再放行（留足预取掩盖下一句合成启动）
     private let highWaterFrames: Int
@@ -64,6 +67,7 @@ final class AudioPlayer: @unchecked Sendable {
         node.play()
         waitForNodePlaying()
         started = true
+        scheduleStallWatchdog()
     }
 
     /// 写入一块 PCM。排队音频超高水位时挂起，等设备消费到低水位再返回（背压）。
@@ -184,6 +188,7 @@ final class AudioPlayer: @unchecked Sendable {
     private func onConsumed(frames: Int) {
         pendingCount -= 1
         pendingFrames = max(0, pendingFrames - frames)
+        lastConsumedAt = .now()   // 设备在消费（活性看门狗据此判定断流）
         if pendingFrames <= lowWaterFrames, !backpressureWaiters.isEmpty {
             let ws = backpressureWaiters
             backpressureWaiters.removeAll()
@@ -281,6 +286,14 @@ final class AudioPlayer: @unchecked Sendable {
 
         Log.warn("AudioEngine 异常，尝试重建: engine.isRunning=\(engine.isRunning) node.isPlaying=\(node.isPlaying)")
 
+        guard rebuildEngine() else { return false }
+        Log.info("AudioEngine 重建成功")
+        return true
+    }
+
+    /// 重建引擎与播放节点（系统音频事件 / 设备断流后重新激活设备用）。必须在 serialQueue 内调用。
+    /// 注意 `node.stop()` 会丢弃已排队的 buffer——调用方须同步清掉这些 buffer 的计数。
+    private func rebuildEngine() -> Bool {
         node.stop()
         engine.stop()
         engine.reset()
@@ -289,13 +302,47 @@ final class AudioPlayer: @unchecked Sendable {
             try engine.start()
             node.play()
             waitForNodePlaying()
-            Log.info("AudioEngine 重建成功")
             return true
         } catch {
             Log.error("AudioEngine 重建失败: \(error)")
             started = false
             return false
         }
+    }
+
+    /// 起设备活性看门狗（串行队列上 1s 一跳自续，stop() 后停跳）。
+    private func scheduleStallWatchdog() {
+        serialQueue.asyncAfter(deadline: .now() + .seconds(1)) { [weak self] in
+            guard let self, self.started else { return }
+            self.recoverIfDeviceStalled()
+            self.scheduleStallWatchdog()
+        }
+    }
+
+    /// 设备停止消费兜底。蓝牙音箱断流 / 设备被系统挂起时 CoreAudio 不再回调 `dataConsumed`——
+    /// 而背压等待**只能**由 `onConsumed` 唤醒、`ensureHealthy` 又只在「进入等待之前」检查，
+    /// 于是 writer 永久挂起：整条管道卡死（/health 恒 playing=true），此后所有播报一律哑掉，
+    /// 只能靠一次打断解救（实测蓝牙输出下必现，日志里只有「前导静音已调度」再无下文）。
+    /// 判定：有排队音频却连续 `stallGrace` 秒毫无消费回调 = 设备已断流。处置：重建引擎重新激活
+    /// 设备、按「已丢」清掉排队 buffer 的计数（这些音频本就无声，`rebuildEngine` 也已把它们丢出
+    /// 节点）、唤醒全部等待者，让管道继续灌后续 PCM 或收尾退出。必须在 serialQueue 内调用。
+    private func recoverIfDeviceStalled() {
+        guard pendingCount > 0 else {
+            lastConsumedAt = .now()
+            return
+        }
+        guard DispatchTime.now() >= lastConsumedAt + .seconds(Int(Self.stallGrace)) else { return }
+
+        Log.warn("音频设备 \(Int(Self.stallGrace))s 无消费回调（蓝牙断流/设备挂起？），重建引擎并丢弃排队音频: pending=\(pendingCount) frames=\(pendingFrames)")
+        _ = rebuildEngine()
+        pendingCount = 0
+        pendingFrames = 0
+        needsPrime = true
+        lastConsumedAt = .now()
+        backpressureWaiters.forEach { $0.resume() }
+        backpressureWaiters.removeAll()
+        prefetcherWaiters.forEach { $0.resume() }
+        prefetcherWaiters.removeAll()
     }
 
     /// 等待 player node 真正进入播放状态，最多 50ms。必须在 serialQueue 内调用。
