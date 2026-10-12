@@ -75,42 +75,6 @@ final class TranslationParseTests: XCTestCase {
     }
 }
 
-// MARK: - 浮窗定位几何
-
-final class WindowPlacementTests: XCTestCase {
-    private let screen = CGRect(x: 0, y: 0, width: 1920, height: 1080)
-    private let size = CGSize(width: 100, height: 50)
-
-    func testPlacesBelowAnchorHorizontallyCentered() {
-        let p = placeNearAnchor(anchor: CGPoint(x: 500, y: 300), visibleFrame: screen, size: size)
-        XCTAssertEqual(p.x, 450)
-        XCTAssertEqual(p.y, 230)   // 300 - 50 - 20
-    }
-
-    func testFlipsAboveWhenNoRoomBelow() {
-        let p = placeNearAnchor(anchor: CGPoint(x: 500, y: 40), visibleFrame: screen, size: size)
-        XCTAssertEqual(p.y, 60)    // 40 + 20
-    }
-
-    func testClampsToLeftEdge() {
-        let p = placeNearAnchor(anchor: CGPoint(x: 5, y: 300), visibleFrame: screen, size: size)
-        XCTAssertEqual(p.x, 0)
-    }
-
-    func testClampsToRightEdge() {
-        let p = placeNearAnchor(anchor: CGPoint(x: 1918, y: 300), visibleFrame: screen, size: size)
-        XCTAssertEqual(p.x, 1820)  // 1920 - 100
-    }
-
-    /// 副屏（origin 非零）——iDict 原实现会算错，这里锁住正确行为。
-    func testSecondaryScreenWithNonZeroOrigin() {
-        let second = CGRect(x: 1920, y: 0, width: 1920, height: 1080)
-        let p = placeNearAnchor(anchor: CGPoint(x: 2400, y: 300), visibleFrame: second, size: size)
-        XCTAssertEqual(p.x, 2350)
-        XCTAssertEqual(p.y, 230)
-    }
-}
-
 // MARK: - 配置解码兼容
 
 final class TranslationConfigDecodeTests: XCTestCase {

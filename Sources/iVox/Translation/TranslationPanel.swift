@@ -9,14 +9,17 @@ import iVoxKit
 /// daemon 里能正常显示）：同样的 `NSPanel` 组合 —— `nonactivatingPanel` 不抢焦点、
 /// `level = .floating` 悬于所有窗口、`canJoinAllSpaces` 跨 Space。
 ///
-/// 与范本的差异：位置跟随鼠标（`placeNearAnchor`）、内容用 `NSTextField` 按文本量尺寸
-/// （不用 `NSHostingView`，避开无 NSApp 下 SwiftUI 拟合尺寸的不确定）、超时自动隐藏。
+/// 与范本的差异：位置固定在鼠标所在屏的**下方居中**（歌词式）、内容用
+/// `NSTextField` 按文本量尺寸（不用 `NSHostingView`，避开无 NSApp 下 SwiftUI
+/// 拟合尺寸的不确定）、超时自动隐藏。
 ///
 /// **刻意不做**：拖拽移动、点击外部关闭、文本选择。这三样都要 key window / 输入焦点，
 /// 当前 daemon 形态给不了；替代是「再按一次 Cmd+D 覆盖 + 到点自己消失」。
 @MainActor
 final class TranslationPanel {
     private static let maxTextWidth: CGFloat = 600
+    /// 距屏幕可见区底部的留白（歌词式贴底，但不完全压边）
+    private static let bottomInset: CGFloat = 28
     private static let padding: CGFloat = 14
     private static let cornerRadius: CGFloat = 10
     private static let fontSize: CGFloat = 14
@@ -24,11 +27,11 @@ final class TranslationPanel {
     private var panel: NSPanel?
     private var hideWorkItem: DispatchWorkItem?
 
-    /// 在鼠标旁边显示译文；`timeoutSeconds` 后自动隐藏。
+    /// 在**鼠标所在那块屏**的下方居中显示译文（像歌词），`timeoutSeconds` 后自动隐藏。
     ///
-    /// 鼠标位置在这里现取（`NSEvent.mouseLocation`，AppKit 全局坐标）。**不能**用
-    /// 热键回调里的 `CGEvent.location`——那是屏幕坐标、**左上原点**，而 `NSScreen`
-    /// 与 `NSPanel` 用**左下原点**；混着算弹窗会跑到屏幕另一头（踩过）。
+    /// 位置固定、不跟随鼠标。鼠标位置在这里现取（`NSEvent.mouseLocation`，AppKit 全局
+    /// 坐标）——**不能**用热键回调里的 `CGEvent.location`：那是屏幕坐标、**左上原点**，
+    /// 而 `NSScreen` 与 `NSPanel` 用**左下原点**，混着算会选错屏幕（踩过）。
     func show(text: String, timeoutSeconds: Double) {
         let view = makeContentView(text: text)
         let size = view.frame.size
@@ -40,12 +43,12 @@ final class TranslationPanel {
         view.frame = NSRect(origin: .zero, size: size)
         panel.contentView = view
 
-        let anchor = NSEvent.mouseLocation
-        if let screen = NSScreen.screens.first(where: { $0.frame.contains(anchor) }) ?? NSScreen.main {
-            panel.setFrameOrigin(placeNearAnchor(
-                anchor: anchor,
-                visibleFrame: screen.visibleFrame,
-                size: view.frame.size
+        let mouse = NSEvent.mouseLocation
+        if let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main {
+            let visible = screen.visibleFrame
+            panel.setFrameOrigin(NSPoint(
+                x: visible.midX - size.width / 2,
+                y: visible.minY + Self.bottomInset
             ))
         }
         panel.orderFrontRegardless()

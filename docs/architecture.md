@@ -218,7 +218,6 @@ Daemon (actor)
 | `StreamBuffer.swift` | 流式 turn 的安全边界切分（句末 / 代码围栏配平 / `minFlushChars`） |
 | `StreamFrame.swift` | 长度帧协议（`L<n>` + 正文 + end 标记） |
 | `AudioPipeline.swift` | 音频格式转换工具（重采样） |
-| `WindowPlacement.swift` | 浮窗锚定几何（纯函数，含副屏坐标修正） |
 | `Translation/` | 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗 |
 | `TextSplitter.swift` | 按句切分并合并到 ≤80 字，供播报分块 |
 
