@@ -95,23 +95,48 @@ actor ConnectionHandler {
         let sb = StreamBuffer()
         var acc = Data()
         var closed = false
+        // 长度帧状态：读到 "<n>\n" 后，记录还差多少字节正文；非 nil 时不按行解析。
+        var expectBytes: Int? = nil
 
-        func feed(_ chunk: Data) {
+        // 返回 false 表示收到结束/取消控制帧，停止读取。
+        func feed(_ chunk: Data) -> Bool {
             acc.append(chunk)
-            while let idx = acc.firstIndex(of: 0x0A) {
-                let line = Data(acc[acc.startIndex..<idx])
-                acc.removeSubrange(acc.startIndex...idx)
+            while true {
+                // ── 长度帧正文消费中：按剩余字节数精确切，正文可含任意字节（含 \n/{end}）──
+                if let need = expectBytes {
+                    guard acc.count >= need else { return true }   // 数据不全，等更多
+                    let payload = Data(acc.prefix(need))
+                    acc.removeFirst(need)
+                    expectBytes = nil
+                    if let text = String(data: payload, encoding: .utf8), !text.isEmpty {
+                        for block in sb.append(text) {
+                            emitStreamBlock(block, source: source, voiceID: voiceID, turn: turn)
+                        }
+                    }
+                    continue
+                }
+
+                guard let nl = acc.firstIndex(of: 0x0A) else { return true }  // 行不完整
+                let line = Data(acc[acc.startIndex..<nl])
+                acc.removeSubrange(acc.startIndex...nl)
+
+                // 长度帧头："L<n>" → 下一帧是 n 字节自描述正文。L 前缀使其不可能与
+                // 正常正文行（含纯数字、{end} 等）或旧客户端裸文本混淆。
+                if line.first == 0x4C, let len = parseLengthPrefix(Data(line.dropFirst())) {
+                    expectBytes = len
+                    continue
+                }
+
+                // 控制帧 / 旧裸文本（兼容老客户端）
                 guard let frame = String(data: line, encoding: .utf8) else { continue }
                 if frame == "{end}" {
                     finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn)
-                    closed = true
-                    return
+                    return false
                 }
                 if frame.hasPrefix("{cancel") {
                     Log.info("流式取消: turn=\(turn)")
                     Task { await queue.cancelTurn(turn) }
-                    closed = true
-                    return
+                    return false
                 }
                 for block in sb.append(frame + "\n") {
                     emitStreamBlock(block, source: source, voiceID: voiceID, turn: turn)
@@ -119,15 +144,26 @@ actor ConnectionHandler {
             }
         }
 
-        if !leftover.isEmpty { feed(leftover) }
+        if !leftover.isEmpty { closed = !feed(leftover) }
         while !closed {
             let n = Darwin.read(fd, &buf, buf.count)
             if n <= 0 { break }
-            feed(Data(buf[0..<n]))
+            if !feed(Data(buf[0..<n])) { closed = true; break }
         }
         if !closed {  // EOF 兜底：正常结束 flush 残尾
             finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn)
         }
+    }
+
+    /// 解析长度头数字部分（调用方已确认行首为 'L'）；空/非数字返回 nil。
+    private nonisolated func parseLengthPrefix(_ data: Data) -> Int? {
+        guard !data.isEmpty else { return nil }
+        var n = 0
+        for b in data {
+            guard b >= 0x30, b <= 0x39 else { return nil }
+            n = n * 10 + Int(b - 0x30)
+        }
+        return n
     }
 
     private nonisolated func emitStreamBlock(_ raw: String, source: String,

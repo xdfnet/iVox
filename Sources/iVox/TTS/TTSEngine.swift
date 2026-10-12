@@ -18,6 +18,17 @@ actor TTSEngine {
     private var loadState: LoadState = .notStarted
     private var stateContinuations: [CheckedContinuation<Void, Never>] = []
 
+    // 合成串行闸门：MLX 模型非并发安全，bargeIn 取消旧推理是协作式的（要等下一个
+    // 取消检查点才真正退出）。若新推理在旧推理退出前进入 generateStream，两个推理并发
+    // 砸同一模型会触发 "expected a non-empty mlx_array" 致命错误、整个 daemon 崩溃。
+    // 用单调世代串行化：第 N 代必须等第 N-1 代完全离开模型后才能进入。
+    private var currentSynthGen: UInt = 0
+    private var lastFinishedGen: UInt = 0
+    private var gateWaiters: [UInt: [CheckedContinuation<Void, Never>]] = [:]
+    /// 作废纪元：bargeIn 递增。捕获旧纪元的合成（含在 gate 排队者）放行后一律抛
+    /// CancellationError、绝不进 MLX。不依赖 Swift 任务取消能否传播到内部 Task。
+    private var epoch: UInt = 0
+
     /// 已解析的参考音频缓存：key = 路径 + mtime（文件被 voice add 覆盖即失效）。
     /// 一次播报内音色固定，缓存后免掉每句一次的 wav 读盘/解码/重采样。
     private struct RefAudioEntry: @unchecked Sendable {
@@ -113,6 +124,22 @@ actor TTSEngine {
         let refAudio = try await loadRefAudio(voice?.refAudio, sampleRate: model.sampleRate)
         Log.info("TTS 请求: voice=\(voiceID) text_chars=\(text.count)")
 
+        // 串行闸门：等上一代合成彻底离开模型再进入（refAudio 是普通 IO，已在闸外完成）。
+        let myEpoch = epoch
+        currentSynthGen &+= 1
+        let myGen = currentSynthGen
+        let prevGen = myGen &- 1
+        // 无论成功/失败/取消都必须释放闸门，否则下一代永久等待
+        defer { finishSynthesis(myGen) }
+        if lastFinishedGen < prevGen {
+            await withCheckedContinuation { (cont: CheckedContinuation<Void, Never>) in
+                gateWaiters[prevGen, default: []].append(cont)
+            }
+        }
+        // 被 bargeIn 作废（纪元已推进）：放行后直接退出，绝不进 MLX。
+        // 正在 MLX 中的那一句无法中途打断（库限制），跑完即止，产出落到已关闭的流、无害。
+        if myEpoch != epoch { throw CancellationError() }
+
         let stream = model.generateStream(
             text: text,
             voice: nil,
@@ -143,6 +170,26 @@ actor TTSEngine {
         try Task.checkCancellation()
         Log.info("TTS 流式完成: chunks=\(chunkIdx)")
         continuation.finish()
+    }
+
+    /// 离开模型：推进完成世代并放行等待下一代的合成（一次只可能有一个等待者）。
+    /// 被取消的世代也会推进世代号，使后续已取消的排队者能链式快速退出、不进 MLX。
+    private func finishSynthesis(_ gen: UInt) {
+        if gen > lastFinishedGen { lastFinishedGen = gen }
+        if let waiters = gateWaiters[gen] {
+            gateWaiters[gen] = nil
+            waiters.forEach { $0.resume() }
+        }
+    }
+
+    /// bargeIn：推进纪元并唤醒所有 gate 排队者。旧纪元的合成被唤醒后检查到纪元失配，
+    /// 直接抛 CancellationError 退出、不进 MLX；新纪元的合成此刻尚未入队，不受影响，
+    /// 仍由世代闸门保证在「正在跑的那一句」结束后才进入模型。
+    func cancelActiveSynthesis() {
+        epoch &+= 1
+        let waiters = gateWaiters
+        gateWaiters.removeAll()
+        waiters.values.forEach { $0.forEach { $0.resume() } }
     }
 
     private func loadRefAudio(_ path: String?, sampleRate: Int) async throws -> MLXArray? {

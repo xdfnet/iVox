@@ -19,6 +19,14 @@ export const inject = [];
 const HOOK = join(homedir(), ".config", "ivox", "hook.sh");
 const SOCKET = join(homedir(), ".config", "ivox", "ivox.sock");
 
+// 数据帧用自描述长度帧 `L<字节数>\n<原文>`：正文可含 \n/{end} 等任意字符，
+// 服务端按字节精确切，杜绝正文恰好为 `{end}` 被误判成控制帧。
+function sendData(sock, text) {
+var body = Buffer.from(text, "utf8");
+sock.write("L" + body.length + "\n");
+sock.write(body);
+}
+
 // 拼出一条 assistant 消息的纯文本（跳过 tool_use / reasoning 等块）——兜底路径用
 function textOfContent(content) {
 if (Array.isArray(content)) {
@@ -119,11 +127,11 @@ if (state.socketDead) return;
 // 同一 text block 内的增量裸转发、绝不补换行——服务端把 \n 当 flush 边界，逐
 // token 补会切成一堆超短块，且模型慢吐时上一段播完下一段还没到，句间空档=卡顿。
 if (state.pendingNL || (typeof ch.index === "number" && ch.index !== state.lastIndex)) {
-state.sock.write("\n");
+sendData(state.sock, "\n");
 state.lastIndex = ch.index;
 }
 state.pendingNL = false;
-state.sock.write(ch.text);
+sendData(state.sock, ch.text);
 state.streamed = true;
 });
 
@@ -150,9 +158,11 @@ function closeStream(sid, sendEnd) {
 var st = conns.get(sid);
 if (!st) return undefined;
 if (sendEnd && !st.socketDead) {
-try { st.sock.write("{end}\n"); } catch (e) {}
-}
+// 优雅半关：end 等内核把 {end} 发完再 FIN，destroy 强杀可能随 RST 丢尾帧。
+try { st.sock.end("{end}\n"); } catch (e) { try { st.sock.destroy(); } catch (e2) {} }
+} else {
 try { st.sock.destroy(); } catch (e) {}
+}
 conns.delete(sid);
 return st;
 }

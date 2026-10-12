@@ -24,6 +24,7 @@ export default function (pi: ExtensionAPI) {
   let socketDead = false; // 连接是否失败过（失败则本轮退回整段兜底）
   let lastContentIndex = -1;
   let muted = false;      // 本轮被手动中断后不再续念，下一轮用户发言/turn_start 解除
+  let graceful = false;   // 本轮是否由我们主动 end 半关；false 却收到 close = 异常掉线
 
   const randomTurn = () =>
     Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0") +
@@ -34,12 +35,22 @@ export default function (pi: ExtensionAPI) {
     streamed = false;
     socketDead = false;
     muted = false;
+    graceful = false;
     lastContentIndex = -1;
     closeSock();
     const s = createConnection(SOCKET_PATH);
     s.on("error", () => {
       // 守护进程未运行/路径不存在：静默，settled 时退回整段 speak
       socketDead = true;
+    });
+    s.on("close", () => {
+      // 只认当前连接：旧轮残留连接的 close（startTurn 里 closeSock 销毁）在此刻
+      // sock 已指向新连接，必须忽略，否则会把新轮误判成掉线。
+      if (sock !== s) return;
+      sock = null;
+      // 非主动 end 却关闭 = 中途静默掉线（守护进程重启/FIN）：标记失活，
+      // 让 settled 兜底整段重念，否则 streamed=true 会误判已播报、后半段丢失。
+      if (!graceful) socketDead = true;
     });
     s.write(`{type:stream,source:pi,turn:${turnId}}\n`);
     sock = s;
@@ -52,22 +63,37 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
-  // 本轮收尾：flush 残尾并关闭长连接（turn 结束，而非每条 message 结束）
+  // 本轮收尾：flush 残尾并优雅半关（end 等内核把尾帧/{end} 发完再 FIN，
+  // 不能 destroy——强杀会随 RST 丢掉最后一两个字）。
   function endTurn() {
-    if (sock && !socketDead) sock.write("{end}\n");
-    closeSock();
+    const s = sock;
+    sock = null;
     turnId = "";
+    if (s && !socketDead && !s.destroyed) {
+      graceful = true;
+      s.end("{end}\n");
+    }
   }
 
   function cancelTurn() {
     muted = true;
-    if (sock && !socketDead) sock.write("{cancel}\n");
-    closeSock();
+    const s = sock;
+    sock = null;
     turnId = "";
+    if (s && !socketDead && !s.destroyed) {
+      graceful = true;   // 主动中断不算掉线，无需 settled 兜底
+      s.end("{cancel}\n");
+    }
   }
 
+  // 数据帧用自描述长度帧 `L<字节数>\n<原文>`：正文可含 \n/{end} 等任意字符，
+  // 服务端按字节精确切，杜绝正文恰好为 `{end}` 被误判成控制帧。
   function sendFrame(text: string) {
-    if (sock && !socketDead && !sock.destroyed) sock.write(text + "\n");
+    if (sock && !socketDead && !sock.destroyed) {
+      const body = Buffer.from(text, "utf8");
+      sock.write(`L${body.length}\n`);
+      sock.write(body);
+    }
   }
 
   // 有交互 UI（tui/rpc）才播报；print/json/后台脚本不打扰

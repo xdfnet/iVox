@@ -57,16 +57,26 @@ func speak(_ text: String, source: String? = nil, voice: String? = nil) {
 ### 1b. 流式 TTS — 边生成边播报（turn）
 
 整轮回复边生成边投递，服务端在安全边界切句，第一句生成完即开播，不必等整轮。
-一条连接多帧，帧间以 `\n` 分隔，连接保持打开：
+一条连接多帧，连接保持打开。帧分两类：
+
+**正文帧用自描述长度帧**（v3.6.2 起，pi/dsh 均已采用）：
 
 ```
-{type:stream,source:pi,turn:<唯一id>}\n     首帧：开流（声明来源/音色/轮次）
-<增量原文片段>\n                              后续帧：一帧一段 text_delta 原文
-<增量原文片段>\n                              （delta 内自带的换行也作为句末边界）
-{end}\n                                       结束帧：flush 残尾并放开音乐保活
+L<UTF-8 字节数 N>\n   ← 帧头：大写 L + 纯 ASCII 十进制字节数 + 换行
+<恰好 N 字节的原文>    ← 帧体：可含任意字节（\n、{end}、代码、emoji），不再靠 \n 定界
 ```
 
-取消帧（用户中断）：`{cancel:<turn>}\n`（或 `{cancel}`）。客户端直接断开（EOF）等价于 `{end}`。
+**控制帧仍裸行**（以 `\n` 结尾）：
+
+```
+{type:stream,source:pi,turn:<唯一id>}   首帧：开流（声明来源/音色/轮次）
+{end}                                    结束帧：flush 残尾并放开音乐保活
+{cancel} / {cancel:<turn>}               取消帧（用户中断）
+```
+
+客户端直接断开（EOF）等价于 `{end}`。
+
+> **为何引入 L 帧**：旧协议正文帧靠 `\n` 定界、控制帧是裸 `{end}`，于是正文中独立成行的 `{end}`/`{cancel}` 会被误判成控制帧（协议注入），正文里的换行也和帧定界符混淆。L 帧按字节精确切，正文可含任意内容。服务端**向后兼容**：行首不是 `L<数字>` 的仍按旧裸文本帧解析（裸文本 + `\n`），旧客户端无需改造。
 
 **关键约定**
 
@@ -74,6 +84,7 @@ func speak(_ text: String, source: String? = nil, voice: String? = nil) {
 - 过短句块（「好的。」「明白。」）不立即开播：服务端 `StreamBuffer` 有最小 flush 颗粒（`minFlushChars`=24 字），边界只标记、攒够长度才在最近边界一次吐出（常含多句）；残尾由 `{end}`/EOF 兜底全播。客户端无需关心，照常逐 delta 转发即可。
 - `turn` 必填且一轮内不变。**新 turn 打断旧 turn**（取消旧轮在播+丢弃排队）；同一 turn 的帧顺序追加。
 - turn 未收到 `{end}` 前，句间队列瞬时排空也不恢复音乐，避免反复 pause/resume。
+- **优雅半关**：发 `{end}`/`{cancel}` 用 `sock.end(...)`（等内核发完再 FIN），不要 `destroy()` 强杀——后者随 RST 可能丢掉最后一两个字。
 
 **示例（Node，pi 扩展即此实现）**
 
@@ -81,8 +92,10 @@ func speak(_ text: String, source: String? = nil, voice: String? = nil) {
 import { createConnection } from "node:net";
 const sock = createConnection(`${process.env.HOME}/.config/ivox/ivox.sock`);
 sock.write(`{type:stream,source:pi,turn:${turnId}}\n`);
-sock.write(deltaText + "\n");   // 每个 text_delta 一帧
-sock.write("{end}\n");          // turn 结束
+const body = Buffer.from(deltaText, "utf8");
+sock.write(`L${body.length}\n`);   // 长度帧头
+sock.write(body);                  // 正文（任意字节，无需转义）
+sock.end("{end}\n");               // turn 结束，优雅半关
 ```
 
 ### 2. ASR — 语音识别

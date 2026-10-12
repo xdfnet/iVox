@@ -16,7 +16,13 @@ final class AudioPlayer: @unchecked Sendable {
     private var generation = 0      // 世代：cancelPendingPlayback 递增，旧 buffer 回调据此丢弃
     private var started = false
     private var drainedContinuation: CheckedContinuation<Void, Never>?
-    private var backpressureContinuation: CheckedContinuation<Void, Never>?
+    /// 背压等待者：每个挂起的 writer 独立槽。密集打断时新旧管道的 writer 可能短暂同时
+    /// 在场，用数组而非单槽——单槽会被后到者覆盖，先到者的 continuation 永不 resume（泄漏）。
+    private var backpressureWaiters: [CheckedContinuation<Void, Never>] = []
+    /// 合成预取门控：排队音频超高水位时挂起「下一句合成」，降到高水位放行，
+    /// 让合成领先播放一两句即可，不无限预取。与 write 的背压分离（两级流水线）。
+    /// 同样用等待者数组，避免多 producer 极端时序下互相覆盖泄漏。
+    private var prefetcherWaiters: [CheckedContinuation<Void, Never>] = []
     private static let drainSlack: TimeInterval = 2.0   // drain 超时余量（秒）
     private var needsPrime = true  // 是否需要先调度前导静音 buffer 唤醒 player node
     // 背压水位：排队音频超过 4s 暂停合成，降到 2s 再放行（留足预取掩盖下一句合成启动）
@@ -26,9 +32,11 @@ final class AudioPlayer: @unchecked Sendable {
     deinit {
         serialQueue.sync {
             drainedContinuation?.resume()
-            backpressureContinuation?.resume()
+            backpressureWaiters.forEach { $0.resume() }
+            prefetcherWaiters.forEach { $0.resume() }
             drainedContinuation = nil
-            backpressureContinuation = nil
+            backpressureWaiters.removeAll()
+            prefetcherWaiters.removeAll()
         }
     }
 
@@ -61,19 +69,36 @@ final class AudioPlayer: @unchecked Sendable {
     func write(_ pcm: Data) async {
         guard started, !pcm.isEmpty else { return }
         let frames = AVAudioFrameCount(pcm.count / 2)
+        // 进入时所属世代：被 bargeIn（cancelPendingPlayback 递增世代）唤醒后据此判定本 writer
+        // 已作废，直接退出、绝不碰 node/prime，避免新旧管道两个 writer 争用同一播放节点。
+        // 只在 serialQueue 上读写 generation，避免跨线程数据竞争。
+        let enterGen: Int = serialQueue.sync { generation }
 
-        // 背压：已排队音频太多就等设备先消费，避免无限占内存、同时构成合成预取上限
-        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
-            serialQueue.async {
-                if self.pendingFrames <= self.highWaterFrames {
-                    continuation.resume()
-                } else {
-                    self.backpressureContinuation = continuation
+        // 背压：已排队音频太多就等设备先消费，避免无限占内存、同时构成合成预取上限。
+        // 每个 writer 独立挂到等待者数组，杜绝单槽覆盖导致的 continuation 泄漏。
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                serialQueue.async {
+                    if self.pendingFrames <= self.highWaterFrames {
+                        continuation.resume()
+                    } else {
+                        self.backpressureWaiters.append(continuation)
+                    }
                 }
+            }
+        } onCancel: {
+            serialQueue.async {
+                // 取消时唤醒全部等待者：旧世代者靠下面的世代校验退出，同世代者至多超写
+                // 一块（高水位 4s，仅内存余量），下一次 write 重新背压，自我修正。
+                let ws = self.backpressureWaiters
+                self.backpressureWaiters.removeAll()
+                ws.forEach { $0.resume() }
             }
         }
 
+        // 等待期间已被打断（世代推进）：旧管道 writer 到此为止，不再排队/prime。
         serialQueue.sync {
+            guard self.generation == enterGen else { return }
             if !ensureHealthy() { return }
 
             // 前导静音：唤醒休眠的 player node，避免首个 audio chunk 被跳过。
@@ -124,13 +149,46 @@ final class AudioPlayer: @unchecked Sendable {
         }
     }
 
+    /// 已排队未被设备消费的帧数（合成侧预取门控只读，在 serialQueue 上取一致快照）。
+    var queuedFrames: Int { serialQueue.sync { pendingFrames } }
+
+    /// 合成预取门控：排队音频超高水位则挂起，等设备消费到低水位放行；取消时由
+    /// cancelPendingPlayback/stop 恢复，调用方靠 Task.checkCancellation 退出。
+    func awaitPrefetchCapacity() async {
+        await withTaskCancellationHandler {
+            await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+                serialQueue.async {
+                    if self.pendingFrames <= self.highWaterFrames {
+                        continuation.resume()
+                    } else {
+                        self.prefetcherWaiters.append(continuation)
+                    }
+                }
+            }
+        } onCancel: {
+            serialQueue.async {
+                let ws = self.prefetcherWaiters
+                self.prefetcherWaiters.removeAll()
+                ws.forEach { $0.resume() }
+            }
+        }
+    }
+
     /// 一块 buffer 被设备消费：更新计数，按需恢复背压等待 / drain 等待。必须在 serialQueue 内。
     private func onConsumed(frames: Int) {
         pendingCount -= 1
         pendingFrames = max(0, pendingFrames - frames)
-        if pendingFrames <= lowWaterFrames, let cont = backpressureContinuation {
-            backpressureContinuation = nil
-            cont.resume()
+        if pendingFrames <= lowWaterFrames, !backpressureWaiters.isEmpty {
+            let ws = backpressureWaiters
+            backpressureWaiters.removeAll()
+            ws.forEach { $0.resume() }
+        }
+        // 预取门控：合成比实时快时应尽量跑在前面攒垫，只在超 4s 上限时短暂停，
+        // 回落到高水位即放行（保持厚垫），绝不等低水位——否则下一句合成期间会欠载断句。
+        if pendingFrames <= highWaterFrames, !prefetcherWaiters.isEmpty {
+            let ws = prefetcherWaiters
+            prefetcherWaiters.removeAll()
+            ws.forEach { $0.resume() }
         }
         if pendingCount == 0 {
             needsPrime = true   // 设备真正播空：下次写入重新唤醒（覆盖电源管理休眠）
@@ -176,9 +234,11 @@ final class AudioPlayer: @unchecked Sendable {
             pendingFrames = 0
             drainedContinuation?.resume()
             drainedContinuation = nil
-            // 恢复可能卡在背压上的生产者，让它靠 Task 取消退出
-            backpressureContinuation?.resume()
-            backpressureContinuation = nil
+            // 恢复可能卡在背压/预取门控上的生产者，让它靠 Task 取消退出（世代校验拦住旧 writer）
+            backpressureWaiters.forEach { $0.resume() }
+            backpressureWaiters.removeAll()
+            prefetcherWaiters.forEach { $0.resume() }
+            prefetcherWaiters.removeAll()
             needsPrime = true      // 取消后新播放段需要重新唤醒
             node.stop()
             if engine.isRunning {
@@ -192,9 +252,11 @@ final class AudioPlayer: @unchecked Sendable {
         serialQueue.sync {
             started = false
             drainedContinuation?.resume()
-            backpressureContinuation?.resume()
+            backpressureWaiters.forEach { $0.resume() }
+            prefetcherWaiters.forEach { $0.resume() }
             drainedContinuation = nil
-            backpressureContinuation = nil
+            backpressureWaiters.removeAll()
+            prefetcherWaiters.removeAll()
             node.stop()
             engine.stop()
         }

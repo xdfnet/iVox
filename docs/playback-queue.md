@@ -22,15 +22,23 @@
 **AudioPlayer（`AudioPlayer.swift`）**
 
 - 整条播报复用同一个 `AVAudioPlayerNode`，分块连续 `scheduleBuffer` 排队，设备从不在句间重启。
-- **高低水位背压**：`pendingFrames`（已排队未被 `dataConsumed` 回调核减的帧数）超过高水位（4s 音频）时，`write()` 挂起生产者；降到低水位（2s）才经 `backpressureContinuation` 放行。生产者始终提前排队（当前句在播、下一句已合成），等价 sounddevice 阻塞 write。
+- **两级流水线（v3.6.2）**：合成（producer）与播放（consumer）拆成两条 Task，中间用 `AsyncStream<Data>(.unbounded)` 接 PCM。播放侧 `write()` 的背压只阻塞 consumer，**不再反压卡住下一句合成**——旧的「合成→write 串行」在 write 等 4s 高水位时连带阻塞下一句合成，是句间卡顿根因。真正的预取上限上移到 producer 句间的 `awaitPrefetchCapacity()`（见下条），unbounded 流只承接这「领先一两句」的提前量。
+- **两套独立门控、阈值不同**：
+  - **预取门控（给 producer 用）**：排队音频超 4s 高水位就先别开下一句合成，**回落到高水位即放行**（保持厚垫），绝不等低水位——否则下一句合成（约 3~5s）期间会欠载断句。
+  - **write 背压（给 consumer 用）**：超高水位挂起、降到 2s 低水位才放行。
+- 两者都用**等待者数组**而非单一 continuation 槽：密集打断时新旧管道的 writer/producer 会短暂同时在场，单槽会被后到者覆盖、先到者的 continuation 永不 resume（`SWIFT TASK CONTINUATION MISUSE ... leaked`）。每个挂起者独立入数组，唤醒时全 resume，谁也不覆盖谁。
+- **write 世代守卫**：`write` 入场时在 serialQueue 上快照 `generation`，背压醒来后重新校验；若已被 `cancelPendingPlayback`（bargeIn 递增世代）作废，直接 return、**绝不碰 node/prime**，避免新旧管道两个 writer 争用同一播放节点（曾表现为打断瞬间两次 prime）。
 - **prime 静音只在「设备真正播空（`pendingCount==0`）/ `cancelPendingPlayback`」后做一次**（`needsPrime`），连续排队的句间不再触发。
 - **`drain()` 只在整条管道末端调用一次**（等跨 job 尾音播完），句间不再 drain。
-- 取消链：`write()` 挂在背压上时，`cancelPendingPlayback()`/`stop()` 一定会 resume 它，生产者随即靠 `Task.checkCancellation` 退出，不会永久挂住。
+- 取消链：`write()`/预取挂起时，`cancelPendingPlayback()`/`stop()` 一定会 resume 全部等待者；旧世代者靠世代校验退出，同世代者靠 `Task.checkCancellation` 退出，不会永久挂住。
 
 **PlaybackQueue.processNext（`PlaybackQueue.swift`）**
 
-- 跨所有 job 的 `while !Task.isCancelled` 循环，逐个 `synthesizeStream → for await pcm { await player.write(pcm) }`，**句间不 drain**。
-- 队列瞬时排空时：`turnOpen == true`（流式轮次还在生成）→ 挂起在 `waitForJobs()`（continuation 存入 `jobWaiters`），**不退出、不恢复音乐**；`turnOpen == false` → 退出循环 → 末端 drain → 恢复音乐。
+- producer：跨所有 job 的 `while !Task.isCancelled` 循环，逐句 `awaitPrefetchCapacity() → synthesizeStream → for await pcm { pcmContinuation.yield(pcm) }`，**句间不 drain**；consumer：`for await pcm { await player.write(pcm) }`。
+- **尾音不丢（v3.6.2 关键修复）**：producer 正常结束时 `defer { pcmContinuation.finish() }`，consumer 的 `for await` 会把流里**仍缓冲着的最后一句多块 PCM 排空后自然终止**——因此正常路径**绝不能提前 `consumer.cancel()`**：此前 producer 一结束就 cancel，consumer 在下一块的 `isCancelled` 处 break，AsyncStream 里的尾音整块丢弃、drain 只等到已 schedule 的部分，表现为「内容没念完就恢复音乐」。只有整条任务真被 bargeIn 取消（`Task.isCancelled`）时才 cancel consumer 弃残余。
+- **MLX 串行闸门 + epoch 作废（v3.6.2，修并发崩溃与废句雪崩）**：MLX 模型非并发安全，且 MLX 流不响应中途 Task 取消（一句发起后必须跑完）。`TTSEngine` 用单调世代闸门：第 N 代合成本须等第 N−1 代完全离开模型才进 `generateStream`，否则新旧推理并发砸同一模型触发 `Fatal error: expected a non-empty mlx_array vector.cpp:51`、daemon 崩溃；`bargeIn → cancelActiveSynthesis()` 额外递增 `epoch` 并唤醒所有 gate 排队者，旧 epoch 排队者放行后检查到纪元失配立即抛 `CancellationError`、**绝不进 MLX`**（不依赖 Swift 任务取消能否传播到内部 Task），密集连打下只让「恰好撞在推理中」的那一句跑完。
+- **线性化点**：bargeIn 只 cancel 旧任务不清 `currentTask`；要立刻起新管道的调用方（enqueue/beginTurn）必须 `await currentTask.value`（`awaitCurrentPipelineFinished()`）等旧 producer+consumer **彻底退出**后才起新的，否则两个 consumer 并发 write 同一 player。
+- 队列瞬时排空时：`turnOpen == true`（流式轮次还在生成）→ 挂起在 `waitForJobs()`（continuation 存入 `jobWaiters`），**不退出、不恢复音乐**；`turnOpen == false` → 退出循环 → consumer 排空 → 末端 drain → 恢复音乐。
 - `signalJobs()` resume 并清空所有 `jobWaiters`，调用点只有：`enqueue`（新 job 到达）、`endTurn`（轮次结束）、`bargeIn`（打断/取消）。三者覆盖了挂起的全部唤醒路径，无 continuation 泄漏。
 - 轮次语义：`beginTurn/new turn` 打断旧轮；同 `turnID` 的分块顺序 append；普通 `ivox speak`/hook.sh（turnID=nil）作为新一轮打断当前在播。
 - **过期轮次的迟到帧一律静默丢弃（真人对话：你一开口，对方就别说了）**：一旦 `currentTurn` 已切到新轮，旧轮连接残留的入队/`endTurn`/`cancelTurn`（含旧连接被 destroy 后 EOF 触发的残尾 flush）全部 no-op——`enqueue` 见到 `currentTurn != 自己` 直接 return，**绝不再 bargeIn**（否则旧轮残音会反杀、打断刚开的新轮）。新轮开口的唯一权威是 `beginTurn`/新 turnID 的首次入队。典型：dsh 开新轮时旧连接直接 destroy（不发 cancel/end），靠这条不变量让旧轮 EOF 残尾作废。

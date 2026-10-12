@@ -2,6 +2,13 @@
 
 ## Unreleased（下一版）
 
+- **修复流式播报尾部丢字（内容没念完就恢复音乐）** — 两级流水线重构后，producer（合成）一结束就无条件 `consumer.cancel()`，但此刻 `AsyncStream` 里可能还缓冲着最后一句的多块 PCM；consumer 在下一块的 `Task.isCancelled` 处 `break`，尾音整块丢弃，`drain()` 只等到已 schedule 的部分，于是提前恢复音乐。改为：producer 正常结束靠流 `finish()` 让 consumer **自然排空缓冲后退出**，正常路径不再 cancel；只有整条任务真被 bargeIn 取消时才 cancel consumer 弃残余。实测同一段五句播报，合成完到恢复音乐的间隔从 2.8s（掐尾）变为 13.1s（完整播完）
+- **修复密集打断时 MLX 并发崩溃 + 废句合成雪崩** — 重构引入的回归：bargeIn 后立刻起新管道，新旧 `generateStream` 并发砸同一非线程安全模型，触发 `Fatal error: expected a non-empty mlx_array vector.cpp:51`、整个 daemon 崩溃。`TTSEngine` 新增**单调世代串行闸门**（第 N 代须等第 N−1 代完全离开模型才进 MLX）+ **epoch 显式作废**（bargeIn 递增纪元并唤醒所有排队者，旧纪元排队者放行后立即抛 `CancellationError`、绝不进模型；不依赖 Swift 任务取消能否传播到 MLX 内部 Task）。0.2s×15 极密连打：0 崩溃，只有「恰好撞在推理中」的一句跑完，其余秒退
+- **修复密集打断时 AudioPlayer continuation 泄漏** — 背压/预取门控各只有单一 continuation 槽，新旧管道的 writer/producer 短暂同场时后到者覆盖先到者，被覆盖者永不 resume（`SWIFT TASK CONTINUATION MISUSE ... leaked`）。单槽改为**等待者数组**（各自独立槽、唤醒全 resume）；`write` 增加**世代守卫**，背压醒来发现已被打断就直接退出、绝不碰 player node/prime（根除打断瞬间两次 prime 的 writer 竞态）。两轮暴力连打压测 0 泄漏
+- **合成/播放拆两级流水线，根除句间卡顿** — 旧链路合成与 `write` 串行，`write` 的 4s 背压会连带阻塞下一句合成。拆为 producer（逐句合成，经 `awaitPrefetchCapacity` 高水位门控保持厚垫）/ consumer（只负责写设备，背压只阻塞自己）两条 Task，中间 `AsyncStream` 接 PCM；设备连续排队、句间零停顿
+- **流式协议改自描述长度帧，杜绝控制帧注入** — 正文帧从「裸文本 + `\n` 定界」改为 `L<UTF-8 字节数>\n<N 字节原文>`，正文可含任意字节（换行、独立成行的 `{end}`、代码），不再可能把正文伪造成 `{end}`/`{cancel}` 控制帧；控制帧仍裸行。服务端三分流解析且**向后兼容**旧裸文本帧（行首非 `L<数字>` 走旧路径），pi/dsh 客户端同步升级
+- **客户端优雅半关，修尾部丢字 + 中途静默掉线误判** — pi/dsh 发 `{end}`/`{cancel}` 从 `destroy()` 改为 `sock.end(...)`（等内核发完尾帧再 FIN，强杀随 RST 丢最后一两个字）；pi 扩展区分主动半关（`graceful`）与异常 close（守护进程重启/FIN），后者标记失活让 `agent_settled` 兜底整段重念，并用连接身份校验避免旧轮 close 污染新轮
+
 - **排版 en-dash 归一为半角连字符** — swift-markdown 会把 `--` 智能替换成排版 en-dash（`–`，U+2013），TTS 听感无收益还引入非 ASCII 符号（`--verbose → –verbose`，听成「长划 verbose」）。`TextCleaner.removingEmoji` 非 ASCII 分支把 U+2013 归一为单个半角 `-`（与单词内单个连字符行为一致，`--verbose → -verbose`、`a--b → a-b`）；行内代码反引号内本就原样保留不受影响
 - **全角波浪号 `～` 与半角 `~` 统一转空格** — 此前半角 `~`（非路径时）转空格、全角 `～` 却原样保留交给 TTS，两者行为不一致；现语气波浪号一律转空格（不发声、不粘连前后词，尾随随空白折叠 trim），`~/path` 仍按家目录路径替换成文件名。`嘿～在吗 → 嘿 在吗`
 - **TTS 参考音频缓存** — 此前每次合成都重新读盘解码参考音频（4~10 秒 wav：`AVAudioFile` 读盘 → PCM 解码 → 重采样 → 建 MLXArray），流式逐句播报下同音色每句都白做一遍。`TTSEngine` 内新增按「路径#采样率 + 文件 mtime」为键的缓存，一次播报内复用同一份解析结果，切换音色各存一份（4 个音色内存占用可忽略）；`ivox voice add` 覆盖参考音频后 mtime 变化自动失效，模型重载采样率变化也不会错配。实测连续三句：首句「已缓存」、后两句「命中缓存」，首包稳定 ~200ms
