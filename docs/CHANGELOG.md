@@ -1,5 +1,9 @@
 # iVox 开发日志
 
+## Unreleased（下一版）
+
+- **TTS 参考音频缓存** — 此前每次合成都重新读盘解码参考音频（4~10 秒 wav：`AVAudioFile` 读盘 → PCM 解码 → 重采样 → 建 MLXArray），流式逐句播报下同音色每句都白做一遍。`TTSEngine` 内新增按「路径#采样率 + 文件 mtime」为键的缓存，一次播报内复用同一份解析结果，切换音色各存一份（4 个音色内存占用可忽略）；`ivox voice add` 覆盖参考音频后 mtime 变化自动失效，模型重载采样率变化也不会错配。实测连续三句：首句「已缓存」、后两句「命中缓存」，首包稳定 ~200ms
+
 ## v3.6.1 — 2026-10-12
 
 - **发布包自包含集成资产，install/upgrade 自动同步 hook/pi/dsh** — 此前 release tarball 里只有一个 `ivox` 二进制，`ivox upgrade` 与 `install-binary.sh`（curl|bash）只解包二进制，刷不到 `hook.sh`/pi 扩展/dsh 插件；老用户走这两条路径升级后集成仍是旧版（v3.6.0 的 UserPromptSubmit 对他们不生效），且首次 curl|bash 安装压根不装任何集成。现 tarball 在根保留 `ivox` 外整包带上 `integrations/`（含分发器），安装/升级定向解包到权威源 **`~/.config/ivox/integrations/`**，再由幂等分发器铺到各 agent 实际位置（hook.sh → `~/.config/ivox/hook.sh`、pi/dsh 插件、Claude/Codex/Qwen 的 Stop+UserPromptSubmit 挂载）；未安装的 agent 安全跳过。同步只在 `make update` / `ivox upgrade` / `install-binary.sh` 三个显式时机发生，守护进程不自动同步。新增 `make package` 目标固化「二进制 + integrations」打包；`install-hooks.sh` 按自身位置探测素材源（部署态在 `integrations/` 内用同级目录，源码态在 `scripts/` 用 `../integrations`）

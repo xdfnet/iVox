@@ -18,6 +18,14 @@ actor TTSEngine {
     private var loadState: LoadState = .notStarted
     private var stateContinuations: [CheckedContinuation<Void, Never>] = []
 
+    /// 已解析的参考音频缓存：key = 路径 + mtime（文件被 voice add 覆盖即失效）。
+    /// 一次播报内音色固定，缓存后免掉每句一次的 wav 读盘/解码/重采样。
+    private struct RefAudioEntry: @unchecked Sendable {
+        let mtime: Date
+        let audio: MLXArray
+    }
+    private var refAudioCache: [String: RefAudioEntry] = [:]
+
     init(config: Config) {
         self.config = config
         self.ttsConfig = config.resolvedTTS
@@ -144,11 +152,23 @@ actor TTSEngine {
             Log.info("参考音频不存在，跳过: \(expanded)")
             return nil
         }
+
+        // 命中缓存（路径 + mtime 一致）：直接复用，免读盘/解码/重采样。
+        // key 含目标采样率，模型重载后采样率变化也不会错配。
+        let mtime = (try? FileManager.default.attributesOfItem(atPath: expanded)[.modificationDate] as? Date) ?? Date.distantPast
+        let cacheKey = "\(expanded)#\(sampleRate)"
+        if let entry = refAudioCache[cacheKey], entry.mtime == mtime {
+            Log.debug("参考音频命中缓存: \(expanded)")
+            return entry.audio
+        }
+
         // 磁盘 I/O 在后台执行，避免阻塞 actor
         let url = URL(fileURLWithPath: expanded)
         let (_, refAudio) = try await Task.detached(priority: .userInitiated) {
             try loadAudioArray(from: url, sampleRate: sampleRate)
         }.value
+        refAudioCache[cacheKey] = RefAudioEntry(mtime: mtime, audio: refAudio)
+        Log.debug("参考音频已缓存: \(expanded)")
         return refAudio
     }
 
