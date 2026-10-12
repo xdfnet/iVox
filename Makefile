@@ -1,3 +1,5 @@
+# iVox 的构建、安装与发布入口。各目标用途见 CLAUDE.md 的「编译」「发布流程」两节。
+
 .PHONY: all install update check check-tts init models voices assets build package uninstall run sign test version clean help
 
 SWIFT := xcrun --toolchain swift-latest swift
