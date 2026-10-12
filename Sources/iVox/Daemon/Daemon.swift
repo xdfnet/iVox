@@ -10,6 +10,9 @@ actor Daemon {
     private let queue: PlaybackQueue
     private let server = SocketServer()
     private let speechInput: SpeechInputService?
+    /// 键盘事件层：一个 tap 服务多个消费者（右⌘ 语音 + 各组热键）
+    private let keyTap = GlobalKeyTap()
+    private var translationCoordinator: TranslationCoordinator?
     private let mediaController: MediaController
     private var wechat: WeChatPlatform?
     private var claudeAsk: ClaudeAskService?
@@ -37,7 +40,8 @@ actor Daemon {
             config: siConfig,
             mediaController: mediaController,
             playbackQueue: queue,
-            asrEngine: asrEngine
+            asrEngine: asrEngine,
+            keyTap: keyTap
         )
 
         if let wc = config.wechat, wc.enabled {
@@ -76,6 +80,7 @@ actor Daemon {
             startMediaHTTPServer()
         }
         startModelLoading()
+        await setUpTranslation()
 
         // 启动微信轮询
         if let wechat {
@@ -133,13 +138,24 @@ actor Daemon {
             webUI = "error:Web 服务未监听"
         }
 
+        // 划词翻译：与语音输入共用同一套键盘监听（依赖同一权限）
+        let translationHealth: String
+        if !config.resolvedTranslation.enabled {
+            translationHealth = "off"
+        } else if keyTap.isMonitoring != true {
+            translationHealth = "error:键盘监听未运行"
+        } else {
+            translationHealth = "ok"
+        }
+
         return DaemonStatus(
             version: iVoxVersion,
             features: .init(
                 speechInput: speech,
                 wechat: wechatHealth,
                 mediaControl: mc.enabled ? "ok" : "off",
-                mediaHTTP: webUI
+                mediaHTTP: webUI,
+                translation: translationHealth
             ),
             permissions: .init(
                 microphone: mic,
@@ -189,6 +205,8 @@ actor Daemon {
         if config.speechInput?.enabled ?? SpeechInputConfig.default.enabled {
             speechInput?.start()
         }
+        // 键盘事件层与语音输入无关：热键（Cmd+D / Opt+Z…）即使语音关掉也该能用
+        keyTap.start()
         }
     }
 
@@ -214,6 +232,23 @@ actor Daemon {
     }
 
     /// 启动媒体控制 HTTP 服务器（提供 Web UI），端口由配置指定。
+    /// 装配划词翻译：建协调器，把热键接进键盘事件层。
+    private func setUpTranslation() async {
+        guard config.resolvedTranslation.enabled else {
+            Log.info("划词翻译未启用")
+            return
+        }
+        let coordinator = await MainActor.run {
+            TranslationCoordinator(config: config, queue: queue)
+        }
+        translationCoordinator = coordinator
+        keyTap.onHotKey = { hotKey, location in
+            Task { @MainActor in await coordinator.handle(hotKey: hotKey, at: location) }
+        }
+        let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
+        Log.info("划词翻译已装配（Cmd+D 划词，\(speak)）")
+    }
+
     private func startMediaHTTPServer() {
         let port = UInt16(config.resolvedMediaControl.resolvedHTTPServerPort)
         let httpServer = MediaHTTPServer(port: port) { [weak self] in

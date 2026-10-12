@@ -84,6 +84,7 @@ struct StatusCommand: ParsableCommand {
         print("  微信桥接    \(health(s.features.wechat))")
         print("  媒体控制    \(health(s.features.mediaControl))")
         print("  Web UI      \(health(s.features.mediaHTTP))")
+        print("  划词翻译    \(health(s.features.translation))")
         print()
         print("权限")
         print("  麦克风      \(micText(s.permissions.microphone))")

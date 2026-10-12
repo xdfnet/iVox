@@ -8,12 +8,10 @@ final class SpeechInputService: @unchecked Sendable {
     private let media: MediaController
     private let queue: PlaybackQueue
     private let recordDir: URL
-    private var thread: Thread?
-    private var eventTap: CFMachPort?
-    private var runLoopSource: CFRunLoopSource?
-    private var runLoop: CFRunLoop?
-    private var shouldStop = false
     private let asrEngine: ASREngine
+    /// 键盘事件层（由 Daemon 注入）：右⌘/右⌃ 的状态变化由它路由进来。
+    /// tap 不由本服务持有——它要同时给热键路由用，见 `HotKey/GlobalKeyTap.swift`。
+    private let keyTap: GlobalKeyTap
 
     private enum State {
         case idle
@@ -24,11 +22,12 @@ final class SpeechInputService: @unchecked Sendable {
     private let overlay = OverlayPanel()
     private var levelTask: Task<Void, Never>?
 
-    init(config: SpeechInputConfig, mediaController: MediaController, playbackQueue: PlaybackQueue, asrEngine: ASREngine) {
+    init(config: SpeechInputConfig, mediaController: MediaController, playbackQueue: PlaybackQueue, asrEngine: ASREngine, keyTap: GlobalKeyTap) {
         self.config = config
         self.media = mediaController
         self.queue = playbackQueue
         self.asrEngine = asrEngine
+        self.keyTap = keyTap
         self.recordDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/ivox/recordings")
     }
@@ -44,109 +43,27 @@ final class SpeechInputService: @unchecked Sendable {
             Log.info("语音输入已禁用")
             return
         }
-        let t = Thread { [weak self] in
-            self?.run()
+        keyTap.onModifier = { [weak self] _, isDown in
+            self?.handleModifierKey(isDown: isDown)
         }
-        t.name = "com.user.ivox.speechinput"
-        t.start()
-        stateQueue.sync {
-            shouldStop = false
-            thread = t
-        }
+        // 首次启动异步触发麦克风授权框，不阻塞事件线程；授权与否键盘监听都常驻
+        Task { _ = checkMicPermission() }
     }
 
     func stop() {
-        var loopToStop: CFRunLoop?
         stateQueue.sync {
-            shouldStop = true
-            if let eventTap {
-                CFMachPortInvalidate(eventTap)
-            }
-            eventTap = nil
-            runLoopSource = nil
-            loopToStop = runLoop
-            runLoop = nil
-            thread?.cancel()
-            thread = nil
             levelTask?.cancel()
             levelTask = nil
         }
         Task { @MainActor in overlay.dismiss() }
-        // 在事件线程自己的 runloop 上唤醒，让它退出 CFRunLoopRun
-        if let loopToStop {
-            CFRunLoopStop(loopToStop)
-        }
     }
 
-    /// 键盘监听（eventTap）是否真正在运行；等待权限时为 false
-    var isMonitoring: Bool { stateQueue.sync { eventTap != nil } }
-
-    // MARK: - Event loop
-
-    private func run() {
-        stateQueue.sync { runLoop = CFRunLoopGetCurrent() }
-        guard !isStopped else {
-            stateQueue.sync { runLoop = nil }
-            return
-        }
-
-        // eventTap 是键盘监听的硬前提（只监听 right⌘/right⌃ 的 flagsChanged），需要设备控制权限。
-        // 麦克风只在录音时才需要，缺失不应连坐拆掉键盘监听。
-        guard let tap = createEventTap() else {
-            waitForPermissions()
-            stateQueue.sync { runLoop = nil }
-            return
-        }
-
-        stateQueue.sync {
-            guard !shouldStop else { return }
-            eventTap = tap
-            runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
-            CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
-        }
-        Log.info("语音输入已启动 (right ⌘→说话→松开→粘贴并打断播报；打字/Esc/方向键不打断)")
-
-        // 首次启动异步触发麦克风授权框，不阻塞 runloop；授权与否键盘监听都常驻
-        Task { _ = checkMicPermission() }
-
-        CFRunLoopRun()
-        stateQueue.sync { runLoop = nil }
-    }
-
-    // MARK: - Event tap
-
-    private func createEventTap() -> CFMachPort? {
-        // 只监听修饰键（right⌘/right⌃ 的按下与松开），不再劫持任何普通键：
-        // 打字、Esc、方向键原样透传。打断播报的唯一键盘途径就是「开口说话」。
-        let mask = (1 << CGEventType.flagsChanged.rawValue)
-
-        let callback: CGEventTapCallBack = { _, type, event, refcon in
-            guard let refcon else { return Unmanaged.passUnretained(event) }
-            let service = Unmanaged<SpeechInputService>.fromOpaque(refcon).takeUnretainedValue()
-            guard !service.isStopped else { return Unmanaged.passUnretained(event) }
-            let keycode = event.getIntegerValueField(.keyboardEventKeycode)
-            if type == .flagsChanged, keycode == 0x36 || keycode == 0x3E {
-                // right ⌘ (0x36) 或 right ⌃ (0x3E) 均可触发语音输入
-                let isDown = event.flags.contains(keycode == 0x36 ? .maskCommand : .maskControl)
-                service.handleKey(isDown: isDown)
-            }
-            return Unmanaged.passUnretained(event)
-        }
-
-        let selfPtr = Unmanaged.passUnretained(self).toOpaque()
-        return CGEvent.tapCreate(
-            tap: .cgSessionEventTap,
-            place: .headInsertEventTap,
-            options: CGEventTapOptions(rawValue: 0)!,
-            eventsOfInterest: CGEventMask(mask),
-            callback: callback,
-            userInfo: selfPtr
-        )
-    }
+    /// 键盘监听是否真正在运行；等待权限时为 false
+    var isMonitoring: Bool { keyTap.isMonitoring }
 
     // MARK: - Key handling
 
-    private func handleKey(isDown: Bool) {
+    private func handleModifierKey(isDown: Bool) {
         if isDown {
             // 按下 right ⌘/⌃：检查状态，只有 idle 才能开始录音
             let shouldStart: Bool = stateQueue.sync {
@@ -349,10 +266,6 @@ final class SpeechInputService: @unchecked Sendable {
 
     // MARK: - Permissions
 
-    private var isStopped: Bool {
-        stateQueue.sync { shouldStop }
-    }
-
     /// 检查麦克风权限，notDetermined 时阻塞等待用户选择
     private func checkMicPermission() -> Bool {
         switch AVCaptureDevice.authorizationStatus(for: .audio) {
@@ -386,21 +299,4 @@ final class SpeechInputService: @unchecked Sendable {
         }
     }
 
-    /// 轮询等待设备控制权限就绪，然后自动重启
-    private func waitForPermissions() {
-        while !isStopped {
-            Thread.sleep(forTimeInterval: 5)
-            let options = [kAXTrustedCheckOptionPrompt.takeRetainedValue(): true] as CFDictionary
-            if AXIsProcessTrustedWithOptions(options) {
-                Log.info("语音输入: 设备控制权限已授权")
-                break
-            }
-        }
-        guard !isStopped else {
-            Log.info("语音输入: 已停止")
-            return
-        }
-        Log.info("语音输入: 权限已就绪，重新启动")
-        start()
-    }
 }

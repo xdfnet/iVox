@@ -27,26 +27,41 @@ final class TranslationCoordinator {
 
     var isEnabled: Bool { translateConfig.enabled }
 
+    /// 热键分派入口（由 `GlobalKeyTap` 触发）。
+    func handle(hotKey: GlobalKeyTap.HotKey, at location: CGPoint) async {
+        switch hotKey {
+        case .translate:
+            await translateSelection(mouseLocation: location)
+        case .openTerminal, .openTerminalClaude, .openTerminalQwen, .openTerminalCodex, .copyPath:
+            Log.debug("Finder 热键尚未接入: \(hotKey)")
+        }
+    }
+
     /// 翻译当前选中文本：浮窗显示译文，按配置决定是否朗读。
     func translateSelection(mouseLocation: CGPoint) async {
         guard translateConfig.enabled, !inFlight else { return }
         inFlight = true
         defer { inFlight = false }
+        Log.info("划词翻译: 触发")
 
-        guard let raw = await ClipboardReader.copyAndRead(),
-              let text = validateSelectionText(raw) else {
+        let raw = await ClipboardReader.copyAndRead()
+        guard let raw, let text = validateSelectionText(raw) else {
+            Log.info("划词翻译: 没有取到可用文本（读到 \(raw.map { "\($0.count) 字" } ?? "nil")）")
             panel.show(text: "没有取到选中文本", near: mouseLocation, timeoutSeconds: 3)
             return
         }
+        Log.info("划词翻译: 取到 \(text.count) 字，开始翻译")
 
         switch await service.translate(text) {
         case .success(let translated):
+            Log.info("划词翻译: 完成 → \(translated.prefix(40))")
             panel.show(text: translated, near: mouseLocation,
                        timeoutSeconds: translateConfig.panelTimeoutSeconds)
             if translateConfig.speechEnabled {
                 await speak(translated)
             }
         case .failed(_, let error):
+            Log.warn("划词翻译: 失败 \(error)")
             panel.show(text: error, near: mouseLocation,
                        timeoutSeconds: translateConfig.panelTimeoutSeconds)
         }
