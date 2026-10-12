@@ -72,6 +72,22 @@ actor PlaybackQueue {
         await pumpOrResume()   // 全局停止后不应把音乐卡在暂停
     }
 
+    /// 用户主动要求开口（如 Cmd+D 念译文）：作废全部流式轮 + 取消在播/清队列，然后立刻播这份。
+    ///
+    /// 与 `enqueue(_:turnID:)` 无 turnID 路径的「只排队」语义**相反**——那条是 agent 自动汇报，
+    /// 不该抢麦（否则两个后台会话收尾会互相掐掉对方内容）；这条是用户自己按的，必须打断当前播报。
+    /// 做成**一个原子方法**而不在调用方 `cancelAll()` + `enqueue()` 两步拼：actor 可重入，
+    /// 两步之间会插进别的消息。
+    func speakUserInitiated(_ newJobs: [PlaybackJob]) async {
+        guard !newJobs.isEmpty else { return }
+        buryAllTurns()
+        await bargeIn()
+        await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
+        jobs.append(contentsOf: newJobs)
+        signalJobs()
+        if currentTask == nil { startPipeline() }
+    }
+
     /// 空闲时恢复音乐（由外部调用，如语音输入结束后）
     func resumeIfIdle() async {
         guard jobs.isEmpty, currentTask == nil else { return }
