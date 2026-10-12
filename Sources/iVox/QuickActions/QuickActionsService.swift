@@ -157,8 +157,4 @@ final class QuickActionsService {
         }
         return result.stringValue
     }
-
-    private func shellQuote(_ value: String) -> String {
-        "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
-    }
 }
