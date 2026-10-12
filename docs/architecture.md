@@ -285,16 +285,16 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-每个 hook 类工具挂两个事件：**UserPromptSubmit → `hook.sh stop`**（提交即打断旧播报，调 `ivox quiet`）与 **Stop → `hook.sh <source>`**（回复完成，`ivox speak` 念新回复）。
+每个 hook 类工具挂两个事件：**UserPromptSubmit → `hook.sh interrupt`**（提交即打断旧播报，调 `ivox quiet`）与 **Stop → `hook.sh <source>`**（回复完成，`ivox speak` 念新回复）。
 
 | 工具 | 配置/挂载 | 提交即打断 | 回复播报 |
 |------|----------|-----------|----------|
-| Claude Code | `~/.claude/settings.json` | UserPromptSubmit → hook.sh stop | Stop → hook.sh claude |
-| Codex | `~/.codex/hooks.json` | UserPromptSubmit → hook.sh stop | Stop → hook.sh codex |
-| Qwen Code | `~/.qwen/settings.json` | UserPromptSubmit → hook.sh stop | Stop → hook.sh qwen |
+| Claude Code | `~/.claude/settings.json` | UserPromptSubmit → hook.sh interrupt | Stop → hook.sh claude |
+| Codex | `~/.codex/hooks.json` | UserPromptSubmit → hook.sh interrupt | Stop → hook.sh codex |
+| Qwen Code | `~/.qwen/settings.json` | UserPromptSubmit → hook.sh interrupt | Stop → hook.sh qwen |
 | DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | 新 turn `start` 帧自动 bargeIn | `agent/assistant-stream` 逐 text-delta 流式；socket 不可用时 turn-stopping 退回 hook.sh（内置桥接 Stop payload 无文本） |
-| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_start` 用户消息即发停止哨兵 | `message_update` 流式（`agent_settled` 兜底） |
+| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_start` 用户消息即 `{cancel}` 旧轮 + 新轮首帧（beginTurn 的 bargeIn 清场） | `message_update` 流式（`agent_settled` 兜底） |
 
-由 `install-hooks.sh` 统一安装（已存在则跳过）。`hook.sh` 两种模式：`stop` 只调 `ivox quiet` 打断；`<source>` 提取回复文本调 `ivox speak`（TTS 由各工具这一层统一处理）。
+由 `install-hooks.sh` 统一安装（已存在则跳过；`UserPromptSubmit` 的旧参数名 `stop` 会被就地改写为 `interrupt`）。`hook.sh` 两种模式：`interrupt` 只调 `ivox quiet` 打断；`<source>` 提取回复文本调 `ivox speak`（TTS 由各工具这一层统一处理）。
 
 **集成资产随发布包自包含**：release tarball 除 `ivox` 外含整个 `integrations/`（含 `install-hooks.sh`），安装/升级时解包到权威源 `~/.config/ivox/integrations/`，再由分发器幂等铺到各 agent 位置。同步只发生在三个显式时机：`make update`（runtime.sh deploy-bin）、`ivox upgrade`（UpgradeCommand 解包后 Process 调分发器）、`install-binary.sh`（curl|bash 首次安装也补齐集成）；守护进程启动不自动同步。分发器按自身位置探测素材源：脚本在 `integrations/` 内（部署态）用同级目录，在 `scripts/`（源码态）用 `../integrations`。

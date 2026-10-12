@@ -6,9 +6,12 @@
 [[ "${IVOX_SKIP:-}" == "1" ]] && exit 0
 [[ "${CLAUDE_SMART_INTERNAL:-}" == "1" ]] && exit 0
 
-# stop 模式：挂在 UserPromptSubmit，用户一提交就打断当前播报（不读文本、不发声）。
+# interrupt 模式：挂在 UserPromptSubmit，用户一提交就打断当前播报（不读文本、不发声）。
 # stdin 的 hook payload 直接丢弃。
-if [[ "${1:-}" == "stop" ]]; then
+# `stop` 是历史参数名（曾与 Stop 事件同名，极易混淆）：已装配置由 install-hooks.sh 改写为
+# interrupt，此处保留兼容——漏改的环境若把 "stop" 当来源，会走下面的普通路径把用户打的
+# prompt 当回复念出来。
+if [[ "${1:-}" == "interrupt" || "${1:-}" == "stop" ]]; then
   cat >/dev/null 2>&1
   ivox quiet 2>/dev/null
   exit 0

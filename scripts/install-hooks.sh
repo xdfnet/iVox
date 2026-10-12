@@ -23,7 +23,7 @@ fi
 
 # ── 公共函数：用 jq 或 python3 安全写入 hook 配置 ──
 # 用法：write_hook <config> <source> <timeout> [event]
-#   event 默认 Stop（念回复）；UserPromptSubmit 用固定命令 hook.sh stop（打断旧播报）
+#   event 默认 Stop（念回复）；UserPromptSubmit 用固定命令 hook.sh interrupt（打断旧播报）
 write_hook() {
   local config_path="$1"
   local tool_name="$2"
@@ -31,7 +31,7 @@ write_hook() {
   local event="${4:-Stop}"
   local cmd
   if [[ "$event" == "UserPromptSubmit" ]]; then
-    cmd="bash $HOOK_SH stop"
+    cmd="bash $HOOK_SH interrupt"
   else
     cmd="bash $HOOK_SH $tool_name"
   fi
@@ -58,11 +58,16 @@ with open(path, 'w') as f:
   fi
 }
 
-# UserPromptSubmit 打断 hook（用户一提交就停止旧播报）；已挂则跳过
+# UserPromptSubmit 打断 hook（用户一提交就停止旧播报）。
+# 历史参数名 `stop` 与 Stop 事件同名易混，已统一改叫 interrupt：发现旧配置就地改写，
+# 已挂 interrupt 则跳过，都没有才新增。
 write_prompt_hook() {
   local config_path="$1"
   local timeout="$2"
   if grep -q 'hook.sh stop' "$config_path" 2>/dev/null; then
+    sed -i '' 's|hook\.sh stop|hook.sh interrupt|g' "$config_path"
+    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断：stop → interrupt"
+  elif grep -q 'hook.sh interrupt' "$config_path" 2>/dev/null; then
     echo "[i] $config_path 的 UserPromptSubmit 打断已存在"
   elif write_hook "$config_path" "_" "$timeout" "UserPromptSubmit"; then
     echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断"
