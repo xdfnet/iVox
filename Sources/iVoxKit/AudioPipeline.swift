@@ -1,5 +1,7 @@
 import Foundation
 
+// 音频格式转换（重采样等）。
+
 /// 2x 上采样 (线性插值)，24k→48k
 public func upsample2x(_ samples: [Float]) -> [Float] {
     let n = samples.count

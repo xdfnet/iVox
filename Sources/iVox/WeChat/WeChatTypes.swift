@@ -1,5 +1,6 @@
 import Foundation
 
+// 微信 API 的请求 / 响应类型。
 // MARK: - 常量
 
 let kChannelVersion = "ivox-weixin/1.0"

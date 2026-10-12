@@ -1,3 +1,4 @@
+// 语音输入的状态浮层（录音波形 / 识别中 / 完成）。
 // Based on OpenWritr (https://github.com/trsdn/OpenWritr), MIT License
 
 import Cocoa

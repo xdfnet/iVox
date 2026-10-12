@@ -1,5 +1,6 @@
 import Foundation
 
+// 划词翻译的配置模型与结果类型。
 // MARK: - 翻译结果
 
 public enum TranslationResult: Sendable, Equatable {

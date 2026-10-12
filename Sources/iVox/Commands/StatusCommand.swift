@@ -2,7 +2,8 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
-/// `ivox status`：查 daemon 状态并渲染成中文体检报告（六个能力域 + 权限 + 配置）。
+// CLI 子命令 ivox status：状态体检报告。
+
 struct StatusCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "status",

@@ -1,6 +1,7 @@
 import Foundation
 import iVoxKit
 
+// 微信桥平台层：长轮询收消息、去重、转发回复。
 // MARK: - 微信消息处理回调
 
 typealias WeChatMessageHandler = @Sendable (IncomingMessage) async -> Void

@@ -1,6 +1,8 @@
 import Foundation
 import Network
 
+// 媒体控制 HTTP 服务的响应拼装。
+
 /// HTTP 响应处理工具类
 enum HTTPResponseHandler {
 

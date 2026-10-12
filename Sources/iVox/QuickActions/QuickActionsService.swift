@@ -3,6 +3,8 @@ import CoreGraphics
 import Foundation
 import iVoxKit
 
+// 快速操作：Finder 与终端的组合键。
+
 /// QuickActions —— 从 Finder 当前目录出发做一件事：开终端、拉起编码工具、复制路径。
 ///
 /// 对应五个热键：

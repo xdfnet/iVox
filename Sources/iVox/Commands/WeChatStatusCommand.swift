@@ -2,6 +2,7 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
+// CLI 子命令 ivox wechat status：查看微信桥状态。
 // MARK: - ivox wechat status — 微信状态
 
 struct WeChatStatusCommand: ParsableCommand {

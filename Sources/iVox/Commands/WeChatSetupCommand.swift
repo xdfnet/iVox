@@ -3,6 +3,7 @@ import Cocoa
 import Foundation
 import iVoxKit
 
+// CLI 子命令 ivox wechat setup：扫码登录 / 配置 Token。
 // MARK: - ivox wechat setup — 微信扫码登录 / 配置 Token
 
 struct WeChatSetupCommand: AsyncParsableCommand {

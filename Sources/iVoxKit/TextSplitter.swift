@@ -1,5 +1,7 @@
 import Foundation
 
+// 切句：按句末边界合成 ≤80 字的播报块。
+
 /// 播报分块参数
 public enum PlaybackChunking {
     /// 单个播报分块上限（字符）。太小会频繁起停合成，太大则首句开播延迟变大

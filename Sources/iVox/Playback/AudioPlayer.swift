@@ -2,6 +2,8 @@ import AVFoundation
 import Foundation
 import iVoxKit
 
+// 音频播放：常驻 AVAudioEngine + 连续 scheduleBuffer。
+
 /// 常驻播放管道：整条播报（跨多个分块/句子）复用一条 AVAudioPlayerNode，
 /// 分块连续 `scheduleBuffer` 排队、设备从不逐句重启（对齐 ai-stack 的单个 OutputStream）。
 /// 背压靠已排队未播放帧数的高低水位：生产者（TTS 合成）始终提前排队，排满高水位才等待，

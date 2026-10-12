@@ -1,6 +1,8 @@
 import Darwin
 import Foundation
 
+// AppPaths 与 socket 客户端。
+
 /// 常用路径（HOME 优先取环境变量，HOME 未设时退回 NSHomeDirectory，避免波浪号展开失败）
 public enum AppPaths {
     public static var configDir: String { expandTilde("~/.config/ivox") }

@@ -1,5 +1,6 @@
 import Foundation
 
+// config.json 的模型定义与读写校验。
 // MARK: - Codable 模型
 
 public struct ModelConfig: Codable, Sendable {

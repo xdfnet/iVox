@@ -3,6 +3,8 @@ import CoreGraphics
 import Foundation
 import iVoxKit
 
+// 划词翻译的链路编排。
+
 /// 划词翻译的编排者：把「模拟 Cmd+C → 读剪贴板 → 翻译 → 浮窗 + 朗读」串起来。
 ///
 /// 两个入口：

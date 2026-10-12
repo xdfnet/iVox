@@ -2,7 +2,8 @@ import Darwin
 import Foundation
 import iVoxKit
 
-/// Unix domain socket 服务端：bind / listen / accept，把每条连接交给 ConnectionHandler。
+// Unix domain socket 服务端：监听 / accept / 对端校验。
+
 actor SocketServer {
     private var socketFD: Int32 = -1
     private var source: DispatchSourceRead?

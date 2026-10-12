@@ -1,5 +1,7 @@
 import Foundation
 
+// 选中文本的清洗与校验。
+
 /// 清理从剪贴板取到的选中文本：去竖线噪声，并把任意连续空白（**含换行**）折叠成单个空格。
 ///
 /// 基于 iDict `ClipboardManager.cleanClipboardText`，但分隔符由 `.whitespaces` 换成

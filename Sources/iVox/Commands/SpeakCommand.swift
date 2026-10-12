@@ -2,7 +2,8 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
-/// `ivox speak`：经 socket 让 daemon 播报一段文本。
+// CLI 子命令 ivox speak：播报一段文本。
+
 struct SpeakCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "speak",

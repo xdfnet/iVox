@@ -1,7 +1,8 @@
 import ArgumentParser
 import Foundation
 
-/// `ivox version`：打印版本号。
+// CLI 子命令 ivox version：打印版本号。
+
 struct VersionCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "version",

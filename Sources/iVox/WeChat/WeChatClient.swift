@@ -1,5 +1,6 @@
 import Foundation
 
+// 微信 ilink HTTP API 客户端（登录 / 收发消息）。
 // MARK: - iW 微信 ilink HTTP API 客户端
 
 actor WeChatClient {

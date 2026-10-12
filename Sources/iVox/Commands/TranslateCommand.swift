@@ -3,6 +3,8 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
+// CLI 子命令 ivox translate：划词翻译。
+
 /// 划词翻译命令行。
 ///
 /// 纯文本路径**不依赖 daemon**（直接调 `TranslationService`），所以它是整条链路的可验证接缝：

@@ -2,7 +2,8 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
-/// `ivox restart`：nohup 后台拉起守护进程（`ivox on` 也转发到这里）。
+// CLI 子命令 ivox restart：后台拉起守护进程。
+
 struct RestartCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "restart",

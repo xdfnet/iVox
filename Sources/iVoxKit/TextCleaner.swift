@@ -1,6 +1,7 @@
 import Foundation
 import Markdown
 
+// 文本降噪：Markdown AST 去代码块 + 行内噪音 / emoji（喂给 TTS）。
 // MARK: - 公开 API
 
 /// Markdown → 纯文本：遍历 AST 提取 Text 节点，块级元素间加空格分隔，TTS 自行处理停顿。

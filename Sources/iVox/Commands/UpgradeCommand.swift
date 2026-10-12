@@ -2,6 +2,8 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
+// CLI 子命令 ivox upgrade：从 GitHub Release 自升级。
+
 /// 检查 GitHub 最新 release 并自动升级：下载适配 macos-arm64 的 tarball →
 /// 停守护进程 → 备份旧版 → 解包替换 → ad-hoc 重签 → （原本在运行则）重启。
 struct UpgradeCommand: AsyncParsableCommand {

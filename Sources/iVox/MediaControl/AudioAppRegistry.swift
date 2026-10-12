@@ -1,6 +1,7 @@
 import Foundation
 
-/// 受支持应用的注册表（硬编码路径 + Bundle ID）
+// 受支持的音乐 App 注册表（抖音 / 汽水音乐）。
+
 enum AudioAppRegistry {
     struct AppInfo: Sendable {
         let displayName: String

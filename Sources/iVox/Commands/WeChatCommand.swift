@@ -1,7 +1,8 @@
 import ArgumentParser
 import Foundation
 
-/// `ivox wechat`：微信桥的子命令组（`setup` 扫码登录 / `status` 查状态）。
+// CLI 子命令 ivox wechat：微信桥管理。
+
 struct WeChatCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "wechat",

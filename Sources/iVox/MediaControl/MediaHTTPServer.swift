@@ -3,6 +3,7 @@ import Network
 import os
 import iVoxKit
 
+// 媒体控制的 Web 服务：静态页 + /api 动作 + /health 探针。
 // MARK: - HTTP 服务错误
 
 enum MediaHTTPServerError: LocalizedError {

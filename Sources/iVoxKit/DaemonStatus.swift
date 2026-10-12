@@ -1,5 +1,7 @@
 import Foundation
 
+// {type:status} 的返回体。
+
 /// 守护进程状态快照（ivox status 经 socket 查询）
 public struct DaemonStatus: Codable, Sendable {
     /// 运行中 daemon 的版本号

@@ -1,6 +1,7 @@
 import Foundation
 import iVoxKit
 
+// 常驻 claude 子进程（stdio NDJSON），微信桥的问答后端。
 // MARK: - 原生 Claude Agent（Swift 直连 claude，stdio NDJSON）
 
 actor ClaudeAskService {

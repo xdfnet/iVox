@@ -2,6 +2,8 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
+// CLI 子命令 ivox quiet：打断当前播报。
+
 /// 停止当前及排队中的播报（不退出守护进程）。
 /// 挂在 UserPromptSubmit：用户一提交新 prompt 就立刻打断上一轮播报，
 /// 对齐真人对话「你一开口，对方就停」；新回复完成后由 Stop hook 正常播报。

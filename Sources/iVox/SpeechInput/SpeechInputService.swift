@@ -3,6 +3,8 @@ import Foundation
 import AVFoundation
 import iVoxKit
 
+// 语音输入：右 ⌘ / 右 ⌃ 录音 → ASR → 粘贴。
+
 /// 语音输入：按住右 ⌘ / 右 ⌃ 录音 → ASR → 粘贴到光标处。
 /// 键盘事件由 `HotKey/GlobalKeyTap` 送来（本服务不再自建 CGEvent tap）。
 final class SpeechInputService: @unchecked Sendable {

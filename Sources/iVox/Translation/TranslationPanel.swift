@@ -1,6 +1,8 @@
 import AppKit
 import iVoxKit
 
+// 鼠标旁的翻译结果浮窗。
+
 /// 鼠标旁的翻译结果浮窗。
 ///
 /// 范本是 `SpeechInput/OverlayPanel.swift`（已验证在无 `NSApplication` 事件循环的

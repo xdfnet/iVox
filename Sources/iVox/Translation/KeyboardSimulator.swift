@@ -2,6 +2,8 @@ import ApplicationServices
 import CoreGraphics
 import Foundation
 
+// 模拟按键（Cmd+C）。
+
 /// 模拟 Cmd+C（取当前选中文本）。
 /// 搬自 iDict `KeyboardSimulator.swift`，差异：时间常量内联、错误类型精简、
 /// 不再自带权限检查（由调用方 `ClipboardReader` 统一判断与提示）。

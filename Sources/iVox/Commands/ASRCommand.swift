@@ -2,7 +2,8 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
-/// `ivox listen`：把 WAV 交给 daemon 做语音识别。
+// CLI 子命令 ivox listen：语音识别。
+
 struct ASRCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "listen",

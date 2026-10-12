@@ -2,7 +2,8 @@ import Darwin
 import Foundation
 import iVoxKit
 
-/// Unix socket 单连接处理：按首行 header 分发到 TTS / 流式 / ASR / 状态等分支。
+// Unix socket 单连接处理：解析协议并分发。
+
 actor ConnectionHandler {
     private let queue: PlaybackQueue
     private let config: Config

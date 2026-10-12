@@ -1,6 +1,7 @@
 import CFNetwork
 import Foundation
 
+// 翻译服务：Google 双通道容灾 + OpenAI 兼容，直连失败走代理。
 // MARK: - 翻译服务（actor，按 provider 分派）
 
 /// 划词翻译入口。搬自 iDict `translationservice.swift`，改动：

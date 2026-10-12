@@ -3,6 +3,7 @@ import AppKit
 import Foundation
 import iVoxKit
 
+// 媒体控制：MediaRemote / CGEvent 控制系统媒体（Web 控制台也走它）。
 // MARK: - MediaRemote 动态桥接
 
 /// 动态加载 MediaRemote 私有框架，实现精确的播放控制

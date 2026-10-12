@@ -3,6 +3,8 @@ import CoreGraphics
 import Foundation
 import iVoxKit
 
+// 全局键盘事件层：一个 tap，按归属路由给各消费者。
+
 /// 全局键盘事件层。
 ///
 /// 独占一个 CGEvent tap 与专用 run loop，按事件类型 / keyCode 把事件**路由**出去；

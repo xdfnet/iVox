@@ -2,6 +2,8 @@ import AppKit
 import Foundation
 import iVoxKit
 
+// 取选中文本：模拟 Cmd+C 并校验剪贴板真的变了。
+
 /// 「模拟 Cmd+C → 等剪贴板更新 → 读出选中文本」。
 ///
 /// 与 iDict 的关键差异：**加了 `changeCount` 校验**。iDict 只 `sleep(50ms)` 就盲读，

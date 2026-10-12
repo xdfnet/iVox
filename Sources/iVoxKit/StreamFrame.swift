@@ -1,5 +1,7 @@
 import Foundation
 
+// 长度帧协议（L<n> + 正文 + end）。
+
 /// TTS「合成返回 PCM」分块帧编码。
 /// 格式：`[4B 小端 UInt32 长度 N][N 字节 48kHz Int16 mono PCM]`，合成结束写 `end`（4 个 0）。
 /// 放 iVoxKit 以便 iVoxTests 直接单测编解码。

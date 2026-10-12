@@ -1,5 +1,7 @@
 import CoreGraphics
 
+// 浮窗锚定几何（纯函数）。
+
 /// 浮窗锚定几何：纯计算，不碰 NSScreen / NSEvent，便于单测。
 ///
 /// 与 iDict `WindowPositionCalculator` 的差异：原实现把鼠标换成「屏幕内坐标」再与
