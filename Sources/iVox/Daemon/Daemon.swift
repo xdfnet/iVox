@@ -164,7 +164,8 @@ actor Daemon {
                 playback: playbackHealth,
                 speechInput: speech,
                 wechat: wechatHealth,
-                mediaControl: mc.enabled ? "ok" : "off",
+                // 媒体控制的入口就是 Web 服务，健康度即它
+                mediaControl: mc.enabled ? webUI : "off",
                 mediaHTTP: webUI,
                 translation: translationHealth,
                 quickActions: quickActionsHealth
