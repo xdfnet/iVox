@@ -31,9 +31,14 @@ final class TranslationPanel {
     /// 与 `NSPanel` 用**左下原点**；混着算弹窗会跑到屏幕另一头（踩过）。
     func show(text: String, timeoutSeconds: Double) {
         let view = makeContentView(text: text)
+        let size = view.frame.size
         let panel = ensurePanel()
+        // 顺序要紧：先把面板调到内容尺寸，**再**装 contentView。
+        // 反过来 `panel.contentView = view` 会按面板当时的 contentRect（初始 100×40）
+        // 重设 view 的 frame，算好的尺寸就丢了（踩过：弹窗永远是那个初始小条）。
+        panel.setContentSize(size)
+        view.frame = NSRect(origin: .zero, size: size)
         panel.contentView = view
-        panel.setContentSize(view.frame.size)
 
         let anchor = NSEvent.mouseLocation
         if let screen = NSScreen.screens.first(where: { $0.frame.contains(anchor) }) ?? NSScreen.main {
@@ -44,6 +49,7 @@ final class TranslationPanel {
             ))
         }
         panel.orderFrontRegardless()
+        Log.debug("划词翻译: 浮窗 \(Int(size.width))×\(Int(size.height)) @ (\(Int(panel.frame.minX)),\(Int(panel.frame.minY)))")
         scheduleHide(after: timeoutSeconds)
     }
 
