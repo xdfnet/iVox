@@ -9,17 +9,19 @@
 </p>
 
 <p align="center">
-  <b>macOS 本地语音助手</b> — TTS 播报 · ASR 语音输入 · 微信消息桥接<br>
-  全本地 MLX 推理，不依赖任何云端 API
+  <b>macOS 本地语音助手</b> — TTS 播报 · ASR 语音输入 · 划词翻译 · 微信消息桥接<br>
+  语音全本地 MLX 推理；划词翻译默认 Google，也可换任意 OpenAI 兼容服务
 </p>
 
 ---
 
 ## 功能
 
-| 🗣️ AI 自动播报 | 🎙️ 语音输入 | 💬 微信桥接 |
-|:---:|:---:|:---:|
-| Claude Code / Codex / pi / dsh 回复自动朗读<br>边生成边逐句播报，跳过代码和噪音<br>提交新消息或开口（右 ⌘）即打断，打字不影响 | 按住右 ⌘ 或右 ⌃ 说话，松开识别粘贴<br>屏幕浮窗实时显示录音波形与状态<br>纯语音输入，不碰键盘 | 微信消息→常驻 Claude Agent<br>后台任务跨消息持续运行<br>AI 回复自动转发回微信 |
+| 🗣️ AI 自动播报 | 🎙️ 语音输入 | 📖 划词翻译 | 💬 微信桥接 |
+|:---:|:---:|:---:|:---:|
+| Claude Code / Codex / pi / dsh 回复自动朗读<br>边生成边逐句播报，跳过代码和噪音<br>提交新消息或开口（右 ⌘）即打断，打字不影响 | 按住右 ⌘ 或右 ⌃ 说话，松开识别粘贴<br>屏幕浮窗实时显示录音波形与状态<br>纯语音输入，不碰键盘 | 选中文本按 `Cmd+D`，鼠标旁浮窗出译文<br>可同时朗读，默认 Google 翻译<br>直连不通自动走兜底代理 | 微信消息→常驻 Claude Agent<br>后台任务跨消息持续运行<br>AI 回复自动转发回微信 |
+
+**QuickActions**（Finder 里）：`Opt+Z` 在当前目录开终端、`Opt+A` / `Opt+Q` / `Opt+W` 开终端并直接跑 `claude` / `qwen` / `codex`、`Opt+C` 复制选中项路径。
 
 播报前暂停音乐，播完自动恢复。一条命令安装，装完即运行（不注册登录自启，用 `ivox on/off` 手动管理）。
 
@@ -37,6 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 
 ```bash
 ivox speak "你好"           # 手动播报
+ivox translate "hello"      # 划词翻译（--selection 取当前选中文本，--json 结构化输出）
 ivox voice list             # 列出音色
 ivox status                 # 版本、各功能健康状态、权限、模型/音色文件体检
 ivox listen -f 录音.wav     # 语音识别
@@ -93,6 +96,9 @@ make clean     # 清除 .build
 | `models.ttsPath` / `models.asrPath` | 本地 MLX 模型路径 |
 | `tts.streamingInterval` | 流式输出间隔，默认 0.08s |
 | `speechInput.enabled` | 语音输入开关 |
+| `translation.provider` | 划词翻译服务：`google`（默认，免配置）/ `openai`（OpenAI 兼容） |
+| `translation.speechEnabled` | 划词翻译后是否朗读译文 |
+| `translation.proxyURL` | 直连不通时的兜底代理，如 `http://192.168.100.6:10808`（只在直连失败后才用） |
 | `mediaControl.httpServerEnabled` | Web UI（端口 8888） |
 | `wechat.token` | 微信 ilink bot token |
 | `voice.xx.refAudio` | 音色参考音频路径 |
@@ -107,7 +113,10 @@ pi 扩展（逐句流式）──────────┴→ Unix Socket → 
                                             ├── TTSEngine (本地 MLX)
                                             ├── WeChatPlatform (ilink 长轮询)
                                             │       └─ 常驻 Claude Agent (Swift 直连 claude)
-                                            ├── SpeechInput (右 ⌘ / 右 ⌃ + ASR)
+                                            ├── GlobalKeyTap (键盘事件层：一个 tap，按归属路由)
+                                            │       ├─ SpeechInput  (右 ⌘ / 右 ⌃ + ASR)
+                                            │       ├─ Translation  (Cmd+D 划词翻译 + 浮窗)
+                                            │       └─ QuickActions (Opt+Z/A/Q/W/C)
                                             └── MediaHTTPServer (Web UI)
 ```
 
@@ -120,8 +129,12 @@ pi 扩展（逐句流式）──────────┴→ Unix Socket → 
 | 权限 | 用途 | 是否必需 |
 |------|------|:--------:|
 | **麦克风** | 语音输入（按住右 ⌘ / 右 ⌃ 说话 → ASR） | 不用语音输入可不给 |
-| **设备控制与数据访问** | ① 监听 ⌘ 键 ② 剪贴板粘贴注入 ③ 媒体控制 | **是** |
+| **设备控制与数据访问** | ① 监听修饰键 ② 剪贴板粘贴注入 ③ 媒体控制 | **是** |
+| **输入监控** | 划词翻译的 `Cmd+D` 等**普通键**热键 | 要划词翻译才需要 |
+| **自动化（Finder）** | QuickActions 读取 Finder 当前目录 / 选中项 | 只用 Opt+Z/A/Q/W/C 才需要 |
 | **代码签名** | ad-hoc 自签，每次重建哈希变化 → TCC 权限失效 | 部署后重新勾选 |
+
+> **划词翻译要「输入监控」**：只给"设备控制与数据访问"时，右 ⌘ 语音照常，但 `Cmd+D` 毫无反应——tap 明明创建成功，却收不到普通键，最难排查。`ivox status` 的「划词翻译」一行会如实反映。
 
 设备控制与数据访问路径：系统设置 → 隐私与安全性 → 设备控制与数据访问 → 勾选 `ivox`。
 
