@@ -160,6 +160,7 @@ public struct Config: Codable, Sendable {
     public var voices: [VoiceInfo]
     public var speechInput: SpeechInputConfig?
     public var wechat: WeChatConfig?
+    public var translation: TranslationConfig? = nil
     public var configBaseDir: String?
 
     public var voiceByID: [String: VoiceInfo] {
@@ -175,6 +176,7 @@ public struct Config: Codable, Sendable {
     public var resolvedTTS: TTSConfig { tts ?? .default }
     public var resolvedPlayback: PlaybackConfig { playback ?? .default }
     public var resolvedMediaControl: MediaControlConfig { mediaControl ?? .default }
+    public var resolvedTranslation: TranslationConfig { translation ?? .default }
 
     private enum CodingKeys: String, CodingKey {
         case models
@@ -183,6 +185,7 @@ public struct Config: Codable, Sendable {
         case mediaControl
         case speechInput
         case wechat
+        case translation
         case defaultVoice
         case sourceVoices
         case voices
@@ -247,6 +250,18 @@ public func validate(_ config: Config) throws {
     for (source, id) in config.sourceVoices {
         if config.voice(id: id) == nil {
             throw ConfigError.invalidConfig("sourceVoices.\(source) 不存在: \(id)")
+        }
+    }
+    // 翻译配置缺失或未启用都不算错（划词翻译可整体关掉）
+    if let t = config.translation, t.enabled {
+        if t.provider == .openai, URL(string: t.baseURL) == nil {
+            throw ConfigError.invalidConfig("translation.baseURL 无效")
+        }
+        if t.timeoutSeconds <= 0 {
+            throw ConfigError.invalidConfig("translation.timeoutSeconds 必须大于 0")
+        }
+        if t.panelTimeoutSeconds < 0 {
+            throw ConfigError.invalidConfig("translation.panelTimeoutSeconds 不能为负")
         }
     }
 }

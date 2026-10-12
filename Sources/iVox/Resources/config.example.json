@@ -34,6 +34,18 @@
     "autoEnter": true,
     "maxRecordingSeconds": 30
   },
+  "translation": {
+    "enabled": true,
+    "provider": "google",
+    "baseURL": "https://api.openai.com/v1",
+    "apiKey": "",
+    "model": "gpt-5-mini",
+    "speechEnabled": true,
+    "speechVoice": null,
+    "panelTimeoutSeconds": 8,
+    "timeoutSeconds": 20,
+    "proxyURL": "http://192.168.100.6:10808"
+  },
   "voices": [
     {
       "id": "taozi",

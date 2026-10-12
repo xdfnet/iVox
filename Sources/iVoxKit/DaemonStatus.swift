@@ -11,12 +11,14 @@ public struct DaemonStatus: Codable, Sendable {
         public var wechat: String
         public var mediaControl: String
         public var mediaHTTP: String
+        public var translation: String
 
-        public init(speechInput: String, wechat: String, mediaControl: String, mediaHTTP: String) {
+        public init(speechInput: String, wechat: String, mediaControl: String, mediaHTTP: String, translation: String = "off") {
             self.speechInput = speechInput
             self.wechat = wechat
             self.mediaControl = mediaControl
             self.mediaHTTP = mediaHTTP
+            self.translation = translation
         }
     }
 
