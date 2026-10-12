@@ -163,12 +163,11 @@ actor Daemon {
             features: .init(
                 playback: playbackHealth,
                 speechInput: speech,
+                translation: translationHealth,
+                quickActions: quickActionsHealth,
                 wechat: wechatHealth,
                 // 媒体控制的入口就是 Web 服务，健康度即它
-                mediaControl: mc.enabled ? webUI : "off",
-                mediaHTTP: webUI,
-                translation: translationHealth,
-                quickActions: quickActionsHealth
+                mediaControl: mc.enabled ? webUI : "off"
             ),
             permissions: .init(
                 microphone: mic,
