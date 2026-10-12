@@ -112,23 +112,17 @@ export default function (pi: ExtensionAPI) {
     endTurn();
   });
 
-  // 用户发新消息：立即打断上一轮（即使 assistant turn 尚未/未正常开始）
+  // 用户发新消息：立即打断上一轮（即使 assistant turn 尚未/未正常开始）。
+  // 不另发 `__IVOX_STOP_PLAYBACK__` 哨兵：startTurn 的首帧立刻驱动服务端 beginTurn，
+  // 其 bargeIn 就是全场清场；哨兵从另一条短连并发送达反而可能落在首帧之后，
+  // 把刚认领的新轮也当「之前的」一起作废（整轮哑巴）——曾实测踩过。
   pi.on("message_start", (event: unknown, ctx: unknown) => {
     if (!hasUI(ctx)) return;
     if ((event as { message?: { role?: string } }).message?.role === "user") {
       if (turnId) cancelTurn();
-      stopPlayback();
       startTurn();
     }
   });
-
-  // 发送全局停止哨兵（打断当前在播，barge-in）。用 socket 短连。
-  function stopPlayback() {
-    const s = createConnection(SOCKET_PATH);
-    s.on("error", () => {});
-    s.write("__IVOX_STOP_PLAYBACK__");
-    s.end();
-  }
 
   pi.on("message_update", (event: unknown, ctx: unknown) => {
     if (!hasUI(ctx) || muted) return;

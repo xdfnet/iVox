@@ -64,10 +64,10 @@
 | Claude Code | UserPromptSubmit → `hook.sh stop` | Stop → `hook.sh claude` | `~/.claude/settings.json` |
 | Codex | UserPromptSubmit → `hook.sh stop` | Stop → `hook.sh codex` | `~/.codex/hooks.json` |
 | Qwen Code | UserPromptSubmit → `hook.sh stop` | Stop → `hook.sh qwen` | `~/.qwen/settings.json` |
-| pi 扩展 | `message_start` 用户消息即发停止哨兵 | `message_update` 流式 | `~/.pi/agent/extensions/ivox.ts` |
+| pi 扩展 | `message_start` 用户消息即 `{cancel}` 旧轮 + 新轮首帧（beginTurn 的 bargeIn 清场） | `message_update` 流式 | `~/.pi/agent/extensions/ivox.ts` |
 | DeepSeek Harness | 新一轮 `start` 帧自动 bargeIn | `agent/assistant-stream` 逐 token 流式（主）；socket 不可用时 turn-stopping 整段直投 hook.sh（兜底） | `~/.dsh/profiles/desktop/cordis.patch.yml` |
 
-**打断时机对齐真人对话**：hook 类工具（Claude/Codex/Qwen）挂两个钩子——`UserPromptSubmit` 在**你一提交 prompt、AI 还没开口**时就跑 `hook.sh stop`（发 `__IVOX_STOP_PLAYBACK__`），上一轮还在念的内容立刻停；`Stop` 在回复写完后才念新回复。这样「你一开口（提交），对方就停」，而不是等新回复到达才打断。
+**打断时机对齐真人对话**：hook 类工具（Claude/Codex/Qwen）挂两个钩子——`UserPromptSubmit` 在**你一提交 prompt、AI 还没开口**时就跑 `hook.sh stop`（发 `__IVOX_STOP_PLAYBACK__`），上一轮还在念的内容立刻停；`Stop` 在回复写完后才念新回复。这样「你一开口（提交），对方就停」，而不是等新回复到达才打断。哨兵的语义是**你开口 = 全场闭嘴**：当场静音之外，还会把**所有**流式轮（含 pi/dsh 正在生成的那一轮）一并作废——该轮后续增量不再开口。
 
 Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发，payload 自带 `last_assistant_message`。
 
@@ -100,7 +100,7 @@ DeepSeek Harness 不同：它内置的桥接插件（`dsh-hooks-claude-code` / `
 - **`hook.sh <source>`（Stop）**：接收来源参数（如 `codex` / `claude` / `dsh`），从 stdin JSON 提取 `last_assistant_message`。dsh 的这份 payload 由本地插件 `ivox-tts` 直接投喂（见上），脚本里已没有读 zstd 会话日志的分支。
   - 从 stdin 读取 Hook payload，提取最后一条 assistant message
   - 调用 `ivox speak --source <source> <text>`，后台运行 (`&`)，**不阻塞** AI 工具
-- **`hook.sh stop`（UserPromptSubmit）**：不读文本、不发声，丢弃 stdin payload 后调 `ivox quiet`（发送 `__IVOX_STOP_PLAYBACK__`），只负责打断当前播报。daemon 未运行时静默成功。
+- **`hook.sh stop`（UserPromptSubmit）**：不读文本、不发声，丢弃 stdin payload 后调 `ivox quiet`（发送 `__IVOX_STOP_PLAYBACK__`），负责打断当前播报**并作废全部流式轮**（你开口 = 全场闭嘴，含 pi/dsh 正在生成的轮次）。daemon 未运行时静默成功。
 
 Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执行。脚本不传配置文件路径，依赖 `~/.config/ivox/config.json` 自动加载。
 

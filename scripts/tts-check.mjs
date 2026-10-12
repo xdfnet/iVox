@@ -431,11 +431,13 @@ const cases = [
     },
   },
 
-  // ───────── E6：停止哨兵与新轮并行（pi 会开两条流，其中一条刚开就被 {cancel}）─────────
+  // ───────── E6：并行流的 {cancel} 不拖垮真正在跑的轮（pi 会开两条流，其中一条刚开就被 {cancel}）─────────
   // 回归：曾把「见过」当「被顶掉」——并行那条空流一取消，就把真正在跑的这条判成过期旧轮，
   // 后续正文全部静默丢弃（整轮没声音，日志里连「队列状态」都没有）。
+  // 注：客户端不再在同一步发停止哨兵（pi 开新轮前的清场改由首帧 beginTurn 的 bargeIn 承担）——
+  // 哨兵如今是「你开口 = 全场作废」，会连在跑的轮一起作废，故不适用于本用例（见 E7）。
   {
-    name: "E6-stop-sentinel-keeps-live-turn",
+    name: "E6-parallel-cancel-keeps-live-turn",
     async run(ctx) {
       const t1 = ctx.turn;              // 真正承载正文的连接
       const t2 = ctx.ids().turn;        // 并行的第二条流
@@ -443,19 +445,42 @@ const cases = [
       await sleep(60);
       const B = await ctx.openStream(t2);
       await sleep(60);
-      B.cancel();                       // 它立刻 {cancel}
-      await sleep(30);
-      await ctx.quiet();                // 紧接着 __IVOX_STOP_PLAYBACK__
-      await sleep(200);
-      A.sendText("这条正文在停止哨兵之后到达，仍应被完整念出来。");
+      B.cancel();                       // 它立刻 {cancel}：只作废自己，不碰在跑的 t1
+      await sleep(260);
+      A.sendText("并行那条空流取消之后，这条正文仍应被完整念出来。");
       A.endFrame();
       const start = await ctx.log.waitFor(new RegExp(`合成开始 \\[${ctx.source}-`), { sinceTs: ctx.t0, timeout: 30000 });
-      ctx.check(!!start, "新轮正文被静默丢弃（入队后无合成开始）：哨兵/并行取消把在跑的轮次一起作废了");
+      ctx.check(!!start, "新轮正文被静默丢弃（入队后无合成开始）：并行取消把在跑的轮次一起作废了");
       await sleep(500);
       const stray = ctx.log.grep(new RegExp(`流式入队: turn=${t2}`), ctx.t0);
       ctx.check(stray.length === 0, "被取消的并行轮次不该入队");
       const settled = await ctx.settled(40000);
       ctx.check(!!settled, "未收尾");
+      ctx.noBad();
+    },
+  },
+
+  // ───────── E7：停止哨兵作废全部流式轮（你开口 = 全场闭嘴）─────────
+  // 语义：哨兵（hook.sh stop / ivox quiet）不只停当场，还作废此前所有流式轮。
+  // 场景：在 Claude 里提交 prompt 时，pi/dsh 手里正在生成的那一轮后续增量不该再开口
+  //（否则「我说话电脑就不说了」不成立——当场静音了，下一句生成出来照样念）。
+  {
+    name: "E7-stop-sentinel-buries-live-turn",
+    async run(ctx) {
+      const st = await ctx.openStream(ctx.turn);
+      st.sendText("哨兵之前这句照常开始合成，用作对照。");
+      await sleep(1200);                 // 让对照句确实已进模型（其「合成开始」落在哨兵之前）
+      await ctx.quiet();                 // 你开口
+      await sleep(200);
+      const tAfter = nowMs();
+      st.sendText("哨兵之后这整句都不该被念出来：它属于已被作废的那一轮。");
+      st.endFrame();                     // 正常收尾（{end} 对已作废轮是空操作）
+      const settled = await ctx.settled(40000);
+      ctx.check(!!settled, "未收尾");
+      const late = ctx.log.grep(new RegExp(`TTS 合成开始 \\[${ctx.source}-`), tAfter);
+      ctx.check(late.length === 0, `哨兵后该轮不该再有合成开始，实得 ${late.length} 条`);
+      const h = await ctx.health();
+      ctx.check(h && h.queued === 0 && h.playing === false, `未收敛空闲: ${JSON.stringify(h)}`);
       ctx.noBad();
     },
   },

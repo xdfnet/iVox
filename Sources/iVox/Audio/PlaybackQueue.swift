@@ -59,12 +59,14 @@ actor PlaybackQueue {
     /// 是否有正在处理的播报（/health 用）
     var isProcessing: Bool { currentTask != nil }
 
-    /// 取消所有播放（正在播的和队列中等待的）。
-    /// - Parameter dropsTurn: 是否连轮次身份一起作废。语音打断（right⌘，用户开口）为 true——
-    ///   该轮后续增量必须彻底闭嘴；`__IVOX_STOP_PLAYBACK__` 哨兵为 false——它常与新轮开流
-    ///   并行送达（pi 先发流首帧、再发哨兵），连轮次一起作废会把刚到的新轮也掐成哑巴。
-    func cancelAll(dropsTurn: Bool = false) async {
-        if dropsTurn { buryAllTurns() }
+    /// 取消所有播放（正在播的和队列中等待的），并作废全部流式轮次。
+    /// 「用户开口」只有这一个语义：右⌘ 语音打断与 `__IVOX_STOP_PLAYBACK__` 哨兵
+    /// （`hook.sh stop` / `ivox quiet`）都走这里——当场静音，且此前所有流式轮的后续
+    /// 增量一律闭嘴（一个喇叭，不区分来源，你开口全场停）。
+    /// 哨兵由独立短连送达、不带自己的新轮，不存在「误杀刚到的新轮」；唯一可能并发的
+    /// 是用户同时向两个 agent 发话，此时后开口的那个赢，正合语义。
+    func cancelAll() async {
+        buryAllTurns()
         await bargeIn()
         turnOpen = false
         await pumpOrResume()   // 全局停止后不应把音乐卡在暂停
