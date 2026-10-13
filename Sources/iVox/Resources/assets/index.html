@@ -15,7 +15,7 @@
         *, *::before, *::after {
             margin: 0;
             padding: 0;
-            box-sizing: border-box
+            box-sizing: border-box;
         }
 
         html {
@@ -30,42 +30,39 @@
 
         body {
             position: absolute;
-            top: 0;
-            left: 0;
-            right: 0;
-            bottom: 0;
+            inset: 0;
             overscroll-behavior: none;
             margin: 0;
-            padding: 0;
-            padding-bottom: env(safe-area-inset-bottom);
-            font-family: -apple-system, sans-serif;
+            padding-top: env(safe-area-inset-top);
+            padding-bottom: env(safe-area-inset-bottom, 16px);
+            font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
             background: transparent;
             color: #fff;
-            min-height: 100vh;
-            min-height: -webkit-fill-available;
             display: flex;
-            flex-direction: column;
             align-items: center;
             justify-content: center;
             -webkit-user-select: none;
             user-select: none;
             -webkit-tap-highlight-color: transparent;
-            padding-top: 0;
-            padding-bottom: env(safe-area-inset-bottom, 16px);
             overflow-x: hidden;
+        }
+
+        /* 统一焦点环：所有可聚焦控件都要有清晰可见的焦点态 */
+        button:focus-visible {
+            outline: 2px solid #fff;
+            outline-offset: 3px;
         }
 
         .container {
             width: 100%;
-            max-width: 100%;
-            box-sizing: border-box;
+            max-width: 480px;
             padding: 24px 16px;
-            background: transparent;
+            box-sizing: border-box;
             display: flex;
             flex-direction: column;
             align-items: center;
-            min-height: 100%;
-            gap: 32px;
+            justify-content: center;
+            gap: 34px;
         }
 
         h1 {
@@ -76,62 +73,67 @@
             letter-spacing: 1px;
         }
 
-        /* ---------- 锁屏按钮 ---------- */
-        .lock-row {
+        /* ---------- 触控反馈：统一按压缩放，所有按压态一致 ---------- */
+        button:active {
+            transform: scale(.94);
+            opacity: .8;
+        }
+
+        button {
             display: flex;
             align-items: center;
             justify-content: center;
+            border: none;
+            cursor: pointer;
+            background: none;
+            color: inherit;
+            font: inherit;
+            border-radius: 50%;
+            touch-action: manipulation;
+            transition: background .15s cubic-bezier(.4, 0, .2, 1),
+                        transform .15s cubic-bezier(.4, 0, .2, 1),
+                        box-shadow .15s cubic-bezier(.4, 0, .2, 1);
+        }
+
+        /* ---------- 锁定屏幕 ---------- */
+        .lock-row {
             width: 100%;
             max-width: 300px;
-            background: rgba(255, 69, 58, .08);
-            border: 1px solid rgba(255, 69, 58, .15);
             border-radius: 16px;
-            padding: 14px 20px;
-            cursor: pointer;
-            transition: all .15s cubic-bezier(.4, 0, .2, 1);
-            -webkit-tap-highlight-color: transparent;
-            touch-action: manipulation;
-            gap: 8px;
+            padding: 15px 20px;
+            gap: 9px;
+            flex-direction: row;
+            background: rgba(255, 69, 58, .08);
+            box-shadow: inset 0 0 0 1px rgba(255, 69, 58, .18);
             color: #ff453a;
             font-size: 15px;
             font-weight: 500;
         }
 
-        .lock-row:active {
-            transform: scale(.97);
-            opacity: .8;
-        }
-
-        .lock-row svg {
-            flex-shrink: 0;
-        }
+        .lock-row:hover { background: rgba(255, 69, 58, .14); }
+        .lock-row svg { flex-shrink: 0; }
 
         /* ---------- App 快捷方式 ---------- */
         .app-shortcuts {
             display: flex;
             justify-content: center;
-            gap: 24px;
+            gap: 28px;
         }
 
         .app-icon {
-            width: 78px;
-            height: 78px;
-            border-radius: 18px;
+            width: 80px;
+            height: 80px;
+            border-radius: 19px;
+            box-shadow: 0 4px 12px rgba(0, 0, 0, .3), inset 0 0 0 1px rgba(255, 255, 255, .08);
+            background: rgba(255, 255, 255, .05);
             overflow: hidden;
-            cursor: pointer;
-            transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
-            box-shadow: 0 4px 12px rgba(0, 0, 0, .3);
-            background: rgba(255, 255, 255, 0.05);
-            display: flex;
-            align-items: center;
-            justify-content: center;
         }
 
+        .app-icon:hover { background: rgba(255, 255, 255, .1); }
         .app-icon:active {
-            transform: scale(0.9);
+            transform: scale(.9);
             box-shadow: 0 2px 8px rgba(0, 0, 0, .4);
         }
-
         .app-icon img {
             width: 100%;
             height: 100%;
@@ -144,9 +146,15 @@
             justify-content: center;
             align-items: center;
             background: rgba(0, 0, 0, .3);
-            padding: 14px 18px;
-            border-radius: 20px;
-            gap: 16px;
+            padding: 16px 20px;
+            border-radius: 22px;
+            gap: 18px;
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .06);
+        }
+
+        .volume-row button {
+            width: 70px;
+            height: 70px;
         }
 
         /* ---------- 媒体控制 ---------- */
@@ -154,33 +162,23 @@
             display: flex;
             flex-direction: column;
             align-items: center;
-            gap: 16px;
+            gap: 18px;
         }
 
         .media-row {
             display: flex;
             justify-content: center;
             align-items: center;
-            gap: 12px;
+            gap: 14px;
         }
 
-        button {
-            background: none;
-            border: none;
-            cursor: pointer;
-            color: #fff;
-            transition: all .15s cubic-bezier(.4, 0, .2, 1);
-            display: flex;
-            align-items: center;
-            justify-content: center;
-            border-radius: 50%;
-            -webkit-tap-highlight-color: transparent;
-            touch-action: manipulation;
+        /* 深底上的次级圆键：小幅度提亮表面 + 一圈内边线，保证辨识度 */
+        .track, .arrow, .volume-row button {
+            background: rgba(255, 255, 255, .16);
+            box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .14);
         }
-
-        button:active {
-            transform: scale(.88);
-            opacity: .75;
+        .track:hover, .arrow:hover, .volume-row button:hover {
+            background: rgba(255, 255, 255, .24);
         }
 
         .play {
@@ -190,40 +188,14 @@
             color: #000;
             box-shadow: 0 6px 24px rgba(255, 255, 255, .4);
         }
-
+        .play:hover { background: rgba(255, 255, 255, .9); }
         .play:active {
+            transform: scale(.94);
             background: rgba(255, 255, 255, .85);
         }
 
-        .track {
-            width: 78px;
-            height: 78px;
-            background: rgba(255, 255, 255, .12);
-        }
-
-        .track:active {
-            background: rgba(255, 255, 255, .22);
-        }
-
-        .arrow {
-            width: 78px;
-            height: 78px;
-            background: rgba(255, 255, 255, .12);
-        }
-
-        .arrow:active {
-            background: rgba(255, 255, 255, .22);
-        }
-
-        .volume-row button {
-            width: 70px;
-            height: 70px;
-            background: rgba(255, 255, 255, .1);
-        }
-
-        .volume-row button:active {
-            background: rgba(255, 255, 255, .2);
-        }
+        .track { width: 78px; height: 78px; }
+        .arrow { width: 78px; height: 78px; }
 
         svg {
             fill: currentColor;
@@ -232,7 +204,6 @@
 
         .toast {
             position: fixed;
-            bottom: env(safe-area-inset-bottom, 20px);
             bottom: calc(env(safe-area-inset-bottom, 20px) + 20px);
             left: 50%;
             transform: translateX(-50%);
@@ -254,24 +225,56 @@
 
         .toast.show { opacity: 1; }
         .toast.error { background: rgba(255, 69, 58, .75); }
+
+        /* ---------- 平板（iPad mini 竖屏 ~768pt）：更大的余白与主区分布，
+           避免小按钮漂浮在空旷背景中央 ---------- */
+        @media (min-width: 700px) {
+            .container {
+                max-width: 640px;
+                padding: 40px 32px;
+                gap: 52px;
+                justify-content: space-evenly;
+                min-height: 100%;
+            }
+
+            h1 { font-size: 20px; letter-spacing: 2px; }
+
+            .app-icon { width: 92px; height: 92px; border-radius: 22px; }
+            .app-shortcuts { gap: 36px; }
+
+            .volume-row { padding: 20px 26px; gap: 24px; border-radius: 26px; }
+            .volume-row button { width: 80px; height: 80px; }
+
+            .track, .arrow { width: 88px; height: 88px; }
+            .navigation { gap: 22px; }
+            .media-row { gap: 18px; }
+            .play { width: 118px; height: 118px; }
+
+            .lock-row { max-width: 340px; padding: 17px 24px; }
+        }
     </style>
 </head>
 
 <body>
     <div id="toast" class="toast">已发送</div>
-    <div class="container">
+    <main class="container">
+
         <h1>iVox Remote</h1>
 
         <!-- 锁屏 -->
-        <div class="lock-row" onclick="send('lock')">
+        <button class="lock-row" onclick="send('lock')" aria-label="锁定或解锁屏幕">
             <svg width="18" height="18" viewBox="0 0 24 24" fill="#ff453a"><path d="M18 8h-1V6c0-2.76-2.24-5-5-5S7 3.24 7 6v2H6c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2h12c1.1 0 2-.9 2-2V10c0-1.1-.9-2-2-2z"/></svg>
             锁定屏幕
-        </div>
+        </button>
 
         <!-- App 快捷方式 -->
         <div class="app-shortcuts">
-            <div class="app-icon" onclick="send('toggle_douyin')"><img src="/assets/douyin.png" alt="抖音"></div>
-            <div class="app-icon" onclick="send('toggle_qishui')"><img src="/assets/qishui.png" alt="汽水音乐"></div>
+            <button class="app-icon" onclick="send('toggle_douyin')" aria-label="打开或关闭抖音">
+                <img src="/assets/douyin.png" alt="抖音" width="80" height="80">
+            </button>
+            <button class="app-icon" onclick="send('toggle_qishui')" aria-label="打开或关闭汽水音乐">
+                <img src="/assets/qishui.png" alt="汽水音乐" width="80" height="80">
+            </button>
         </div>
 
         <!-- 音量 -->
@@ -286,12 +289,13 @@
             <button class="arrow" onclick="send('arrowup')" aria-label="向上"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M7.41 15.41L12 10.83l4.59 4.58L18 14l-6-6-6 6z"/></svg></button>
             <div class="media-row">
                 <button class="track" onclick="send('prev')" aria-label="上一曲"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M6 6h2v12H6zm3.5 6l8.5 6V6z"/></svg></button>
-                <button class="play" onclick="send('playpause')" aria-label="播放/暂停"><svg width="40" height="40" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
+                <button class="play" onclick="send('playpause')" aria-label="播放或暂停"><svg width="44" height="44" viewBox="0 0 24 24"><path d="M8 5v14l11-7z"/></svg></button>
                 <button class="track" onclick="send('next')" aria-label="下一曲"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M6 18l8.5-6L6 6v12zM16 6v12h2V6h-2z"/></svg></button>
             </div>
             <button class="arrow" onclick="send('arrowdown')" aria-label="向下"><svg width="28" height="28" viewBox="0 0 24 24"><path d="M7.41 8.59L12 13.17l4.59-4.58L18 10l-6 6-6-6z"/></svg></button>
         </div>
-    </div>
+
+    </main>
     <script>
         let t;
         const okStatuses = new Set(['playing', 'paused', 'success', 'lock_success', 'opened', 'closed', 'running', 'stopped', 'locked', 'unlocked']);
