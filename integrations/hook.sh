@@ -1,22 +1,21 @@
 #!/bin/bash
 # iVox + iW Hook — Claude Code / Codex / Qwen Code / DeepSeek Harness Stop Hook
-# Usage: hook.sh <source>   # source: claude | codex | qwen | dsh
+# Usage: hook.sh <source> [say|interrupt]   # source: claude | codex | qwen | dsh
+#   hook.sh claude           → Stop（回复完成）念新回复
+#   hook.sh claude say       → 同上（显式）
+#   hook.sh claude interrupt → UserPromptSubmit，用户提交即打断（发带来源的停止帧）
 # 协议：stdout 必须保持干净；exit 0 = 继续，非 0 = 停止
 # 手动静音（IVOX_SKIP=1，如 Samantha 内部调用）或 reflexio 后台学习调用（CLAUDE_SMART_INTERNAL=1）→ 不播报
 [[ "${IVOX_SKIP:-}" == "1" ]] && exit 0
 [[ "${CLAUDE_SMART_INTERNAL:-}" == "1" ]] && exit 0
 
-# interrupt 模式：挂在 UserPromptSubmit，用户一提交就打断当前播报（不读文本、不发声）。
-# stdin 的 hook payload 直接丢弃。
-# `stop` 是历史参数名（曾与 Stop 事件同名，极易混淆）：已装配置由 install-hooks.sh 改写为
-# interrupt，此处保留兼容——漏改的环境若把 "stop" 当来源，会走下面的普通路径把用户打的
-# prompt 当回复念出来。
-if [[ "${1:-}" == "interrupt" || "${1:-}" == "stop" ]]; then
+# interrupt：挂在 UserPromptSubmit，用户一提交就打断当前播报（不读文本、不发声）。
+# 带来源发 `{type:stop,source:claude}`，让 daemon 日志认出是哪个来源打断的。
+if [[ "${2:-}" == "interrupt" ]]; then
   cat >/dev/null 2>&1
-  # 记一笔触发时机：排查「pi 播报被掐」时，拿这个时间戳去对 daemon.log 的
-  #「收到停止播放指令」——有记录说明就是提交打断（预期），没有则来源另有其人。
-  printf '%s hook.sh interrupt\n' "$(date '+%Y-%m-%d %H:%M:%S.%3N')" >>~/.config/ivox/hook.log 2>/dev/null
-  ivox quiet 2>/dev/null
+  src="${1:-unknown}"
+  printf '%s hook.sh interrupt source=%s\n' "$(date '+%Y-%m-%d %H:%M:%S.%3N')" "$src" >>~/.config/ivox/hook.log 2>/dev/null
+  ivox quiet --source "$src" 2>/dev/null
   exit 0
 fi
 

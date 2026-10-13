@@ -69,7 +69,7 @@ async function speak(source, text) {
 
 async function quiet() {
   const s = await conn();
-  s.end("__IVOX_STOP_PLAYBACK__");
+  s.end("{type:stop}");
 }
 
 // 流式连接句柄。登记到 openSocks，用例结束统一清理，避免连接泄漏压垮 daemon。

@@ -12,11 +12,43 @@ struct PlaybackJob: Sendable {
     var turnID: String? = nil
 }
 
+/// 打断来源：与 `PlaybackJob.source`（这段播报是谁发的）是一对账的标识——
+/// 前者回答「谁在说」，这个回答「这次打断是谁干的」。一个喇叭永远只有一个打断在发生，
+/// 但日志要能追溯到是 right⌘ 说话、Cmd+D 译文、hook 停止帧、还是 pi/dsh 新轮顶替。
+enum InterruptSource: Sendable, CustomStringConvertible {
+    /// socket 停止帧 `{type:stop,source:X}`：hook.sh interrupt 或 ivox quiet，source 可能为空 = 未知
+    case stop(String)
+    /// right⌘ / right⌃ 语音说话（SpeechInputService 检测到用户开口录音）
+    case speech
+    /// Cmd+D 划词翻译（用户主动朗读，speakUserInitiated）
+    case dict
+    /// 流式新轮顶替旧轮，带上新轮来源（pi/dsh）
+    case turn(String)
+    /// Escape 用户取消自己那轮（cancelTurn）
+    case escape
+    /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
+    case shutdown
+
+    var description: String {
+        switch self {
+        case .stop(let s): return s.isEmpty ? "stop:未知" : "stop:\(s)"
+        case .speech: return "speech"
+        case .dict: return "dict"
+        case .turn(let s): return "turn:\(s)"
+        case .escape: return "escape"
+        case .shutdown: return "shutdown"
+        }
+    }
+}
+
 actor PlaybackQueue {
     private var jobs: [PlaybackJob] = []
     private var currentTask: Task<Void, Never>?
     /// 管道代号：起新管道 / bargeIn 作废时递增。在跑管道靠「自己的代号是否已过期」判断
     /// 该不该继续——非结构化 `Task {}` 的子任务不继承取消，单靠 cancel 停不住它们。
+    /// 最近一次打断的来源：底层取消日志（TTS 合成已取消）据此对上「是谁打断的」。
+    /// 不用 actor 并发考虑——打断本身串行，写入与 processNext 读它都在本 actor 上。
+    private var lastInterrupt: InterruptSource? = nil
     private var pipelineSeq: UInt = 0
     /// `currentTask` 的代号，用于身份校验：仅当代号仍指向自己时才允许清空/接管。
     private var currentTaskSeq: UInt = 0
@@ -46,6 +78,7 @@ actor PlaybackQueue {
 
     func shutdown() {
         Log.info("PlaybackQueue 退出")
+        lastInterrupt = .shutdown   // 退出会取消在跑合成，打上标识免得读成上一次打断的残留
         pipelineSeq &+= 1      // 让在跑管道的 producer/consumer 退出
         currentTask?.cancel()
         jobs.removeAll()
@@ -60,14 +93,16 @@ actor PlaybackQueue {
     var isProcessing: Bool { currentTask != nil }
 
     /// 取消所有播放（正在播的和队列中等待的），并作废全部流式轮次。
-    /// 「用户开口」只有这一个语义：右⌘ 语音打断与 `__IVOX_STOP_PLAYBACK__` 哨兵
+    /// 「用户开口」只有这一个语义：右⌘ 语音打断与 `{type:stop}` 停止帧
     /// （`hook.sh stop` / `ivox quiet`）都走这里——当场静音，且此前所有流式轮的后续
     /// 增量一律闭嘴（一个喇叭，不区分来源，你开口全场停）。
     /// 哨兵由独立短连送达、不带自己的新轮，不存在「误杀刚到的新轮」；唯一可能并发的
     /// 是用户同时向两个 agent 发话，此时后开口的那个赢，正合语义。
-    func cancelAll() async {
+    func cancelAll(origin: InterruptSource) async {
+        Log.info("打断（来源=\(origin)）：作废全部流式轮次")
+        lastInterrupt = origin
         buryAllTurns()
-        await bargeIn()
+        await bargeIn(origin)
         turnOpen = false
         await pumpOrResume()   // 全局停止后不应把音乐卡在暂停
     }
@@ -80,8 +115,9 @@ actor PlaybackQueue {
     /// 两步之间会插进别的消息。
     func speakUserInitiated(_ newJobs: [PlaybackJob]) async {
         guard !newJobs.isEmpty else { return }
+        Log.info("用户主动开口（Cmd+D 划词译文）：打断当前播报")
         buryAllTurns()
-        await bargeIn()
+        await bargeIn(.dict)
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
         jobs.append(contentsOf: newJobs)
         signalJobs()
@@ -95,11 +131,12 @@ actor PlaybackQueue {
     }
 
     /// 流式轮次开始（首帧）：打断旧轮/普通播报，标记本轮仍在生成（句间不恢复音乐）。
-    func beginTurn(_ id: String) async {
+    func beginTurn(_ id: String, source: String) async {
         guard currentTurn != id else { turnOpen = true; return }
         guard claimTurn(id) else { return }   // 已作废 / 被顶掉的旧轮：忽略
         turnOpen = true
-        await bargeIn()
+        Log.info("打断（来源=turn:\(source)）：新流式轮顶替旧轮")
+        await bargeIn(.turn(source))
         await awaitCurrentPipelineFinished()
         startPipelineIfPending()   // 拆旧管道期间到达的本轮分块已在 jobs，需有人起管道
     }
@@ -134,7 +171,7 @@ actor PlaybackQueue {
     /// 被取消的轮没有内容需要保护，故出栈把属主交还给被它顶掉的那一轮（可能是真正在跑的连接）。
     func cancelTurn(_ id: String) async {
         guard currentTurn == id else { return }
-        await bargeIn()
+        await bargeIn(.escape)
         turnOpen = false
         bury(id)
         if turnStack.last == id { turnStack.removeLast() }
@@ -145,12 +182,14 @@ actor PlaybackQueue {
     /// 不在此清 currentTask——由旧 processNext 自然结束时自清；调用方若要立刻起新管道，
     /// 必须 `await currentTask?.value`（线性化点），否则新旧两个 consumer 会并发 write
     /// 同一个 player、争夺单一背压 continuation 槽，造成 continuation 泄漏/竞态。
-    private func bargeIn() async {
+    private func bargeIn(_ origin: InterruptSource) async {
+        Log.info("打断（来源=\(origin)）：取消在播、清空队列(pending=\(jobs.count))、作废管道 seq\(pipelineSeq&+1)")
+        lastInterrupt = origin
         pipelineSeq &+= 1      // 作废在跑管道：其 producer/consumer 靠代号不等立即停止
         currentTask?.cancel()
         jobs.removeAll()
         signalJobs()
-        await engine.cancelActiveSynthesis()   // 显式作废旧纪元排队合成，不依赖任务取消传播
+        await engine.cancelActiveSynthesis(reason: origin.description)   // 显式作废旧纪元排队合成，不依赖任务取消传播
         player.cancelPendingPlayback()
     }
 
@@ -222,7 +261,9 @@ actor PlaybackQueue {
                 // 首次出现的新轮：就在此处驱动轮次切换，不依赖 beginTurn 是否已先跑
                 //（二者是各自独立的 Task，调度顺序无保证）。
                 turnOpen = true
-                await bargeIn()
+                // beginTurn 未先跑时报到的新轮（进这分支说明确实是新 turnID），
+                // 打断来源取这批 job 的 source。
+                await bargeIn(.turn(newJobs[0].source))
                 await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
             } else {
                 turnOpen = true
@@ -307,14 +348,20 @@ actor PlaybackQueue {
                     }
                     try Task.checkCancellation()
                 } catch is CancellationError {
-                    Log.info("TTS 合成已取消 [\(job.source)-\(batchID)]")
+                    Log.info("TTS 合成已取消 [\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "?")）")
                     throw CancellationError()
                 } catch {
                     if !claimed, !jobs.isEmpty { jobs.removeFirst() }   // 合成失败跳过此 job，避免死循环
                     Log.error("TTS 合成失败: \(error)")
                 }
                 let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
-                Log.info("TTS 合成完成 [\(job.source)-\(batchID)] \(elapsed)s")
+                if pipelineSeq != seq {
+                    // MLX 不响应中途取消：打断后被掐的这句仍跑完，但已作废。别让它显示成
+                    // 普通「完成」（打断后紧邻的完成会被人误读成「没掐住」）。
+                    Log.info("TTS 合成作废（MLX 不响应中途取消，这句跑完才停）[\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "?")） \(elapsed)s")
+                } else {
+                    Log.info("TTS 合成完成 [\(job.source)-\(batchID)] \(elapsed)s")
+                }
             }
         }
 

@@ -13,10 +13,20 @@ struct QuietCommand: ParsableCommand {
         abstract: "停止当前及排队播报（守护进程继续运行）"
     )
 
+    /// 声明打断来源（如 claude/codex/qwen），daemon 会记进日志；缺省发无来源的裸哨兵
+    @Option(name: .long, help: "声明打断来源（可选，如 claude）")
+    var source: String?
+
     func run() {
         let socketPath = AppPaths.socketPath
         // hook 场景：daemon 没在跑就当无事发生，绝不因打断失败影响用户提交
         guard SocketClient.isRunning(path: socketPath) else { return }
-        try? SocketClient.send("__IVOX_STOP_PLAYBACK__", to: socketPath)
+        let message: String
+        if let source, !source.isEmpty {
+            message = "{type:stop,source:\(source)}"
+        } else {
+            message = "{type:stop}"
+        }
+        try? SocketClient.send(message, to: socketPath)
     }
 }

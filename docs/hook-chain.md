@@ -61,13 +61,13 @@
 
 | 工具 | 提交即打断 | 回复完成播报 | 配置位置 |
 |------|-----------|-------------|----------|
-| Claude Code | UserPromptSubmit → `hook.sh interrupt` | Stop → `hook.sh claude` | `~/.claude/settings.json` |
-| Codex | UserPromptSubmit → `hook.sh interrupt` | Stop → `hook.sh codex` | `~/.codex/hooks.json` |
-| Qwen Code | UserPromptSubmit → `hook.sh interrupt` | Stop → `hook.sh qwen` | `~/.qwen/settings.json` |
+| Claude Code | UserPromptSubmit → `hook.sh <source> interrupt` | Stop → `hook.sh claude` | `~/.claude/settings.json` |
+| Codex | UserPromptSubmit → `hook.sh <source> interrupt` | Stop → `hook.sh codex` | `~/.codex/hooks.json` |
+| Qwen Code | UserPromptSubmit → `hook.sh <source> interrupt` | Stop → `hook.sh qwen` | `~/.qwen/settings.json` |
 | pi 扩展 | `message_start` 用户消息即 `{cancel}` 旧轮 + 新轮首帧（beginTurn 的 bargeIn 清场） | `message_update` 流式 | `~/.pi/agent/extensions/ivox.ts` |
 | DeepSeek Harness | 新一轮 `start` 帧自动 bargeIn | `agent/assistant-stream` 逐 token 流式（主）；socket 不可用时 turn-stopping 整段直投 hook.sh（兜底） | `~/.dsh/profiles/desktop/cordis.patch.yml` |
 
-**打断时机对齐真人对话**：hook 类工具（Claude/Codex/Qwen）挂两个钩子——`UserPromptSubmit` 在**你一提交 prompt、AI 还没开口**时就跑 `hook.sh interrupt`（发 `__IVOX_STOP_PLAYBACK__`），上一轮还在念的内容立刻停；`Stop` 在回复写完后才念新回复。这样「你一开口（提交），对方就停」，而不是等新回复到达才打断。哨兵的语义是**你开口 = 全场闭嘴**：当场静音之外，还会把**所有**流式轮（含 pi/dsh 正在生成的那一轮）一并作废——该轮后续增量不再开口。
+**打断时机对齐真人对话**：hook 类工具（Claude/Codex/Qwen）挂两个钩子——`UserPromptSubmit` 在**你一提交 prompt、AI 还没开口**时就跑 `hook.sh <source> interrupt`（发 `{type:stop,source:<source>}`），上一轮还在念的内容立刻停；`Stop` 在回复写完后才念新回复。这样「你一开口（提交），对方就停」，而不是等新回复到达才打断。哨兵的语义是**你开口 = 全场闭嘴**：当场静音之外，还会把**所有**流式轮（含 pi/dsh 正在生成的那一轮）一并作废——该轮后续增量不再开口。
 
 Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发，payload 自带 `last_assistant_message`。
 
@@ -100,7 +100,7 @@ DeepSeek Harness 不同：它内置的桥接插件（`dsh-hooks-claude-code` / `
 - **`hook.sh <source>`（Stop）**：接收来源参数（如 `codex` / `claude` / `dsh`），从 stdin JSON 提取 `last_assistant_message`。dsh 的这份 payload 由本地插件 `ivox-tts` 直接投喂（见上），脚本里已没有读 zstd 会话日志的分支。
   - 从 stdin 读取 Hook payload，提取最后一条 assistant message
   - 调用 `ivox speak --source <source> <text>`，后台运行 (`&`)，**不阻塞** AI 工具
-- **`hook.sh interrupt`（UserPromptSubmit）**：不读文本、不发声，丢弃 stdin payload 后调 `ivox quiet`（发送 `__IVOX_STOP_PLAYBACK__`），负责打断当前播报**并作废全部流式轮**（你开口 = 全场闭嘴，含 pi/dsh 正在生成的轮次）。daemon 未运行时静默成功。
+- **`hook.sh <source> interrupt`（UserPromptSubmit）**：不读文本、不发声，丢弃 stdin payload 后调 `ivox quiet --source <source>`（发送 `{type:stop,source:<source>}`），负责打断当前播报**并作废全部流式轮**（你开口 = 全场闭嘴，含 pi/dsh 正在生成的轮次）。daemon 会记下这次打断的来源。daemon 未运行时静默成功。
 
 Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执行。脚本不传配置文件路径，依赖 `~/.config/ivox/config.json` 自动加载。
 
@@ -180,7 +180,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
 - **轮次（turn）语义**：同一 `turnID` 的分块顺序 append 不打断；新 turn（用户发言）触发 `bargeIn`，取消在播 + 清空旧轮队列；**无 turn 的普通播报（`ivox speak` / hook.sh）只 append 排队，不抢麦**
 - 流式轮次未结束（`turnOpen`）时队列排空就挂起等下一批，不恢复音乐；轮次结束排空后才收尾
-- 打断只有两途径，且都源于**用户开口**：right⌘ 说话与 `hook.sh interrupt` 哨兵（提交即打断）都触发 `cancelAll()`（清空并取消全部 + 作废全部流式轮），或用户给 pi/dsh 发言时的新轮次 `bargeIn`；普通键/Esc/方向键不打断，**agent 回复到达时的普通播报也不打断（排队）**
+- 打断有 **4 个入口**，每个都带**打断来源**标识（`InterruptSource`）：停止帧 `{type:stop,source:x}`（`hook.sh <source> interrupt` / `ivox quiet --source`，走 `cancelAll`）、right⌘ 说话（`.speech`，走 `cancelAll`）、Cmd+D 译文（`.dict`，走 `speakUserInitiated`）、pi/dsh 用户发言的新轮（`.turn:<source>`，走 `beginTurn`/`enqueue` 里的 bargeIn）；Escape 取消归 `.escape`。这个标识与 `PlaybackJob.source`（这段播报是谁发的）是一对账——前者回答「谁在说」，后者回答「这次是谁打断的」。普通键/方向键不打断，**agent 回复到达时的普通播报也不打断（排队）**
 
 ### 7. MediaController
 
@@ -226,8 +226,13 @@ Socket 接入: fd=22 bytes=1791             # ConnectionHandler 收到连接
 队列状态: pending=13 processing=false     # PlaybackQueue 状态
 TTS 合成开始 [claude-B5AAC5] chars=11     # 开始合成（带批次号）
 TTS 合成完成 [claude-B5AAC5] 2.2s         # 本句合成完
+打断（来源=stop:claude）：取消在播…       # 谁打断的、作废了管道序号
+TTS 合成已取消（打断来源=stop:claude）     # 引擎底层取消也能对上同一来源
+TTS 合成作废（MLX 不响应中途取消…）[…]（打断来源=stop:claude）  # 被掐的这句跑完但已作废
 播放收尾完成: 尾音=0.8s                    # 整轮播完
 ```
+
+打断来源与播报来源成对地出现在日志里：`TTS 合成开始 [<source>-<batch>]` 回答「谁在说」，`打断（来源=<origin>）` 与 `TTS 合成已取消/作废（打断来源=<origin>）` 回答「这次谁掐的」。
 
 ## 代码签名
 

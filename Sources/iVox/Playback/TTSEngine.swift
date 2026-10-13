@@ -38,6 +38,8 @@ actor TTSEngine {
         let audio: MLXArray
     }
     private var refAudioCache: [String: RefAudioEntry] = [:]
+    /// 最近一次 `cancelActiveSynthesis` 的打断来源，供合成取消日志对上因果（见 cancelActiveSynthesis）
+    private var cancelReason = "?"
 
     init(config: Config) {
         self.config = config
@@ -103,7 +105,7 @@ actor TTSEngine {
                 do {
                     try await synthesize(text: text, voiceID: voiceID, continuation: continuation)
                 } catch is CancellationError {
-                    Log.info("TTS 合成已取消")
+                    Log.info("TTS 合成已取消（打断来源=\(cancelReason)）")
                     continuation.finish(throwing: CancellationError())
                 } catch {
                     continuation.finish(throwing: error)
@@ -187,7 +189,10 @@ actor TTSEngine {
     /// bargeIn：推进纪元并唤醒所有 gate 排队者。旧纪元的合成被唤醒后检查到纪元失配，
     /// 直接抛 CancellationError 退出、不进 MLX；新纪元的合成此刻尚未入队，不受影响，
     /// 仍由世代闸门保证在「正在跑的那一句」结束后才进入模型。
-    func cancelActiveSynthesis() {
+    func cancelActiveSynthesis(reason: String) {
+        // 记下这次是谁打断的，供被取消的合成子 task 打「TTS 合成已取消」时对上因果。
+        // 合成串行、打断只在 bargeIn 一处发起，写入不会被并发覆盖出错误归属。
+        cancelReason = reason
         epoch &+= 1
         let waiters = gateWaiters
         gateWaiters.removeAll()

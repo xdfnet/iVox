@@ -31,9 +31,9 @@ write_hook() {
   local event="${4:-Stop}"
   local cmd
   if [[ "$event" == "UserPromptSubmit" ]]; then
-    cmd="bash $HOOK_SH interrupt"
+    cmd="bash $HOOK_SH $tool_name interrupt"
   else
-    cmd="bash $HOOK_SH $tool_name"
+    cmd="bash $HOOK_SH $tool_name say"
   fi
 
   if command -v jq &>/dev/null; then
@@ -64,13 +64,16 @@ with open(path, 'w') as f:
 write_prompt_hook() {
   local config_path="$1"
   local timeout="$2"
-  if grep -q 'hook.sh stop' "$config_path" 2>/dev/null; then
-    sed -i '' 's|hook\.sh stop|hook.sh interrupt|g' "$config_path"
-    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断：stop → interrupt"
-  elif grep -q 'hook.sh interrupt' "$config_path" 2>/dev/null; then
+  local tool_name="$3"
+  # 历史格式 `hook.sh stop` 与 `hook.sh interrupt`（均无来源）就地迁移成
+  # `hook.sh <tool> interrupt`（要带来源，daemon 才认得出是谁打断的）
+  if grep -qE 'hook\.sh (stop|interrupt)([^a-z]|$)' "$config_path" 2>/dev/null; then
+    sed -i '' -E "s|hook\.sh (stop|interrupt)([^a-z]|$)|hook.sh $tool_name interrupt\2|g" "$config_path"
+    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断：→ $tool_name interrupt"
+  elif grep -qE 'hook\.sh [a-z-]+ interrupt' "$config_path" 2>/dev/null; then
     echo "[i] $config_path 的 UserPromptSubmit 打断已存在"
-  elif write_hook "$config_path" "_" "$timeout" "UserPromptSubmit"; then
-    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断"
+  elif write_hook "$config_path" "$tool_name" "$timeout" "UserPromptSubmit"; then
+    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断（$tool_name interrupt）"
   else
     echo "⚠️  写入 UserPromptSubmit hook 失败（需 jq 或 python3）"
   fi
@@ -86,7 +89,7 @@ if [[ -f "$CLAUDE_JSON" ]]; then
   else
     echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"
   fi
-  write_prompt_hook "$CLAUDE_JSON" 10
+  write_prompt_hook "$CLAUDE_JSON" 10 claude
 fi
 
 # ── Codex ──
@@ -101,7 +104,7 @@ elif write_hook "$CODEX_JSON" "codex" 30; then
 else
   echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
 fi
-write_prompt_hook "$CODEX_JSON" 30
+write_prompt_hook "$CODEX_JSON" 30 codex
 
 # ── Qwen Code ──
 QWEN_JSON="$HOME/.qwen/settings.json"
@@ -115,7 +118,7 @@ elif write_hook "$QWEN_JSON" "qwen" 60; then
 else
   echo "⚠️  需要 jq 或 python3 写入 Qwen Code 配置，请手动添加"
 fi
-write_prompt_hook "$QWEN_JSON" 60
+write_prompt_hook "$QWEN_JSON" 60 qwen
 
 # ── DeepSeek Harness ──
 # dsh 的回复文本由本地 cordis 插件 ivox-tts.mjs 在每轮结束时直投 hook.sh；

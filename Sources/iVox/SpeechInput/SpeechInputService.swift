@@ -82,7 +82,7 @@ final class SpeechInputService: @unchecked Sendable {
             }
 
             Task { await media.pause() }
-            Task { await queue.cancelAll() }
+            Task { await queue.cancelAll(origin: .speech) }
             Log.debug("语音输入: right ⌘/⌃ 按下 → 暂停音乐 → 取消 TTS → 开始录音")
 
             // 建目录 + 建 AVAudioRecorder 是同步 IO，而这里跑在 GlobalKeyTap 的事件线程上

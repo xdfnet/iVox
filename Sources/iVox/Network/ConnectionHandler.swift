@@ -116,7 +116,7 @@ actor ConnectionHandler {
         Log.info("流式开始: source=\(source) voice=\(voiceID) turn=\(turn)")
         // 本连接的入队/结束/取消全部串到同一根链上：帧序 = 执行序（见 StreamOpChain）
         let chain = StreamOpChain()
-        chain.hop { await self.queue.beginTurn(turn) }
+        chain.hop { await self.queue.beginTurn(turn, source: source) }
 
         let sb = StreamBuffer()
         var acc = Data()
@@ -206,7 +206,7 @@ actor ConnectionHandler {
         let jobs = splitSentences(cleaned).map {
             PlaybackJob(text: $0, voiceID: voiceID, source: source, turnID: turn)
         }
-        Log.info("流式入队: turn=\(turn) 分块=\(jobs.count) chars=\(cleaned.count)")
+        Log.info("流式入队: source=\(source) turn=\(turn) 分块=\(jobs.count) chars=\(cleaned.count)")
         chain.hop { await self.queue.enqueue(jobs, turnID: turn) }
     }
 
@@ -223,17 +223,24 @@ actor ConnectionHandler {
         defer { Darwin.close(fd) }
         guard let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
               !text.isEmpty else { return }
+        // 停止帧 `{type:stop,source:claude}`：识别是哪个来源（Claude/Codex/Qwen 的提交、
+        // 或手动 ivox quiet --source）打断的播报。无 source 记成「来源未知」。
+        if text.hasPrefix("{type:stop"), let end = text.firstIndex(of: "}") {
+            let inner = String(text[text.index(text.startIndex, offsetBy: 1)..<end])
+            let source = inner.split(separator: ",")
+                .first { $0.hasPrefix("source:") }
+                .map { String($0.dropFirst("source:".count)) }
+            Log.info("收到停止：来源=\(source ?? "未知")（fd=\(fd) bytes=\(data.count)）")
+            Task { await queue.cancelAll(origin: .stop(source ?? "")) }
+            return
+        }
+
         if text == "__IVOX_STOP__" {
             // fd + 原文 hex：断了连接谁在发、发的什么，别只留下一句「退出」
             Log.info("收到停止指令，守护进程退出（fd=\(fd) bytes=\(data.count) hex=\(Self.hex(data))）")
             exit(0)
         }
-        if text == "__IVOX_STOP_PLAYBACK__" {
-            Log.info("收到停止播放指令，取消当前及排队播放（fd=\(fd) bytes=\(data.count) hex=\(Self.hex(data))）")
-            Task { await queue.cancelAll() }
-            return
-        }
-
+        
         let (source, voiceID, content) = extractVoicePrefix(text, config: config)
         Log.info("请求解析: source=\(source) voice=\(voiceID) raw_chars=\(content.count)")
         Log.debug("请求原始内容: source=\(source) raw=\(logPreview(content))")
