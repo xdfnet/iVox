@@ -101,7 +101,8 @@ actor PlaybackQueue {
         buryAllTurns()
         await bargeIn(origin)
         turnOpen = false
-        await pumpOrResume()   // 全局停止后不应把音乐卡在暂停
+        // 不在这里恢复/暂停音乐——那是调用方的职责（语音输入要暂停、停止帧打断要恢复），
+        // cancelAll 只管打断清场。要恢复的调用方在自己侧调 resumeIfIdle()。
     }
 
     /// 用户主动要求开口（如 Cmd+D 念译文）：作废全部流式轮 + 取消在播/清队列，然后立刻播这份。
@@ -121,9 +122,15 @@ actor PlaybackQueue {
         if currentTask == nil { startPipeline() }
     }
 
-    /// 空闲时恢复音乐（由外部调用，如语音输入结束后）
+    /// 空闲时恢复音乐（由外部调用：停止帧打断后、语音输入结束后）。
+    /// cancelAll 不再碰音乐，恢复责任归调用它的这一侧；被取消的管道还没退净时
+    /// 先等它退净再恢复，否则打断在播的一句后音乐会卡在暂停（历史修过两次）。
     func resumeIfIdle() async {
-        guard jobs.isEmpty, currentTask == nil else { return }
+        guard jobs.isEmpty else { return }
+        if let task = currentTask, task.isCancelled {
+            await awaitCurrentPipelineFinished()   // 被打断的管道退净（很快），currentTask 才归 nil
+        }
+        guard currentTask == nil else { return }
         await media.resume()
     }
 

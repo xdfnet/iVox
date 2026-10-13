@@ -81,9 +81,14 @@ final class SpeechInputService: @unchecked Sendable {
                 return
             }
 
-            Task { await media.pause() }
-            Task { await queue.cancelAll(origin: .speech) }
             Log.debug("语音输入: right ⌘/⌃ 按下 → 暂停音乐 → 取消 TTS → 开始录音")
+            // cancelAll 只管打断、不碰音乐；这里串行 cancelAll → pause，确保先打断、后暂停，
+            // 音乐稳稳停在暂停态（松开后 resumeIfIdle 才恢复）。不写成两个独立 Task 并发，
+            // 免得音乐暂停与打断谁先谁后不定。
+            Task {
+                await queue.cancelAll(origin: .speech)
+                await media.pause()
+            }
 
             // 建目录 + 建 AVAudioRecorder 是同步 IO，而这里跑在 GlobalKeyTap 的事件线程上
             // （它监听的是**全系统**键盘）——必须挪出去，否则按键瞬间整机输入都会卡顿。

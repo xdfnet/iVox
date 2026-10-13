@@ -231,7 +231,10 @@ actor ConnectionHandler {
                 .first { $0.hasPrefix("source:") }
                 .map { String($0.dropFirst("source:".count)) }
             Log.info("收到停止：来源=\(source ?? "未知")（fd=\(fd) bytes=\(data.count)）")
-            Task { await queue.cancelAll(origin: .stop(source ?? "")) }
+            Task {
+                await queue.cancelAll(origin: .stop(source ?? ""))
+                await queue.resumeIfIdle()   // cancelAll 不再管音乐；打断后无后续播报则恢复音乐
+            }
             return
         }
 
