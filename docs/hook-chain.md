@@ -180,7 +180,14 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
 - **轮次（turn）语义**：同一 `turnID` 的分块顺序 append 不打断；新 turn（用户发言）触发 `bargeIn`，取消在播 + 清空旧轮队列；**无 turn 的普通播报（`ivox speak` / hook.sh）只 append 排队，不抢麦**
 - 流式轮次未结束（`turnOpen`）时队列排空就挂起等下一批，不恢复音乐；轮次结束排空后才收尾
-- 打断有 **4 个入口**，每个都带**打断来源**标识（`InterruptSource`）：停止帧 `{type:stop,source:x}`（`hook.sh <source> interrupt` / `ivox quiet --source`，走 `cancelAll`）、right⌘ 说话（`.speech`，走 `cancelAll`）、Cmd+D 译文（`.dict`，走 `speakUserInitiated`）、pi/dsh 用户发言的新轮（`.turn:<source>`，走 `beginTurn`/`enqueue` 里的 bargeIn）；Escape 取消归 `.escape`。这个标识与 `PlaybackJob.source`（这段播报是谁发的）是一对账——前者回答「谁在说」，后者回答「这次是谁打断的」。普通键/方向键不打断，**agent 回复到达时的普通播报也不打断（排队）**
+- 打断有 **4 个入口**，本质都是「用户开口」的三种方式，每个都带**打断来源**标识：
+  | 用户动作 | 入口 | 来源 |
+  |---------|------|------|
+  | in agent 发消息 | 非流式 agent（Claude/Codex/Qwen）提交瞬间：停止帧 `{type:stop,source:x}` → `cancelAll` | `stop:x` |
+  | 〃 | 流式 agent（pi/dsh）发新消息：新流首帧 → `beginTurn`/`enqueue` 里的 bargeIn | `turn:<source>` |
+  | 说话 | right⌘ / right⌃ → `cancelAll` | `speech` |
+  | 划词翻译 | Cmd+D → `speakUserInitiated`（打断且立刻念译文） | `dict` |
+  这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。Escape 放弃自己那轮（`cancelTurn`）是**自取消**，不是从别人手里抢喇叭，不占打断来源。普通键/方向键不打断，**agent 回复到达时的普通播报也不打断（排队）**
 
 ### 7. MediaController
 

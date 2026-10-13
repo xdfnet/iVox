@@ -24,8 +24,6 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     case dict
     /// 流式新轮顶替旧轮，带上新轮来源（pi/dsh）
     case turn(String)
-    /// Escape 用户取消自己那轮（cancelTurn）
-    case escape
     /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
     case shutdown
 
@@ -35,7 +33,6 @@ enum InterruptSource: Sendable, CustomStringConvertible {
         case .speech: return "speech"
         case .dict: return "dict"
         case .turn(let s): return "turn:\(s)"
-        case .escape: return "escape"
         case .shutdown: return "shutdown"
         }
     }
@@ -171,7 +168,8 @@ actor PlaybackQueue {
     /// 被取消的轮没有内容需要保护，故出栈把属主交还给被它顶掉的那一轮（可能是真正在跑的连接）。
     func cancelTurn(_ id: String) async {
         guard currentTurn == id else { return }
-        await bargeIn(.escape)
+        Log.info("用户取消轮次 \(id)：丢弃未播内容，自取消不占打断来源")
+        await bargeIn(nil)
         turnOpen = false
         bury(id)
         if turnStack.last == id { turnStack.removeLast() }
@@ -182,14 +180,16 @@ actor PlaybackQueue {
     /// 不在此清 currentTask——由旧 processNext 自然结束时自清；调用方若要立刻起新管道，
     /// 必须 `await currentTask?.value`（线性化点），否则新旧两个 consumer 会并发 write
     /// 同一个 player、争夺单一背压 continuation 槽，造成 continuation 泄漏/竞态。
-    private func bargeIn(_ origin: InterruptSource) async {
-        Log.info("打断（来源=\(origin)）：取消在播、清空队列(pending=\(jobs.count))、作废管道 seq\(pipelineSeq&+1)")
+    private func bargeIn(_ origin: InterruptSource?) async {
+        // nil = 自取消（用户 Esc 放弃自己那轮），不是从别人手里抢喇叭，不占打断来源。
+        let label = origin?.description ?? "自取消"
+        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(jobs.count))、作废管道 seq\(pipelineSeq&+1)")
         lastInterrupt = origin
         pipelineSeq &+= 1      // 作废在跑管道：其 producer/consumer 靠代号不等立即停止
         currentTask?.cancel()
         jobs.removeAll()
         signalJobs()
-        await engine.cancelActiveSynthesis(reason: origin.description)   // 显式作废旧纪元排队合成，不依赖任务取消传播
+        await engine.cancelActiveSynthesis(reason: label)   // 显式作废旧纪元排队合成，不依赖任务取消传播
         player.cancelPendingPlayback()
     }
 
@@ -348,7 +348,7 @@ actor PlaybackQueue {
                     }
                     try Task.checkCancellation()
                 } catch is CancellationError {
-                    Log.info("TTS 合成已取消 [\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "?")）")
+                    Log.info("TTS 合成已取消 [\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "自取消")）")
                     throw CancellationError()
                 } catch {
                     if !claimed, !jobs.isEmpty { jobs.removeFirst() }   // 合成失败跳过此 job，避免死循环
@@ -358,7 +358,7 @@ actor PlaybackQueue {
                 if pipelineSeq != seq {
                     // MLX 不响应中途取消：打断后被掐的这句仍跑完，但已作废。别让它显示成
                     // 普通「完成」（打断后紧邻的完成会被人误读成「没掐住」）。
-                    Log.info("TTS 合成作废（MLX 不响应中途取消，这句跑完才停）[\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "?")） \(elapsed)s")
+                    Log.info("TTS 合成作废（MLX 不响应中途取消，这句跑完才停）[\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "自取消")） \(elapsed)s")
                 } else {
                     Log.info("TTS 合成完成 [\(job.source)-\(batchID)] \(elapsed)s")
                 }
