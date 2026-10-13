@@ -36,7 +36,7 @@
     "model": "gpt-5-mini",
     "speechEnabled": true,
     "speechVoice": null,
-    "panelTimeoutSeconds": 8,
+    "panelTimeoutSeconds": 60,
     "timeoutSeconds": 20,
     "proxyURL": "http://192.168.100.6:10808"
   },

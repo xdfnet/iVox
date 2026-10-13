@@ -32,7 +32,11 @@ final class TranslationPanel {
     private static let translatedFontSize: CGFloat = 16
 
     private var panel: NSPanel?
+    /// 兜底定时器：鼠标一直不动时的最后保险（正常靠鼠标移动收起）
     private var hideWorkItem: DispatchWorkItem?
+    /// 显示时的鼠标位置；此后鼠标一动就认为「看完了」
+    private var anchorPoint: NSPoint = .zero
+    private var mouseWatchTask: Task<Void, Never>?
 
     /// 在**鼠标所在那块屏**的下方居中显示，`timeoutSeconds` 后自动隐藏。
     ///
@@ -69,16 +73,42 @@ final class TranslationPanel {
         ))
         panel.orderFrontRegardless()
         Log.debug("划词翻译: 浮窗 \(Int(size.width))×\(Int(size.height)) @ (\(Int(panel.frame.minX)),\(Int(panel.frame.minY)))")
-        scheduleHide(after: timeoutSeconds)
+
+        // 划完词手就停在鼠标上，眼睛看着浮窗；一旦手移开（要滚动、点别处、打字），
+        // 就说明看完了。比「固定几秒」准得多——读到什么时候就留到什么时候。
+        anchorPoint = mouse
+        startWatchingMouse()
+        scheduleHide(after: timeoutSeconds)   // 兜底：鼠标一直不动时的最后保险
     }
 
     func dismiss() {
         hideWorkItem?.cancel()
         hideWorkItem = nil
+        mouseWatchTask?.cancel()
+        mouseWatchTask = nil
         panel?.orderOut(nil)
     }
 
     // MARK: - 内部
+
+    /// 轮询鼠标：相对显示时位移超过 5px 就收起。
+    /// 5px 足够大，能手抖/微漂不误触；也足够小，真人一动手就跨过去了。
+    private func startWatchingMouse() {
+        mouseWatchTask?.cancel()
+        mouseWatchTask = Task { @MainActor [weak self] in
+            while !Task.isCancelled {
+                try? await Task.sleep(nanoseconds: 250_000_000)
+                guard !Task.isCancelled, let self else { return }
+                let now = NSEvent.mouseLocation
+                let dx = now.x - self.anchorPoint.x
+                let dy = now.y - self.anchorPoint.y
+                if dx * dx + dy * dy > 25 {
+                    self.dismiss()
+                    return
+                }
+            }
+        }
+    }
 
     private func scheduleHide(after seconds: Double) {
         hideWorkItem?.cancel()

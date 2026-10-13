@@ -39,7 +39,8 @@ public struct TranslationConfig: Codable, Sendable {
     public var speechEnabled: Bool
     /// 朗读音色；nil = 用 config.defaultVoice
     public var speechVoice: String?
-    /// 结果浮窗自动隐藏秒数
+    /// 结果浮窗的**兜底**隐藏秒数：正常靠「鼠标一移开就收起」，这只是鼠标一直不动时的
+    /// 最后保险，所以给得比较宽（默认 60s）
     public var panelTimeoutSeconds: Double
     /// 翻译请求超时秒数
     public var timeoutSeconds: Double
@@ -55,7 +56,7 @@ public struct TranslationConfig: Codable, Sendable {
         model: String = "gpt-5-mini",
         speechEnabled: Bool = true,
         speechVoice: String? = nil,
-        panelTimeoutSeconds: Double = 8,
+        panelTimeoutSeconds: Double = 60,
         timeoutSeconds: Double = 20,
         proxyURL: String? = nil
     ) {

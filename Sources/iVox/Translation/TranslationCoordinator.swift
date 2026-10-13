@@ -39,7 +39,8 @@ final class TranslationCoordinator {
         let raw = await ClipboardReader.copyAndRead()
         guard let raw, let text = validateSelectionText(raw) else {
             Log.info("划词翻译: 没有取到可用文本（读到 \(raw.map { "\($0.count) 字" } ?? "nil")）")
-            panel.show(original: "", translated: "没有取到选中文本", timeoutSeconds: 3)
+            panel.show(original: "", translated: "没有取到选中文本",
+                       timeoutSeconds: translateConfig.panelTimeoutSeconds)
             return
         }
         Log.info("划词翻译: 取到 \(text.count) 字，开始翻译")
