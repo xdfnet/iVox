@@ -1,23 +1,24 @@
 #!/bin/bash
 # iVox + iW Hook — Claude Code / Codex / Qwen Code / DeepSeek Harness Stop Hook
-# Usage: hook.sh <source> [say|interrupt]   # source: claude | codex | qwen | dsh
-#   hook.sh claude           → Stop（回复完成）念新回复
-#   hook.sh claude say       → 同上（显式）
-#   hook.sh claude interrupt → UserPromptSubmit，用户提交即打断（发带来源的停止帧）
+# Usage: hook.sh <speak|interrupt> <source>   # source: claude | codex | qwen | dsh
+#   hook.sh speak claude       → Stop（回复完成）念 claude 的回复
+#   hook.sh interrupt claude   → UserPromptSubmit，用户提交即打断（发带来源的停止帧）
 # 协议：stdout 必须保持干净；exit 0 = 继续，非 0 = 停止
 # 手动静音（IVOX_SKIP=1，如 Samantha 内部调用）或 reflexio 后台学习调用（CLAUDE_SMART_INTERNAL=1）→ 不播报
 [[ "${IVOX_SKIP:-}" == "1" ]] && exit 0
 [[ "${CLAUDE_SMART_INTERNAL:-}" == "1" ]] && exit 0
 
-# interrupt：挂在 UserPromptSubmit，用户一提交就打断当前播报（不读文本、不发声）。
-# 带来源发 `{type:stop,source:claude}`，让 daemon 日志认出是哪个来源打断的。
-if [[ "${2:-}" == "interrupt" ]]; then
+# 必须两个参数：动作（speak|interrupt）+ 来源，缺一即静默退出、不处理。
+# 来源与动作一个都不能猜——旧单参数 / source 打头的写法已丢弃，宁可静默也不误播/误断。
+if [[ "$#" -lt 2 ]]; then exit 0; fi
+if [[ "$1" == "interrupt" ]]; then
   cat >/dev/null 2>&1
-  src="${1:-unknown}"
-  printf '%s hook.sh interrupt source=%s\n' "$(date '+%Y-%m-%d %H:%M:%S.%3N')" "$src" >>~/.config/ivox/hook.log 2>/dev/null
-  ivox quiet --source "$src" 2>/dev/null
+  printf '%s hook.sh interrupt source=%s\n' "$(date '+%Y-%m-%d %H:%M:%S.%3N')" "$2" >>~/.config/ivox/hook.log 2>/dev/null
+  ivox quiet --source "$2" 2>/dev/null
   exit 0
 fi
+[[ "$1" == "speak" ]] || exit 0   # 未知动作：不处理
+source="$2"
 
 exec 3>&1
 exec 1>/dev/null
@@ -25,7 +26,6 @@ exec 1>/dev/null
 # 注：dsh 的回复文本由 profile 本地插件 ivox-tts.mjs 直接写进 payload 的
 # last_assistant_message，这里不再回头读 ~/.dsh/sessions/*.zstd。
 payload="$(cat)"
-source="${1:-claude}"
 
 text=$(python3 -c "
 import json, sys, re

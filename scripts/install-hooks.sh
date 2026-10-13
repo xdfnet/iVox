@@ -31,9 +31,9 @@ write_hook() {
   local event="${4:-Stop}"
   local cmd
   if [[ "$event" == "UserPromptSubmit" ]]; then
-    cmd="bash $HOOK_SH $tool_name interrupt"
+    cmd="bash $HOOK_SH interrupt $tool_name"
   else
-    cmd="bash $HOOK_SH $tool_name say"
+    cmd="bash $HOOK_SH speak $tool_name"
   fi
 
   if command -v jq &>/dev/null; then
@@ -65,15 +65,20 @@ write_prompt_hook() {
   local config_path="$1"
   local timeout="$2"
   local tool_name="$3"
-  # 历史格式 `hook.sh stop` 与 `hook.sh interrupt`（均无来源）就地迁移成
-  # `hook.sh <tool> interrupt`（要带来源，daemon 才认得出是谁打断的）
-  if grep -qE 'hook\.sh (stop|interrupt)([^a-z]|$)' "$config_path" 2>/dev/null; then
-    sed -i '' -E "s|hook\.sh (stop|interrupt)([^a-z]|$)|hook.sh $tool_name interrupt\2|g" "$config_path"
-    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断：→ $tool_name interrupt"
-  elif grep -qE 'hook\.sh [a-z-]+ interrupt' "$config_path" 2>/dev/null; then
+  # 动作参数统一为「动词在前」：`hook.sh interrupt <source>`。历史上的旧格式就地迁移：
+  #   ① `hook.sh stop` / `hook.sh interrupt`（无来源）→ `hook.sh interrupt <tool>`
+  #   ② `hook.sh <tool> interrupt`（source 打头、interrupt 打尾）→ `hook.sh interrupt <tool>`
+  # （都要带来源，daemon 才认得出是谁打断的）
+  if grep -qE 'hook\.sh (stop|interrupt)([^a-z\n ]|$)' "$config_path" 2>/dev/null; then
+    sed -i '' -E "s#hook\.sh (stop|interrupt)([^a-z\n ]|$)#hook.sh interrupt $tool_name\2#g" "$config_path"
+    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断：→ interrupt $tool_name"
+  elif grep -qE 'hook\.sh [a-z-]+ interrupt([^a-z]|$)' "$config_path" 2>/dev/null; then
+    sed -i '' -E "s#hook\.sh ([a-z-]+) interrupt([^a-z]|$)#hook.sh interrupt \1\2#g" "$config_path"
+    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断（旧格式）→ interrupt <source>"
+  elif grep -qE 'hook\.sh interrupt [a-z-]+' "$config_path" 2>/dev/null; then
     echo "[i] $config_path 的 UserPromptSubmit 打断已存在"
   elif write_hook "$config_path" "$tool_name" "$timeout" "UserPromptSubmit"; then
-    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断（$tool_name interrupt）"
+    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断（interrupt $tool_name）"
   else
     echo "⚠️  写入 UserPromptSubmit hook 失败（需 jq 或 python3）"
   fi
@@ -82,7 +87,7 @@ write_prompt_hook() {
 # ── Claude ──
 CLAUDE_JSON="$HOME/.claude/settings.json"
 if [[ -f "$CLAUDE_JSON" ]]; then
-  if grep -q 'hook.sh claude' "$CLAUDE_JSON" 2>/dev/null; then
+  if grep -q 'hook.sh speak claude' "$CLAUDE_JSON" 2>/dev/null; then
     echo "[i] Claude hook 已存在"
   elif write_hook "$CLAUDE_JSON" "claude" 10; then
     echo "✓  Claude hook"
@@ -97,7 +102,7 @@ CODEX_JSON="$HOME/.codex/hooks.json"
 mkdir -p "$(dirname "$CODEX_JSON")"
 [[ -f "$CODEX_JSON" ]] || echo '{}' > "$CODEX_JSON"
 
-if grep -q 'hook.sh codex' "$CODEX_JSON" 2>/dev/null; then
+if grep -q 'hook.sh speak codex' "$CODEX_JSON" 2>/dev/null; then
   echo "[i] Codex hook 已存在"
 elif write_hook "$CODEX_JSON" "codex" 30; then
   echo "✓  Codex hook（首次触发时授权即可）"
@@ -111,7 +116,7 @@ QWEN_JSON="$HOME/.qwen/settings.json"
 mkdir -p "$(dirname "$QWEN_JSON")"
 [[ -f "$QWEN_JSON" ]] || echo '{}' > "$QWEN_JSON"
 
-if grep -q 'hook.sh qwen' "$QWEN_JSON" 2>/dev/null; then
+if grep -q 'hook.sh speak qwen' "$QWEN_JSON" 2>/dev/null; then
   echo "[i] Qwen Code hook 已存在"
 elif write_hook "$QWEN_JSON" "qwen" 60; then
   echo "✓  Qwen Code hook"
