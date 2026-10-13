@@ -213,8 +213,19 @@ struct MediaController {
             Log.error("应用启动失败: \(error.localizedDescription)")
             return .failure(.eventPostFailed)
         }
-        Log.info("应用已启动: \(appConfig.displayName)")
-        return .success(())
+        // 真实回检：`open` 命令发出未必真启动（曾遇系统 LaunchServices 状态坏时 open 返回 0
+        // 但进程不起来，日志却照记「已启动」让人抓瞎）。轮询 ≤5s 等 bundleID 进程真出现，
+        // 没出现就判失败，让 toggle 返回 failed、不误报 opened。
+        let deadline = Date().addingTimeInterval(5)
+        while Date() < deadline {
+            if !NSRunningApplication.runningApplications(withBundleIdentifier: appConfig.bundleID).isEmpty {
+                Log.info("应用已启动: \(appConfig.displayName)")
+                return .success(())
+            }
+            try? await Task.sleep(for: .milliseconds(300))
+        }
+        Log.error("应用启动超时（open 命令已发出但进程未出现）: \(appConfig.displayName)")
+        return .failure(.eventPostFailed)
     }
 
     // MARK: - 锁屏检测
