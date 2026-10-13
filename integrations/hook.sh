@@ -13,6 +13,9 @@
 # prompt 当回复念出来。
 if [[ "${1:-}" == "interrupt" || "${1:-}" == "stop" ]]; then
   cat >/dev/null 2>&1
+  # 记一笔触发时机：排查「pi 播报被掐」时，拿这个时间戳去对 daemon.log 的
+  #「收到停止播放指令」——有记录说明就是提交打断（预期），没有则来源另有其人。
+  printf '%s hook.sh interrupt\n' "$(date '+%Y-%m-%d %H:%M:%S.%3N')" >>~/.config/ivox/hook.log 2>/dev/null
   ivox quiet 2>/dev/null
   exit 0
 fi
