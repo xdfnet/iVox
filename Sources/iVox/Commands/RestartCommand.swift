@@ -12,6 +12,23 @@ struct RestartCommand: ParsableCommand {
 
     func run() throws {
         let socketPath = AppPaths.socketPath
+        // autostart 已接管（LaunchAgent 托管 + KeepAlive）：不能走「发停止 + nohup 拉起」——
+        // 发停止会被 KeepAlive 立刻用旧二进制拉起、nohup 的新 serve 又检测已运行而退出，
+        // 重启会失效。改用 launchctl kickstart 让 launchd 用当前部署的二进制重载 job。
+        if AutostartCommand.isEnabled {
+            let status = AutostartCommand.launchctl(["kickstart", "-k", AutostartCommand.guiTarget + "/" + AutostartCommand.label])
+            if status == 0 {
+                for _ in 0..<40 {
+                    if SocketClient.isRunning(path: socketPath) {
+                        print("守护进程已重启")
+                        return
+                    }
+                    Thread.sleep(forTimeInterval: 0.25)
+                }
+            }
+            print("警告: launchd 重启失败（exit \(status)），请检查日志；或 ivox autostart off 后手动 ivox on")
+            return
+        }
         // 已在运行则先停掉，确保按当前二进制重新启动
         var didRestart = false
         if SocketClient.isRunning(path: socketPath) {
