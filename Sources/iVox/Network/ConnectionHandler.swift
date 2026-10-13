@@ -224,11 +224,12 @@ actor ConnectionHandler {
         guard let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
               !text.isEmpty else { return }
         if text == "__IVOX_STOP__" {
-            Log.info("收到停止指令，守护进程退出")
+            // fd + 原文 hex：断了连接谁在发、发的什么，别只留下一句「退出」
+            Log.info("收到停止指令，守护进程退出（fd=\(fd) bytes=\(data.count) hex=\(Self.hex(data))）")
             exit(0)
         }
         if text == "__IVOX_STOP_PLAYBACK__" {
-            Log.info("收到停止播放指令，取消当前及排队播放")
+            Log.info("收到停止播放指令，取消当前及排队播放（fd=\(fd) bytes=\(data.count) hex=\(Self.hex(data))）")
             Task { await queue.cancelAll() }
             return
         }
@@ -337,6 +338,11 @@ actor ConnectionHandler {
             }
             return true
         }
+    }
+
+    /// 原始字节的十六进制（截前 40）：排查哨兵等特殊指令的来源时，看 hex 就能比对
+    private nonisolated static func hex(_ data: Data) -> String {
+        data.prefix(40).map { String(format: "%02x", $0) }.joined()
     }
 
     private nonisolated func parseMetaKV(_ header: String) -> [String: String] {
