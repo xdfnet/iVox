@@ -119,8 +119,11 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_start", (event: unknown, ctx: unknown) => {
     if (!hasUI(ctx)) return;
     if ((event as { message?: { role?: string } }).message?.role === "user") {
+      // 只打断上一轮，**不开新流**——新流等 `turn_start` 开（没有则 `message_update`
+      // 兜底 `if (!turnId) startTurn()`）。若在这里也 startTurn()，会与紧接的
+      // turn_start 各开一条流，两条轮次互相顶，正在合成的就被掐 =
+      // 播报自己打断自己（曾实测日志出现成对的「流式开始」+ 紧跟 {cancel}）。
       if (turnId) cancelTurn();
-      startTurn();
     }
   });
 
