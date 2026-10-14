@@ -16,12 +16,11 @@ actor ClaudeAskService {
     private var sessionID = ""
 
     private var nextID = 0
-    private var pending: [String: CheckedContinuation<(response: String, isDuplicateOfLast: Bool), Error>] = [:]
+    private var pending: [String: CheckedContinuation<Void, Error>] = [:]
     private var waitOrder: [String] = []   // FIFO：result 按发送顺序匹配
     /// 每个在等结果的问题，额外挂一个「过程段」回调：assistant 帧到达时调用，把过程增量吐出去。
+    /// 过程段即完整回复（含最后一条 assistant = 结尾），result 内容与之重复，故不再取 result 文本。
     private var pendingOnSegment: [String: @Sendable (String) -> Void] = [:]
-    /// 每个等待者已回传的最后一段 assistant 文本：result 到达时与其比较，判定结尾是否重复。
-    private var lastSegment: [String: String] = [:]
     private var stdoutBuffer = Data()
 
     init(dataDir: String, claudePath: String = "", timeoutSeconds: Int = 120) {
@@ -40,49 +39,24 @@ actor ClaudeAskService {
 
     // MARK: - 公开接口
 
-    /// 向常驻 agent 提问，返回本轮回复文本
-    func ask(text: String) async throws -> String {
-        // /new：重置会话，不发给模型
-        if text.trimmingCharacters(in: .whitespaces) == "/new" {
-            await terminateProc()
-            sessionID = ""
-            saveState()
-            return "已开启新会话"
-        }
-
-        try ensureProcess()
-        let id = String(format: "%08x", consumeID())
-        // ask 不经过程段回传，等价于「只取 result」，绕开去重（保持原语义：result 原样返回）。
-        let (response, _) = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(response: String, isDuplicateOfLast: Bool), Error>) in
-            pending[id] = continuation
-            waitOrder.append(id)
-            let wrapped = ClaudeInput(type: "user", message: .init(role: "user", content: text))
-            if let line = try? JSONEncoder().encode(wrapped) {
-                stdinPipe?.fileHandleForWriting.write(line)
-                stdinPipe?.fileHandleForWriting.write(Data("\n".utf8))
-            }
-            armTimeout(id: id)
-        }
-        return response
-    }
-
-    /// 带过程段回传的提问：claude 的 assistant 帧到达时调 onSegment（每段完整回复文本），
-    /// 最终 result 作为返回值收尾。用于微信「过程可见 + 完整结尾」。
-    /// 返回值第二个元素 = 是否「result 内容与最后一个已回传的 assistant 段相同」——
-    /// 相同说明结尾已随过程段发过，调用方不必重复发 result；不同才需补发完整结尾。
+    /// 提问并回调过程段，最后一条 assistant（含完整回复与结尾）通过 onSegment 送出后返回。
+    /// 微信链路用：assistant 帧逐段回调（过程可见），不单独取 result（内容与之重复）。
+    /// - Parameters:
+    ///   - text: 发送给 agent 的用户消息
+    ///   - onSegment: 每段 assistant 文本回调（含最后的完整结尾），@Sendable 可在任意队列调用
     func askStreaming(
         text: String,
         onSegment: @escaping @Sendable (String) -> Void
-    ) async throws -> (response: String, isDuplicateOfLast: Bool) {
+    ) async throws {
         if text.trimmingCharacters(in: .whitespaces) == "/new" {
             await terminateProc()
             sessionID = ""
             saveState()
-            return ("已开启新会话", false)
+            return
         }
         try ensureProcess()
         let id = String(format: "%08x", consumeID())
-        return try await withCheckedThrowingContinuation { continuation in
+        return try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
             pending[id] = continuation
             pendingOnSegment[id] = onSegment
             waitOrder.append(id)
@@ -93,6 +67,7 @@ actor ClaudeAskService {
             }
             armTimeout(id: id)
         }
+        // continuation 为 Void：结果完全经 onSegment 回调交付，resume 仅作「本轮结束」信号。
     }
 
     /// 停止：关 stdin，等待退出，超时强杀
@@ -170,7 +145,7 @@ actor ClaudeAskService {
         }
     }
 
-    private func resolve(id: String, result: Result<(response: String, isDuplicateOfLast: Bool), Error>) {
+    private func resolve(id: String, result: Result<Void, Error>) {
         guard let cont = pending.removeValue(forKey: id) else { return }
         waitOrder.removeAll { $0 == id }
         pendingOnSegment.removeValue(forKey: id)
@@ -216,13 +191,13 @@ actor ClaudeAskService {
             guard !lineData.isEmpty,
                   let o = try? JSONDecoder().decode(ClaudeOutput.self, from: lineData) else { continue }
 
-            // assistant 帧 = 一段完整回复文本 → 当过程段回调吐给最早等待者（需在 result 前）
+            // assistant 帧 = 一段完整回复文本 → 当过程段回调吐给最早等待者（最后一条 assistant 即完整结尾）。
+            // result 内容与 assistant 重复，不单独取文本；assistant 帧不终结本轮（等 result 收尾）。
             if o.type == "assistant", let seg = o.assistantText, !seg.isEmpty {
                 if let id = waitOrder.first(where: { pending[$0] != nil }) {
                     pendingOnSegment[id]?(seg)
-                    lastSegment[id] = seg   // 记录最后一段，供 result 去重
                 }
-                continue   // assistant 帧不终结本轮，继续等 result
+                continue
             }
             guard o.type == "result" else { continue }
 
@@ -230,19 +205,14 @@ actor ClaudeAskService {
                 sessionID = sid
                 saveState()
             }
-            // result 按 FIFO 匹配当前最早等待者（单 agent 串行，无 user 路由）
+            // result 只作「本轮结束」信号（内容与最后 assistant 重复，不另发）；不取文本、不去重。
             guard let id = waitOrder.first(where: { pending[$0] != nil }) else { continue }
             waitOrder.removeAll { $0 == id }
             pendingOnSegment.removeValue(forKey: id)   // 收尾，清掉过程回调
-            let last = lastSegment.removeValue(forKey: id)
-            // 去重：result 内容 = 最后一段已回传的 assistant → 返回空串，调用方不重复发结尾。
-            // 纯文本回复（assistant 整段 = result）不发第二条；工具多段/长回复（不同）才补发完整结尾。
-            let resultText = o.resultText ?? ""
-            let isDuplicate = !resultText.isEmpty && last == resultText
             if o.isError == true {
                 resolve(id: id, result: .failure(WeChatError.unknown(o.resultText ?? "agent 执行出错")))
             } else {
-                resolve(id: id, result: .success((isDuplicate ? "" : resultText, isDuplicate)))
+                resolve(id: id, result: .success(()))
             }
         }
     }

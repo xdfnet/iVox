@@ -95,12 +95,13 @@ DeepSeek Harness 不同：它内置的桥接插件（`dsh-hooks-claude-code` / `
 
 `~/.config/ivox/hook.sh`
 
-两种模式：
+播报模式：
 
-- **`hook.sh speak <source>`（Stop）**：动词 `speak` + 来源参数（如 `codex` / `claude` / `dsh`），从 stdin JSON 提取 `last_assistant_message`。dsh 的这份 payload 由本地插件 `ivox-tts` 直接投喂（见上），脚本里已没有读 zstd 会话日志的分支。
-  - 从 stdin 读取 Hook payload，提取最后一条 assistant message
-  - 调用 `ivox speak --source <source> <text>`，后台运行 (`&`)，**不阻塞** AI 工具
-- **`hook.sh interrupt <source>`（UserPromptSubmit）**：不读文本、不发声，丢弃 stdin payload 后调 `ivox quiet --source <source>`（发送 `{type:stop,source:<source>}`），负责打断当前播报**并作废全部流式轮**（你开口 = 全场闭嘴，含 pi/dsh 正在生成的轮次）。daemon 会记下这次打断的来源。daemon 未运行时静默成功。
+- **`hook.sh msgdisplay <source>`（MessageDisplay，Claude Code 交互会话主路径）**：assistant 消息流式显示时按行批触发，`delta` = 自上一批以来新完成的整行文本。**必须极快返回**（Claude Code 等本钩子返回才渲染该批），故 delta 提取 + 审计用单个 python、播报用后台 `&`。走 `ivox speak --source <source> <text>` 排队进桶，过程内容（分步/工具多段）逐句播报；最后一条 assistant 即完整结尾。空/过短纯西文 delta 不播。
+- **`hook.sh speak <source>`（Stop / ivox speak 场景）**：从 stdin JSON 提取 `last_assistant_message`。dsh 的 payload 由本地插件 `ivox-tts` 直接投喂。调用 `ivox speak` 后台运行，不阻塞 AI 工具。
+  - 注：Claude Code 交互会话现有配置**只挂 `MessageDisplay`**（不再挂 Stop），因 MessageDisplay 的 final 批已含完整结尾、与 Stop 同播会重复；`speak` 模式保留给其他工具/手动 `ivox speak`。
+
+> **`interrupt` 分支已从 hook.sh 移除**——打断权只归 ivox 快捷键（右⌘/Cmd+D/Ctrl+Esc）与手动 `ivox quiet`，不再经 hook.sh 自动打断（UserPromptSubmit 亦不挂）。`ivox quiet` 能力保留在 ivox CLI 侧。
 
 Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执行。脚本不传配置文件路径，依赖 `~/.config/ivox/config.json` 自动加载。
 

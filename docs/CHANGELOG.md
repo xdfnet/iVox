@@ -2,6 +2,8 @@
 
 ## Unreleased（下一版）
 
+- **Claude 会话过程内容逐句播报（MessageDisplay 钩子）+ 播报去重收敛** — 交互式 Claude Code 会话里「提交后过程回复听不见」：此前只靠 `Stop` 钩子在回复写完一次性播最终文本，分步/工具多段的中间过程没通路进 ivox。现改用 **`MessageDisplay` 钩子**（`hook.sh msgdisplay claude`）——assistant 消息流式显示时按行批触发，`delta` 增量逐句进桶播报，过程（第一步/第二步…）边写边播，最后一条 assistant 即完整结尾。**修复播两遍**：根因是 MessageDisplay 的 final 批已含完整结尾、与 `Stop` 的 `last_assistant_message` 同播重复，且 `make update` 经 `install-hooks.sh` 把 UserPromptSubmit interrupt 写回 settings.json、提交即触发打断叠加错乱。处置：摘 `Stop`（只留 MessageDisplay）、摘 `UserPromptSubmit`、`hook.sh` 移除 **interrupt 分支**（`ivox quiet` 手动能力保留）、`install-hooks.sh` 的 `write_prompt_hook` 置 no-op（不再自动挂提交打断）。`MessageDisplay` 钩子须极快返回（Claude 等它渲染该批）。**微信链路只拿 assistant 帧**——最后一条 assistant 即结尾，不单独取 result（内容重复），`askStreaming` 简化为只回调过程段、去重逻辑删除。
+
 ## v3.7.0 — 2026-10-14
 
 - **打断权收紧为「仅快捷键」：按轮分桶排队、播全播完** — 用户「什么都没干也老被打断」的根因：打断来源几乎全是 `stop:claude`（Claude Code 的 `UserPromptSubmit` 钩子每个会话轮次都触发）与流式新轮顶替。现打断权**只归用户快捷键**——right⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴；`{type:stop}` 停止帧**完全失效**（已摘除 `~/.claude/settings.json` 的 UserPromptSubmit interrupt 钩子，daemon 收到停止帧只记日志忽略）。PlaybackQueue 从「单一 `jobs` 数组 + 单值 `currentTurn` 门控」重构为**有序 `QueueBucket`（每轮一桶）**：新 turn 排队不打断、队首桶播完才前移 = 「播全播完」；全局 `turnOpen` 单布尔改为 `anyTurnInFlight`（由每桶 `ended` 推导），修多轮按序排队时最后一桶播完音乐不恢复的误判。验证：`make build`+单测 108 ✓+混合队列压测（Claude 普通播报串联 pi 双流）顺序正确、零自动打断、末尾音乐正常恢复、`ivox status` 六域 ✓

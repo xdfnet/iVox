@@ -58,30 +58,14 @@ with open(path, 'w') as f:
   fi
 }
 
-# UserPromptSubmit 打断 hook（用户一提交就停止旧播报）。
-# 历史参数名 `stop` 与 Stop 事件同名易混，已统一改叫 interrupt：发现旧配置就地改写，
-# 已挂 interrupt 则跳过，都没有才新增。
+# UserPromptSubmit 打断 hook 已**废弃**：不再自动挂「提交即打断」。
+# 飞哥决策——打断权只归快捷键（右⌘ 说话 / Ctrl+Esc 闭嘴 / Cmd+D 译文），
+# 任何 agent 会话轮次（提交、自动续写、后台）都**不再打断**播报（分桶排队播全）。
+# 此前每次 make update 都经这里把 `hook.sh interrupt` 写回 settings.json，
+# 与「不自动打断」决策相悖且造成提交即触发 interrupt 的重复/错乱。保留签名壳但不做事，
+# 未来若要恢复「提交即打断」只需在此重新实现。
 write_prompt_hook() {
-  local config_path="$1"
-  local timeout="$2"
-  local tool_name="$3"
-  # 动作参数统一为「动词在前」：`hook.sh interrupt <source>`。历史上的旧格式就地迁移：
-  #   ① `hook.sh stop` / `hook.sh interrupt`（无来源）→ `hook.sh interrupt <tool>`
-  #   ② `hook.sh <tool> interrupt`（source 打头、interrupt 打尾）→ `hook.sh interrupt <tool>`
-  # （都要带来源，daemon 才认得出是谁打断的）
-  if grep -qE 'hook\.sh (stop|interrupt)([^a-z\n ]|$)' "$config_path" 2>/dev/null; then
-    sed -i '' -E "s#hook\.sh (stop|interrupt)([^a-z\n ]|$)#hook.sh interrupt $tool_name\2#g" "$config_path"
-    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断：→ interrupt $tool_name"
-  elif grep -qE 'hook\.sh [a-z-]+ interrupt([^a-z]|$)' "$config_path" 2>/dev/null; then
-    sed -i '' -E "s#hook\.sh ([a-z-]+) interrupt([^a-z]|$)#hook.sh interrupt \1\2#g" "$config_path"
-    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断（旧格式）→ interrupt <source>"
-  elif grep -qE 'hook\.sh interrupt [a-z-]+' "$config_path" 2>/dev/null; then
-    echo "[i] $config_path 的 UserPromptSubmit 打断已存在"
-  elif write_hook "$config_path" "$tool_name" "$timeout" "UserPromptSubmit"; then
-    echo "✓  $(basename "$(dirname "$config_path")") UserPromptSubmit 打断（interrupt $tool_name）"
-  else
-    echo "⚠️  写入 UserPromptSubmit hook 失败（需 jq 或 python3）"
-  fi
+  return 0   # no-op：不再挂 UserPromptSubmit interrupt
 }
 
 # ── Claude ──

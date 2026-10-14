@@ -337,16 +337,16 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-每个 hook 类工具只挂 **Stop → `hook.sh <source>`**（回复完成，`ivox speak` 念新回复）；**不再挂「提交即打断」**——UserPromptSubmit 的 `hook.sh interrupt` 已弃用（打断权只归 ivox 快捷键 right⌘/Cmd+D/Ctrl+Esc）。
+**打断权只归 ivox 快捷键**（right⌘ 说话 / Cmd+D 译文 / Ctrl+Esc 闭嘴）；`hook.sh` **不再有 interrupt 分支**（`ivox quiet` 手动能力保留在 ivox CLI），`UserPromptSubmit` 亦不挂。
 
 | 工具 | 配置/挂载 | 回复播报 |
 |------|----------|----------|
-| Claude Code | `~/.claude/settings.json` | Stop → hook.sh claude |
+| Claude Code（交互会话） | `~/.claude/settings.json` | **MessageDisplay → `hook.sh msgdisplay claude`**（assistant 行批增量，过程逐句播、final 批含完整结尾；**不再挂 Stop**） |
 | Codex | `~/.codex/hooks.json` | Stop → hook.sh codex |
 | Qwen Code | `~/.qwen/settings.json` | Stop → hook.sh qwen |
 | DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | `agent/assistant-stream` 逐 text-delta 流式；socket 不可用时 turn-stopping 退回 hook.sh（内置桥接 Stop payload 无文本） |
 | PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_update` 流式（`agent_settled` 兜底） |
 
-由 `install-hooks.sh` 统一安装。`hook.sh` 的 `interrupt` 模式保留为残留接口但**不再由任何钩子调用**——即使发来 `{type:stop}` 帧，daemon 也忽略不打断（ConnectionHandler 只记日志）。`<source>` 模式提取回复文本调 `ivox speak`。
+由 `install-hooks.sh` 统一安装；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op）。`hook.sh` 有 `speak` / `msgdisplay` 两模式：`speak` 提取 `last_assistant_message`、`msgdisplay` 提取 `delta` 增量，都经 `ivox speak` 排队进桶（不打断）。
 
 **集成资产随发布包自包含**：release tarball 除 `ivox` 外含整个 `integrations/`（含 `install-hooks.sh`），安装/升级时解包到权威源 `~/.config/ivox/integrations/`，再由分发器幂等铺到各 agent 位置。同步只发生在三个显式时机：`make update`（runtime.sh deploy-bin）、`ivox upgrade`（UpgradeCommand 解包后 Process 调分发器）、`install-binary.sh`（curl|bash 首次安装也补齐集成）；守护进程启动不自动同步。分发器按自身位置探测素材源：脚本在 `integrations/` 内（部署态）用同级目录，在 `scripts/`（源码态）用 `../integrations`。
