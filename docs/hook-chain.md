@@ -232,13 +232,13 @@ Socket 接入: fd=22 bytes=1791             # ConnectionHandler 收到连接
 队列状态: pending=13 processing=false     # PlaybackQueue 状态
 TTS 合成开始 [claude-B5AAC5] chars=11     # 开始合成（带批次号）
 TTS 合成完成 [claude-B5AAC5] 2.2s         # 本句合成完
-打断（来源=stop:claude）：取消在播…       # 谁打断的、作废了管道序号
-TTS 合成已取消（打断来源=stop:claude）     # 引擎底层取消也能对上同一来源
-TTS 合成作废（MLX 不响应中途取消…）[…]（打断来源=stop:claude）  # 被掐的这句跑完但已作废
+打断（来源=esc）：取消在播、清空队列…     # 快捷键打断（speech/esc/dict 之一）、作废管道序号
+TTS 合成已取消（打断来源=esc）             # 引擎底层取消也能对上同一来源
+TTS 合成作废（MLX 不响应中途取消…）[…]（打断来源=esc）  # 被掐的这句跑完但已作废
 播放收尾完成: 尾音=0.8s                    # 整轮播完
 ```
 
-打断来源与播报来源成对地出现在日志里：`TTS 合成开始 [<source>-<batch>]` 回答「谁在说」，`打断（来源=<origin>）` 与 `TTS 合成已取消/作废（打断来源=<origin>）` 回答「这次谁掐的」。
+打断来源与播报来源成对地出现在日志里：`TTS 合成开始 [<source>-<batch>]` 回答「谁在说」，`打断（来源=<origin>）` 与 `TTS 合成已取消/作废（打断来源=<origin>）` 回答「这次谁掐的」。`<origin>` 只可能是 `speech` / `esc` / `dict`（用户快捷键）——`stop:…` 停止帧与 `turn:…` 新轮已不再是打断来源，前者收到即忽略、后者只排队。
 
 ## 代码签名
 

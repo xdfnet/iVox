@@ -130,10 +130,10 @@ Daemon (actor)
 
 - Actor，管理播报队列
 - **连续播放管道**：`processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，句间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
-- `enqueue` 追加到队列尾部，同 `turnID` 不打断；新 turn（用户发言）触发 `bargeIn` 打断旧轮；**无 turn 的普通播报（hook.sh / `ivox speak`）只排队，不打断**
-- **过期轮次静默丢弃**：`currentTurn` 已切到新轮后，旧轮的迟到帧/`endTurn`（含旧连接 EOF 残尾）一律 no-op、不再 `bargeIn`，避免旧轮残音反杀新轮（真人对话：你一开口对方就停）
-- 流式轮次（`turnOpen`）队列瞬时排空时挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐；`endTurn` 后排空才收尾
-- 打断只有两个途径，且都源于**用户开口**：**说话/提交**（right⌘ 录音与 `hook.sh interrupt` 哨兵都触发 `cancelAll()`）与**新轮次**（用户给 pi/dsh 发言，新 turn 触发 `bargeIn`）；agent 回复到达的普通播报只排队。不再有「跳段」语义
+- `enqueue` **按轮分桶**追加到队列尾部，同 `turnID` 分块并入同桶顺序 append；新 turn 在队尾追加新桶**不打断**在播旧轮；**无 turn 的普通播报（hook.sh / `ivox speak`）同排队**。`processNext` 播完队首桶才前移 = 「按轮排队、播全播完」
+- **过期轮次静默丢弃**：`turnID` 已被作废（`deadTurns` 墓碑）的迟到帧/`endTurn` 一律 no-op，不再开口，避免残音反杀
+- 还有未结束的流式轮（`anyTurnInFlight`，由各桶 `ended` 推导）时队列瞬时排空就挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐；全部轮 `ended` 且排空才收尾
+- **打断权只归用户快捷键**：right⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴（都触发 `cancelAll()`）；**`{type:stop}` 停止帧与流式新轮不再打断**。agent 回复到达的普通播报只排队。不再有「跳段」语义
 - `cancelAll()` 清空队列 + 取消全部播放（bargeIn + 清 turn 状态）
 - 等待 TTS 模型就绪后再开始合成
 - 播报前通过 `MediaController` 暂停音乐，播完恢复
@@ -160,9 +160,9 @@ Daemon (actor)
 `Sources/iVox/SpeechInput/`
 
 - 键盘监听由 `HotKey/GlobalKeyTap` **独占**（一个 tap 服务多个消费者，见下节），本服务只订阅**修饰键**：右⌘(0x36) / 右⌃(0x3E) 的状态变化由它回调进来
-- **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」——语音打断的唯一按键途径）
+- **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」——用户快捷键打断之一）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 另一条打断途径是用户给 pi/dsh 发言时新轮次入队自动 bargeIn，无需按键
+- 打断权一共三个快捷键：right⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴（后者只静音播报 + 恢复音乐，不录音）。**pi/dsh 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 
@@ -260,7 +260,7 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 pi 扩展（`integrations/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在模型生成中逐 `text_delta` 转发**原文**（TS 侧不切句），经一条长连接按 `\n` 分帧送入 socket：
 
 ```
-{type:stream,source:pi,turn:<id>}\n   首帧开流（beginTurn，打断旧轮）
+{type:stream,source:pi,turn:<id>}\n   首帧开流（beginTurn，登记轮次；新轮排队不打断）
 <增量原文行>…                          仅 text_delta，跳过 thinking/toolcall
 {end}\n                                turn_end 收尾      或  {cancel:<id>}\n（Escape）
 ```
@@ -337,16 +337,16 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-每个 hook 类工具挂两个事件：**UserPromptSubmit → `hook.sh interrupt`**（提交即打断旧播报，调 `ivox quiet`）与 **Stop → `hook.sh <source>`**（回复完成，`ivox speak` 念新回复）。
+每个 hook 类工具只挂 **Stop → `hook.sh <source>`**（回复完成，`ivox speak` 念新回复）；**不再挂「提交即打断」**——UserPromptSubmit 的 `hook.sh interrupt` 已弃用（打断权只归 ivox 快捷键 right⌘/Cmd+D/Ctrl+Esc）。
 
-| 工具 | 配置/挂载 | 提交即打断 | 回复播报 |
-|------|----------|-----------|----------|
-| Claude Code | `~/.claude/settings.json` | UserPromptSubmit → hook.sh interrupt | Stop → hook.sh claude |
-| Codex | `~/.codex/hooks.json` | UserPromptSubmit → hook.sh interrupt | Stop → hook.sh codex |
-| Qwen Code | `~/.qwen/settings.json` | UserPromptSubmit → hook.sh interrupt | Stop → hook.sh qwen |
-| DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | 新 turn `start` 帧自动 bargeIn | `agent/assistant-stream` 逐 text-delta 流式；socket 不可用时 turn-stopping 退回 hook.sh（内置桥接 Stop payload 无文本） |
-| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_start` 用户消息即 `{cancel}` 旧轮 + 新轮首帧（beginTurn 的 bargeIn 清场） | `message_update` 流式（`agent_settled` 兜底） |
+| 工具 | 配置/挂载 | 回复播报 |
+|------|----------|----------|
+| Claude Code | `~/.claude/settings.json` | Stop → hook.sh claude |
+| Codex | `~/.codex/hooks.json` | Stop → hook.sh codex |
+| Qwen Code | `~/.qwen/settings.json` | Stop → hook.sh qwen |
+| DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | `agent/assistant-stream` 逐 text-delta 流式；socket 不可用时 turn-stopping 退回 hook.sh（内置桥接 Stop payload 无文本） |
+| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_update` 流式（`agent_settled` 兜底） |
 
-由 `install-hooks.sh` 统一安装（已存在则跳过；`UserPromptSubmit` 的旧参数名 `stop` 会被就地改写为 `interrupt`）。`hook.sh` 两种模式：`interrupt` 只调 `ivox quiet` 打断；`<source>` 提取回复文本调 `ivox speak`（TTS 由各工具这一层统一处理）。
+由 `install-hooks.sh` 统一安装。`hook.sh` 的 `interrupt` 模式保留为残留接口但**不再由任何钩子调用**——即使发来 `{type:stop}` 帧，daemon 也忽略不打断（ConnectionHandler 只记日志）。`<source>` 模式提取回复文本调 `ivox speak`。
 
 **集成资产随发布包自包含**：release tarball 除 `ivox` 外含整个 `integrations/`（含 `install-hooks.sh`），安装/升级时解包到权威源 `~/.config/ivox/integrations/`，再由分发器幂等铺到各 agent 位置。同步只发生在三个显式时机：`make update`（runtime.sh deploy-bin）、`ivox upgrade`（UpgradeCommand 解包后 Process 调分发器）、`install-binary.sh`（curl|bash 首次安装也补齐集成）；守护进程启动不自动同步。分发器按自身位置探测素材源：脚本在 `integrations/` 内（部署态）用同级目录，在 `scripts/`（源码态）用 `../integrations`。

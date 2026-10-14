@@ -21,7 +21,7 @@ DSH（DeepSeek Harness）回复时用 iVox 朗读。**默认第二层逐句流�
           选最终文本 spawn hook.sh（stdin last_assistant_message）
 ```
 
-流贯穿整个 agent turn：同 turn 内多个 attempt（工具调用前后多段文本）复用一条连接，仅在段间补换行；`frame.turn` 变化才开新流（新 turn 自带打断旧轮）。子代理会话（`subs`）不转发。全程无轮询、无临时文件、无竞态。
+流贯穿整个 agent turn：同 turn 内多个 attempt（工具调用前后多段文本）复用一条连接，仅在段间补换行；`frame.turn` 变化才开新流（**新 turn 排队，不打断旧轮**——队列按轮分桶播全播完）。子代理会话（`subs`）不转发。全程无轮询、无临时文件、无竞态。
 
 > 注：`assistant/message` / `assistant/attempt` 的 `event.data.stream` 是**该 step 的完整紧凑流（累计）**，不是增量，不能直接逐帧转发；真增量只在 `agent/assistant-stream` 的 `chunk` frame（`chunk.chunk = {type:'text-delta', index, text}`，跳过 reasoning/tool-call delta）。
 
