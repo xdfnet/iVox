@@ -30,6 +30,7 @@ final class GlobalKeyTap: @unchecked Sendable {
         case openTerminalQwen     // Opt+Q
         case openTerminalCodex    // Opt+W
         case copyPath             // Opt+C
+        case escInterrupt         // Ctrl+Esc 手动闭嘴（不录音）
     }
 
     /// 右⌘(0x36) / 右⌃(0x3E) 状态变化。在 tap 线程同步调用，**必须立刻返回**。
@@ -194,6 +195,7 @@ final class GlobalKeyTap: @unchecked Sendable {
         Binding(keyCode: 0x0C, modifiers: .maskAlternate, hotKey: .openTerminalQwen),  // Q
         Binding(keyCode: 0x0D, modifiers: .maskAlternate, hotKey: .openTerminalCodex), // W
         Binding(keyCode: 0x08, modifiers: .maskAlternate, hotKey: .copyPath),          // C
+        Binding(keyCode: 0x35, modifiers: .maskControl, hotKey: .escInterrupt),        // Esc（Ctrl+Esc）
     ]
 
     // MARK: - 权限

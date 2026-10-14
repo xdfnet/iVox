@@ -38,6 +38,8 @@ final class QuickActionsService {
             await openTerminal(running: "codex")
         case .copyPath:
             copySelectedPath()
+        case .escInterrupt:
+            break   // 不属于本域；Daemon 分派时已处理打断，这里只是穷举
         }
     }
 

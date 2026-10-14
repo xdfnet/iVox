@@ -275,13 +275,19 @@ actor Daemon {
                 case .openTerminal, .openTerminalClaude, .openTerminalQwen,
                      .openTerminalCodex, .copyPath:
                     await quickActionsService.handle(hotKey, at: location)
+                case .escInterrupt:
+                    // Ctrl+Esc 手动闭嘴：用户不想说话，只静音播报 + 恢复音乐。
+                    // 语义同停止帧（不录音），不做右⌘ 那套「打断 + 暂停音乐」——
+                    // 打断后立即 resume，否则用户安静聆听的背景音乐会一直卡在暂停态。
+                    await self.queue.cancelAll(origin: .esc)
+                    await self.queue.resumeIfIdle()
                 }
             }
         }
         // 处理器都装好了，这时才开 tap（顺序反了会让启动瞬间的按键落到 nil handler 上）
         keyTap.start()
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
-        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/W/C QuickActions）")
+        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/W/C QuickActions；Ctrl+Esc 手动闭嘴）")
     }
 
     private func startMediaHTTPServer() {

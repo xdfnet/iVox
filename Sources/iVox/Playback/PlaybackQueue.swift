@@ -22,6 +22,9 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     case speech
     /// Cmd+D 划词翻译（用户主动朗读，speakUserInitiated）
     case dict
+    /// Ctrl+Esc 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，
+    /// 静音播报后由调用方恢复音乐（语义同停止帧，不走右⌘ 的录音暂停）
+    case esc
     /// 流式新轮顶替旧轮，带上新轮来源（pi/dsh）
     case turn(String)
     /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
@@ -32,6 +35,7 @@ enum InterruptSource: Sendable, CustomStringConvertible {
         case .stop(let s): return s.isEmpty ? "stop:未知" : "stop:\(s)"
         case .speech: return "speech"
         case .dict: return "dict"
+        case .esc: return "esc"
         case .turn(let s): return "turn:\(s)"
         case .shutdown: return "shutdown"
         }
