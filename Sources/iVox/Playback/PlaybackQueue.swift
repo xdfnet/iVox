@@ -422,6 +422,12 @@ actor PlaybackQueue {
         }
         if currentTaskSeq == seq { currentTask = nil }   // 已被新管道顶替则不清
         await Task.yield()
+        // 收尾窗口兜底：drain 等待尾音期间新入队的桶，旧管道正在收尾、currentTask 尚非 nil，
+        // enqueue 不肯起新管道——这里须回头检查「有桶待播却无管道」并补起，否则新内容永久躺着
+        //（漏播根因，实测 17:14 claude 317字 5块入队后躺在队列零合成）。
+        if hasPendingBuckets, currentTask == nil {
+            startPipelineIfPending()
+        }
         // 还有流动中的轮（未 endTurn）时不恢复音乐——该轮分块可能马上到
         if !hasPendingBuckets, gen == generation, !anyTurnInFlight, !Task.isCancelled {
             await media.resume()
