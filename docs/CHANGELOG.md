@@ -2,6 +2,8 @@
 
 ## Unreleased（下一版）
 
+## v3.7.0 — 2026-10-14
+
 - **打断权收紧为「仅快捷键」：按轮分桶排队、播全播完** — 用户「什么都没干也老被打断」的根因：打断来源几乎全是 `stop:claude`（Claude Code 的 `UserPromptSubmit` 钩子每个会话轮次都触发）与流式新轮顶替。现打断权**只归用户快捷键**——right⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴；`{type:stop}` 停止帧**完全失效**（已摘除 `~/.claude/settings.json` 的 UserPromptSubmit interrupt 钩子，daemon 收到停止帧只记日志忽略）。PlaybackQueue 从「单一 `jobs` 数组 + 单值 `currentTurn` 门控」重构为**有序 `QueueBucket`（每轮一桶）**：新 turn 排队不打断、队首桶播完才前移 = 「播全播完」；全局 `turnOpen` 单布尔改为 `anyTurnInFlight`（由每桶 `ended` 推导），修多轮按序排队时最后一桶播完音乐不恢复的误判。验证：`make build`+单测 108 ✓+混合队列压测（Claude 普通播报串联 pi 双流）顺序正确、零自动打断、末尾音乐正常恢复、`ivox status` 六域 ✓
 - **Ctrl+Esc 手动闭嘴快捷键** — 新增打断键：不录音，只静音当前播报 + 恢复音乐（语义同停止帧，与 right⌘「说话+暂停音乐」互补）。用户嫌「没干什么老被打断」后定位到 `stop:claude`，此为手动替代方案，实测顺手
 - **`ivox autostart on|off`：daemon 登录自启 + 崩溃自动重启（LaunchAgent）** — daemon 原靠 `ivox on`（nohup）手动拉起、无 launchd，登录后要手动开、崩了没人管。新增 `ivox autostart on`：写 `~/Library/LaunchAgents/com.ivox.daemon.plist`（RunAtLoad 登录自启 + KeepAlive 崩溃自动重启，launchctl bootstrap 接管）并启停当前手动 daemon；`ivox autostart off`：bootout 停 + 删 plist。`ivox off` 在 KeepAlive 下已不能真停——要停得 `ivox autostart off`。**配套**：`RestartCommand`（`ivox on` / `make update` 都走它）感知 autostart——已托管时改用 `launchctl kickstart -k` 让 launchd 用当前部署的二进制重载 job，不做「发停止+nohup 拉起」否则会被 KeepAlive 立刻用旧二进制拉起、重启失效。实测：`autostart on` 后 daemon 父进程=launchd；`kill -9` daemon 自动重启（新 PID）；`ivox on`/`make update` 后 daemon 仍是 launchd 托管、健康
