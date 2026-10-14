@@ -13,11 +13,9 @@ struct PlaybackJob: Sendable {
 }
 
 /// 打断来源：与 `PlaybackJob.source`（这段播报是谁发的）是一对账的标识——
-/// 前者回答「谁在说」，这个回答「这次打断是谁干的」。一个喇叭永远只有一个打断在发生，
-/// 但日志要能追溯到是 right⌘ 说话、Cmd+D 译文、hook 停止帧、还是 pi/dsh 新轮顶替。
+/// 前者回答「谁在说」，这个回答「这次打断是谁干的」。打断权**只归用户物理快捷键**
+/// （right⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴）；agent 流式轮只排队、不打断。
 enum InterruptSource: Sendable, CustomStringConvertible {
-    /// socket 停止帧 `{type:stop,source:X}`：hook.sh interrupt 或 ivox quiet，source 可能为空 = 未知
-    case stop(String)
     /// right⌘ / right⌃ 语音说话（SpeechInputService 检测到用户开口录音）
     case speech
     /// Cmd+D 划词翻译（用户主动朗读，speakUserInitiated）
@@ -25,25 +23,36 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     /// Ctrl+Esc 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，
     /// 静音播报后由调用方恢复音乐（语义同停止帧，不走右⌘ 的录音暂停）
     case esc
-    /// 流式新轮顶替旧轮，带上新轮来源（pi/dsh）
-    case turn(String)
     /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
     case shutdown
 
     var description: String {
         switch self {
-        case .stop(let s): return s.isEmpty ? "stop:未知" : "stop:\(s)"
         case .speech: return "speech"
         case .dict: return "dict"
         case .esc: return "esc"
-        case .turn(let s): return "turn:\(s)"
         case .shutdown: return "shutdown"
         }
     }
 }
 
+/// 一个待播桶：同一轮次的连续 job 序列（turnID 为空 = 普通播报，hook.sh/ivox speak）。
+/// 队列按到达序存桶；进 processNext 消费的 = 队首桶。旧桶播完才前移到下一桶——
+/// 这就是「按轮排队、播全播完」的载体：新 turn 不再打断旧轮，只在队尾追加新桶。
+private struct QueueBucket {
+    let turnID: String?
+    var jobs: [PlaybackJob]
+    /// 该桶的轮是否已 endTurn（普通播报 nil-turn 桶初始即视为 ended）。
+    /// 分桶后空桶不一定是「播完/取消」——可能轮还在流式生成、块还没到。只有 ended 的空桶
+    /// 才允许前移；仍在的轮（ended=false）空桶要挂起等下一批块或 endTurn。
+    var ended: Bool
+}
+
 actor PlaybackQueue {
-    private var jobs: [PlaybackJob] = []
+    /// 有序待播桶。代理旧的单一 `jobs` 数组——旧实现靠单值 `currentTurn` 门控
+    /// （`processNext` 每取一块按 `t == currentTurn` 过滤）判断轮归属，多轮同处一数组
+    /// 时新旧残块必然互相误删。分桶后轮边界由桶隔离，processNext 只消费队首桶，无需跨桶跳块。
+    private var buckets: [QueueBucket] = []
     private var currentTask: Task<Void, Never>?
     /// 管道代号：起新管道 / bargeIn 作废时递增。在跑管道靠「自己的代号是否已过期」判断
     /// 该不该继续——非结构化 `Task {}` 的子任务不继承取消，单靠 cancel 停不住它们。
@@ -54,19 +63,24 @@ actor PlaybackQueue {
     /// `currentTask` 的代号，用于身份校验：仅当代号仍指向自己时才允许清空/接管。
     private var currentTaskSeq: UInt = 0
     private var generation: UInt = 0
-    /// 当前播报所属轮次 = 轮次栈顶。被取消的轮出栈后属主自动交还给被它顶掉的那一轮——
-    /// 只发了个头就取消的连接（pi 一个用户消息会开两条流、其中一条立刻 `{cancel}`）
-    /// 不该把真正在跑的这条也拖成哑巴。
-    private var currentTurn: String? { turnStack.last }
-    /// 当前轮次是否仍在流式生成（true 时句间队列瞬时排空也不恢复音乐）
-    private var turnOpen = false
-    /// 轮次栈：按认领顺序排列，**栈顶即当前属主轮**（`currentTurn`）。被顶掉的旧轮（非栈顶）
-    /// 其迟到帧一律静默丢弃（真人对话：你一开口，对方就别说了）。
+    /// 队首待播桶（可能空桶——桶空即应前移/消费完毕）。分桶后「当前在播」= 队首非空桶的轮。
+    private var frontBucket: QueueBucket? { buckets.first }
+    /// 是否仍有待播内容（含正在消费的队首桶）；全空才视为 idle。
+    private var hasPendingBuckets: Bool { buckets.contains { !$0.jobs.isEmpty } }
+    /// 当前播报所属轮次 = 队首待播桶的轮（分桶后消费视角）。真正在播的那桶播完才前移，
+    /// 因此「当前轮」不再随新轮到达而翻转——这是「按轮排队、播全播完」的基石。
+    private var currentTurn: String? { frontBucket?.turnID }
+    /// 是否仍有未结束的流式轮（turnID 非空且未 endTurn 的桶）。由每桶 ended 状态推导——
+    /// 取代旧全局 turnOpen 单布尔（多轮按序排队时单布尔会在旧轮收盘 set false 而新轮仍在生成、
+    /// 或反之，导致「最后一个桶播完音乐不恢复」的误判）。processNext 在还有流动中轮时排空仍等待。
+    private var anyTurnInFlight: Bool { buckets.contains { $0.turnID != nil && !$0.ended } }
+    /// 轮次认领栈（pi 双流的空流 `{cancel}` 认证用）：**不作「当前在播」判定**——那是 frontBucket 的
+    /// 事。只回答「这个 turnID 是不是合法新轮/属主该不该交还」，与分桶消费正交。
     private var turnStack: [String] = []
     /// 已作废轮次墓碑（容量有上限）：`{cancel}`、语音打断、普通 speak 之后，该轮不再开口
     /// （含客户端关闭连接后 EOF 兜底补出的残尾）。
     private var deadTurns: [String] = []
-    /// processNext 在 turnOpen 下等待新 job 的挂起点；入队/结束/打断时恢复
+    /// processNext 在 anyTurnInFlight 下等待新 job 的挂起点；入队/结束/打断时恢复
     private var jobWaiters: [CheckedContinuation<Void, Never>] = []
     private let player: AudioPlayer
     private let engine: TTSEngine
@@ -82,29 +96,26 @@ actor PlaybackQueue {
         lastInterrupt = .shutdown   // 退出会取消在跑合成，打上标识免得读成上一次打断的残留
         pipelineSeq &+= 1      // 让在跑管道的 producer/consumer 退出
         currentTask?.cancel()
-        jobs.removeAll()
+        buckets.removeAll()
         player.cancelPendingPlayback()
         player.stop()
         Task { await media.resume() }   // 退出时确保 music 恢复，避免 daemon 重启后卡暂停
     }
 
     /// 队列中等待播放的条数（/health 用）
-    var pendingCount: Int { jobs.count }
+    var pendingCount: Int { buckets.reduce(0) { $0 + $1.jobs.count } }
     /// 是否有正在处理的播报（/health 用）
     var isProcessing: Bool { currentTask != nil }
 
     /// 取消所有播放（正在播的和队列中等待的），并作废全部流式轮次。
-    /// 「用户开口」只有这一个语义：右⌘ 语音打断与 `{type:stop}` 停止帧
-    /// （`hook.sh stop` / `ivox quiet`）都走这里——当场静音，且此前所有流式轮的后续
-    /// 增量一律闭嘴（一个喇叭，不区分来源，你开口全场停）。
-    /// 哨兵由独立短连送达、不带自己的新轮，不存在「误杀刚到的新轮」；唯一可能并发的
-    /// 是用户同时向两个 agent 发话，此时后开口的那个赢，正合语义。
+    /// 「打断权只归用户快捷键」：右⌘ 说话（speech）、Ctrl+Esc 闭嘴（esc）、Cmd+D 译文（dict）。
+    /// 停止帧 `{type:stop}` 已失效（hook.sh interrupt / ivox quiet 不再打断播报）。
+    /// 当场静音 + 清空全部桶（一个喇叭，你快捷键开口全场停）。
     func cancelAll(origin: InterruptSource) async {
         Log.info("打断（来源=\(origin)）：作废全部流式轮次")
         lastInterrupt = origin
         buryAllTurns()
         await bargeIn(origin)
-        turnOpen = false
         // 不在这里恢复/暂停音乐——那是调用方的职责（语音输入要暂停、停止帧打断要恢复），
         // cancelAll 只管打断清场。要恢复的调用方在自己侧调 resumeIfIdle()。
     }
@@ -121,7 +132,8 @@ actor PlaybackQueue {
         buryAllTurns()
         await bargeIn(.dict)
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
-        jobs.append(contentsOf: newJobs)
+        // Cmd+D 译文自成一轮（用户主动，抢麦后立刻念）：独立 nil-turn 桶排到队尾。
+        buckets.append(QueueBucket(turnID: nil, jobs: newJobs, ended: true))
         signalJobs()
         if currentTask == nil { startPipeline() }
     }
@@ -130,7 +142,7 @@ actor PlaybackQueue {
     /// cancelAll 不再碰音乐，恢复责任归调用它的这一侧；被取消的管道还没退净时
     /// 先等它退净再恢复，否则打断在播的一句后音乐会卡在暂停（历史修过两次）。
     func resumeIfIdle() async {
-        guard jobs.isEmpty else { return }
+        guard !hasPendingBuckets else { return }
         if let task = currentTask, task.isCancelled {
             await awaitCurrentPipelineFinished()   // 被打断的管道退净（很快），currentTask 才归 nil
         }
@@ -138,22 +150,24 @@ actor PlaybackQueue {
         await media.resume()
     }
 
-    /// 流式轮次开始（首帧）：打断旧轮/普通播报，标记本轮仍在生成（句间不恢复音乐）。
+    /// 流式轮次开始（首帧）：登记轮次并标记仍在生成（句间不恢复音乐）。
+    /// **不再打断旧轮**——打断权只归用户快捷键（right⌘/Cmd+D/Ctrl+Esc）；新轮在队尾排队。
+    /// 轮次身份仍靠 `claimTurn`/`turnStack` 判定（pi 同消息双流的空流 `{cancel}` 靠栈顶识别，
+    /// 与"按桶排队"正交，不可删）。
     func beginTurn(_ id: String, source: String) async {
-        guard currentTurn != id else { turnOpen = true; return }
+        // 轮次登记只做 pi 双流认证；「仍在生成」由 anyTurnInFlight 依桶 ended 推导，不需手动标记。
         guard claimTurn(id) else { return }   // 已作废 / 被顶掉的旧轮：忽略
-        turnOpen = true
-        Log.info("打断（来源=turn:\(source)）：新流式轮顶替旧轮")
-        await bargeIn(.turn(source))
-        await awaitCurrentPipelineFinished()
-        startPipelineIfPending()   // 拆旧管道期间到达的本轮分块已在 jobs，需有人起管道
+        Log.info("流式轮次开始: source=\(source) turn=\(id)（排队，不打断）")
     }
 
-    /// 流式轮次正常结束：放开音乐保活并唤醒管道，让其排空后退出、恢复音乐。
-    /// 已被更新轮次顶掉的旧轮：其迟到的 {end}/EOF 一律忽略，残尾不再开口。
+    /// 流式轮次正常结束：标记该轮桶 ended（空桶可前移），放开保活并唤醒管道。
+    /// endTurn 只对自己的桶生效——分桶后可能有多个轮排队、各自在自己时机 endTurn，
+    /// 谁结束了谁的桶就允许被消费完前移，不与别的轮互相干扰。
     func endTurn(_ id: String) async {
-        guard currentTurn == id else { return }
-        turnOpen = false
+        // 标记该轮桶 ended：anyTurnInFlight 靠它自动归 false，不再需要全局布尔。
+        if let idx = buckets.firstIndex(where: { $0.turnID == id }) {
+            buckets[idx].ended = true
+        }
         signalJobs()
         await pumpOrResume()
     }
@@ -165,26 +179,29 @@ actor PlaybackQueue {
     /// 返回，恢复就永远丢了：外部停止哨兵（`hook.sh stop`/`ivox quiet`/pi 发言）恰落在旧管道
     /// 退出窗口时必现「音乐卡在暂停」。所以这种情形等它退净（已取消，退出很快）再补恢复。
     private func pumpOrResume() async {
-        if let task = currentTask, task.isCancelled, jobs.isEmpty {
+        if let task = currentTask, task.isCancelled, !hasPendingBuckets {
             await awaitCurrentPipelineFinished()
         }
-        if !jobs.isEmpty {
+        if hasPendingBuckets {
             startPipelineIfPending()
         } else if currentTask == nil {
             await media.resume()
         }
     }
 
-    /// 流式轮次被取消（用户 Escape）：丢弃本轮未播内容并恢复音乐。
-    /// 被取消的轮没有内容需要保护，故出栈把属主交还给被它顶掉的那一轮（可能是真正在跑的连接）。
+    /// 流式轮次被取消（pi 空流 `{cancel}`）：丢弃**本轮的桶**并恢复音乐。
+    /// 分桶后只删自己这个 turn 的桶、不动其他 agent 排队的桶——空流 `{cancel}` 是 pi 双流里
+    /// 那条空流的自扇血，不该把别的排队内容一起清掉（旧实现 bargeIn(nil) 全局清空是单数组下的
+    /// 副作用，分桶后必须收敛）。
     func cancelTurn(_ id: String) async {
-        guard currentTurn == id else { return }
-        Log.info("用户取消轮次 \(id)：丢弃未播内容，自取消不占打断来源")
-        await bargeIn(nil)
-        turnOpen = false
+        Log.info("用户取消轮次 \(id)：丢弃本轮未播内容，自取消不占打断来源")
+        // 删除该 turn 对应的桶（若正是队首在播桶，processNext 会在取下一块时发现空叉前移）。
+        // 只删自己这轮的桶、不动其他 agent 排队内容——空流 `{cancel}` 不该连带清掉别的轮。
+        buckets.removeAll { $0.turnID == id }
         bury(id)
         if turnStack.last == id { turnStack.removeLast() }
-        await media.resume()
+        signalJobs()
+        await pumpOrResume()   // 还有待播则补起管道，否则恢复音乐（统一收敛点）
     }
 
     /// 打断：取消在播任务、清空队列（新轮或无 turn 的普通播报调用）。
@@ -194,11 +211,11 @@ actor PlaybackQueue {
     private func bargeIn(_ origin: InterruptSource?) async {
         // nil = 自取消（用户 Esc 放弃自己那轮），不是从别人手里抢喇叭，不占打断来源。
         let label = origin?.description ?? "自取消"
-        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(jobs.count))、作废管道 seq\(pipelineSeq&+1)")
+        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(pendingCount))、作废管道 seq\(pipelineSeq&+1)")
         lastInterrupt = origin
         pipelineSeq &+= 1      // 作废在跑管道：其 producer/consumer 靠代号不等立即停止
         currentTask?.cancel()
-        jobs.removeAll()
+        buckets.removeAll()
         signalJobs()
         await engine.cancelActiveSynthesis(reason: label)   // 显式作废旧纪元排队合成，不依赖任务取消传播
         player.cancelPendingPlayback()
@@ -248,50 +265,45 @@ actor PlaybackQueue {
 
     /// 仅在无管道且有活时起新管道（拆旧管道后的补起）。
     private func startPipelineIfPending() {
-        if currentTask == nil, !jobs.isEmpty { startPipeline() }
+        if currentTask == nil, hasPendingBuckets { startPipeline() }
     }
 
-    /// 恢复等待新 job 的管道（turnOpen 下 processNext 挂在 waitForJobs 上）。
+    /// 恢复等待新 job 的管道（anyTurnInFlight 下 processNext 挂在 waitForJobs 上）。
     private func signalJobs() {
         let waiters = jobWaiters
         jobWaiters.removeAll()
         waiters.forEach { $0.resume() }
     }
 
-    /// 批量入队：一次 append 完再启动处理。
-    /// 逐条 await enqueue 时，若分块之间队列瞬时为空，processNext 会提前 resume 音乐，
-    /// 下一块再 pause —— 表现为播报中音乐反复跳动。批量入口消除这个窗口。
-    /// - Parameter turnID: 流式轮次。与当前轮不同（含 nil 普通播报）先打断旧轮；同轮追加。
+    /// 批量入队（分桶）：一次 append 完再启动处理，消除逐条入队时队列瞬时为空的音乐跳动窗口。
+    /// - Parameter turnID: 流式轮次。分桶后**任何新轮都不打断旧轮**——按到达序 append 新桶，
+    ///   由 processNext 播完前桶再前移。同 turn 的后续分块并入已存在的桶。
     func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async {
         guard !newJobs.isEmpty else { return }
         if let turnID {
-            if currentTurn != turnID {
-                // 已作废 / 被更新轮次顶掉的旧轮：迟到帧（含 EOF 残尾）静默丢弃，
-                // 不 bargeIn——否则旧轮残音会反杀新轮，用户会听到上一轮冒半句。
-                guard claimTurn(turnID) else { return }
-                // 首次出现的新轮：就在此处驱动轮次切换，不依赖 beginTurn 是否已先跑
-                //（二者是各自独立的 Task，调度顺序无保证）。
-                turnOpen = true
-                // beginTurn 未先跑时报到的新轮（进这分支说明确实是新 turnID），
-                // 打断来源取这批 job 的 source。
-                await bargeIn(.turn(newJobs[0].source))
-                await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
+            // 同轮追加：并入该轮已存在的桶（可能在队首正在播、也可能在队尾排队）。
+            if let idx = buckets.firstIndex(where: { $0.turnID == turnID }) {
+                buckets[idx].jobs.append(contentsOf: newJobs)
             } else {
-                turnOpen = true
+                // 首帧或迟到的新轮：**排队，不打断**——认证通过则新增桶在队尾追加。
+                guard claimTurn(turnID) else { return }   // 已作废轮：迟到帧静默丢弃
+                buckets.append(QueueBucket(turnID: turnID, jobs: newJobs, ended: false))
             }
         } else {
-            // 无轮次的普通播报（hook.sh / ivox speak）：**排队，不抢麦**。
-            // 打断权只属于「用户开口」——右⌘、`hook.sh interrupt` 哨兵、pi/dsh 的新轮，
-            // 各自走 `cancelAll()` / `beginTurn()` 里的 bargeIn。回复到达时的播报若再抢一次，
-            // 两个后台会话收尾就会互相掐掉对方的内容：实测一条 868 字长回复被 199ms 后到达的
-            // 84 字短回复整条掐掉（`TTS 合成已取消`），而用户全程没开口。
-            // 这里只 append + signalJobs，由末尾「无管道则起管道」复用现有管道顺序播完。
+            // 无轮次的普通播报（hook.sh / ivox speak / Cmd+D）：排队，不抢麦。
+            // 打断权只归用户快捷键（right⌘/Cmd+D/Ctrl+Esc）——回复到达时的播报若再抢一次，
+            // 两个后台会话收尾就会互相掐掉对方的内容（实测 868 字长回复被 199ms 后的
+            // 84 字短回复整条掐掉）。这里并入队尾的 nil-turn 桶（或新开），由管道顺序播完。
+            if let last = buckets.last, last.turnID == nil {
+                buckets[buckets.count - 1].jobs.append(contentsOf: newJobs)
+            } else {
+                buckets.append(QueueBucket(turnID: nil, jobs: newJobs, ended: true))
+            }
         }
-        jobs.append(contentsOf: newJobs)
         signalJobs()
-        Log.debug("队列状态: pending=\(jobs.count) processing=\(currentTask != nil) turn=\(turnID ?? "-")")
+        Log.debug("队列状态: pending=\(pendingCount) processing=\(currentTask != nil) turn=\(turnID ?? "-")")
 
-        // 打断后必须新起；同轮追加则复用正在跑的管道（while 自动消费新 job）
+        // 有管道则 while 自动消费新 job；无则新起
         if currentTask == nil { startPipeline() }
     }
 
@@ -303,7 +315,7 @@ actor PlaybackQueue {
     /// - 合成 task 不停取下一句合成，句间经 `awaitPrefetchCapacity` 门控（排队音频超 4s 就先别
     ///   开下一句），因此始终领先播放一两句，设备不会在句间播空；
     /// - 播放 task 只负责 `player.write`，背压只阻塞播放、不再挡合成。
-    /// turnOpen 下队列瞬时排空，合成 task 挂起等下一批 job（保活音乐不恢复）；轮次结束且排空才收尾。
+    /// anyTurnInFlight 下队列瞬时排空，合成 task 挂起等下一批 job（保活音乐不恢复）；全部轮结束且排空才收尾。
     private func processNext(seq: UInt) async {
         generation &+= 1
         let gen = generation
@@ -317,21 +329,26 @@ actor PlaybackQueue {
             defer { pcmContinuation.finish() }
             while !Task.isCancelled {
                 if pipelineSeq != seq { return }   // 已被 bargeIn 作废：立即退出，不再合成
-                if jobs.isEmpty {
-                    if turnOpen {
-                        await waitForJobs()   // 被入队/endTurn/打断恢复
+                if !hasPendingBuckets {
+                    if anyTurnInFlight {
+                        await waitForJobs()   // 还有流动中的轮在等块；被入队/endTurn/打断恢复
                         continue
                     }
                     return
                 }
                 // 门控/等待可能挂起较久，返回后先看取消：已被 bargeIn 就别再发起合成
                 try Task.checkCancellation()
-                guard let job = jobs.first else { continue }  // 等待期间可能已被 bargeIn 清空
-                // 过期轮次残留（顶替时序竞态）：一律静默丢弃，绝不合成
-                if let t = job.turnID, t != currentTurn {
-                    jobs.removeFirst()
+                // 先**读**队首（不弹）：前移空桶后取队首待播 job，作为本句的处理目标。
+                // 真正弹出留到门控/等待之后——若期间被 bargeIn 清空，job 留在桶里由 bargeIn 一起清走，
+                // 不至于「已弹出又不播」的丢失。
+                if let fb = frontBucket, fb.jobs.isEmpty, fb.ended {   // 空且已结束的桶前移
+                    _ = takeFrontBucket()
                     continue
                 }
+                // 空但 ended=false：轮还在流式生成、块还没到，不能当空壳弹掉——anyTurnInFlight 仍 true，等待
+                guard let job = frontBucket?.jobs.first else { continue }
+                // 队首桶空则前移到下一桶：这就是「播全播完」——旧桶播完才进新轮。
+                // 无需再按 currentTurn 门控跳块（旧实现是单数组 + 单值轮导致新旧残块互删的根源）。
                 let batchID = String(UUID().uuidString.prefix(6))
                 Log.info("TTS 合成开始 [\(job.source)-\(batchID)] chars=\(job.text.count)")
                 let startedAt = Date()
@@ -346,9 +363,8 @@ actor PlaybackQueue {
 
                     // claim：门控挂起期间 bargeIn 可能已 removeAll（取消状态尚在传播窗口），
                     // 绝不能对空数组 removeFirst（曾致 EXC_BREAKPOINT「removeFirst from empty」）。
-                    // 只在队首仍是我读到的那个 job 时才弹出。
-                    guard jobs.first?.text == job.text else { continue }
-                    jobs.removeFirst()
+                    // 只在队首仍是我读到的那个 job 时才弹出（popFrontJob 已处理空桶前移）。
+                    guard let taken = popFrontJob(), taken.text == job.text else { continue }
                     claimed = true
                     let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
 
@@ -362,7 +378,7 @@ actor PlaybackQueue {
                     Log.info("TTS 合成已取消 [\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "自取消")）")
                     throw CancellationError()
                 } catch {
-                    if !claimed, !jobs.isEmpty { jobs.removeFirst() }   // 合成失败跳过此 job，避免死循环
+                    if !claimed, !hasPendingBuckets { _ = popFrontJob() }   // 合成失败跳过队首，避免死循环
                     Log.error("TTS 合成失败: \(error)")
                 }
                 let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
@@ -406,10 +422,24 @@ actor PlaybackQueue {
         }
         if currentTaskSeq == seq { currentTask = nil }   // 已被新管道顶替则不清
         await Task.yield()
-        // turnOpen 时同轮后续分块马上到，不能恢复音乐，否则句间反复 pause/resume
-        if jobs.isEmpty, gen == generation, !turnOpen, !Task.isCancelled {
+        // 还有流动中的轮（未 endTurn）时不恢复音乐——该轮分块可能马上到
+        if !hasPendingBuckets, gen == generation, !anyTurnInFlight, !Task.isCancelled {
             await media.resume()
         }
+    }
+
+    /// 弹出队首空桶（已播完 / 该 turn 被取消留下的空壳）。用于 processNext 前移桶。
+    private func takeFrontBucket() -> QueueBucket? {
+        guard !buckets.isEmpty else { return nil }
+        return buckets.removeFirst()
+    }
+
+    /// 从队首**非空**桶弹出其队首 job（门控后的 claim）。空桶不弹、交给 takeFrontBucket 前移。
+    /// 用于 processNext 闭包内同步取/弹——`buckets` 是 actor 存储，闭包里的计算属性
+    /// （frontBucket）是 get-only，不能直接 mutating，须经本方法在 actor 上改。
+    private func popFrontJob() -> PlaybackJob? {
+        guard let head = buckets.first, !head.jobs.isEmpty else { return nil }
+        return buckets[0].jobs.removeFirst()
     }
 
     /// 挂起直到有新 job 入队 / 轮次结束 / 被打断（signalJobs 恢复）。

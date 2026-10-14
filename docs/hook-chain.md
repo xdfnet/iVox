@@ -59,15 +59,15 @@
 
 ### 1. AI 工具触发
 
-| 工具 | 提交即打断 | 回复完成播报 | 配置位置 |
-|------|-----------|-------------|----------|
-| Claude Code | UserPromptSubmit → `hook.sh interrupt <source>` | Stop → `hook.sh speak claude` | `~/.claude/settings.json` |
-| Codex | UserPromptSubmit → `hook.sh interrupt <source>` | Stop → `hook.sh speak codex` | `~/.codex/hooks.json` |
-| Qwen Code | UserPromptSubmit → `hook.sh interrupt <source>` | Stop → `hook.sh speak qwen` | `~/.qwen/settings.json` |
-| pi 扩展 | `message_start` 用户消息即 `{cancel}` 旧轮 + 新轮首帧（beginTurn 的 bargeIn 清场） | `message_update` 流式 | `~/.pi/agent/extensions/ivox.ts` |
-| DeepSeek Harness | 新一轮 `start` 帧自动 bargeIn | `agent/assistant-stream` 逐 token 流式（主）；socket 不可用时 turn-stopping 整段直投 hook.sh（兜底） | `~/.dsh/profiles/desktop/cordis.patch.yml` |
+| 工具 | 回复完成播报 | 配置位置 |
+|------|-------------|----------|
+| Claude Code | Stop → `hook.sh speak claude` | `~/.claude/settings.json` |
+| Codex | Stop → `hook.sh speak codex` | `~/.codex/hooks.json` |
+| Qwen Code | Stop → `hook.sh speak qwen` | `~/.qwen/settings.json` |
+| pi 扩展 | `message_update` 流式（新轮排队，不打断） | `~/.pi/agent/extensions/ivox.ts` |
+| DeepSeek Harness | `agent/assistant-stream` 逐 token 流式（主）；socket 不可用时 turn-stopping 整段直投 hook.sh（兜底） | `~/.dsh/profiles/desktop/cordis.patch.yml` |
 
-**打断时机对齐真人对话**：hook 类工具（Claude/Codex/Qwen）挂两个钩子——`UserPromptSubmit` 在**你一提交 prompt、AI 还没开口**时就跑 `hook.sh interrupt <source>`（发 `{type:stop,source:<source>}`），上一轮还在念的内容立刻停；`Stop` 在回复写完后才念新回复。这样「你一开口（提交），对方就停」，而不是等新回复到达才打断。哨兵的语义是**你开口 = 全场闭嘴**：当场静音之外，还会把**所有**流式轮（含 pi/dsh 正在生成的那一轮）一并作废——该轮后续增量不再开口。
+> ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文 / Ctrl+Esc 闭嘴）。在 Claude Code 里提交、后台 agent 轮次、pi/dsh 新轮均不再打断当前播报，只排队等播全再播。`Stop` 钩子仍在（回复完成后念新回复）。
 
 Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发，payload 自带 `last_assistant_message`。
 
@@ -178,16 +178,15 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 
 - `actor` 保证线程安全
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
-- **轮次（turn）语义**：同一 `turnID` 的分块顺序 append 不打断；新 turn（用户发言）触发 `bargeIn`，取消在播 + 清空旧轮队列；**无 turn 的普通播报（`ivox speak` / hook.sh）只 append 排队，不抢麦**
-- 流式轮次未结束（`turnOpen`）时队列排空就挂起等下一批，不恢复音乐；轮次结束排空后才收尾
-- 打断有 **4 个入口**，本质都是「用户开口」的三种方式，每个都带**打断来源**标识：
+- **轮次（turn）语义**：队列**按轮分桶排队，播全播完**——同一 `turnID` 的分块并入同桶顺序 append；新 turn 在队尾追加新桶（`enqueue` 的新 turn / `beginTurn`），**不再 bargeIn**；**无 turn 的普通播报（`ivox speak` / hook.sh）也独立桶排队**。`processNext` 播完队首桶才前移。
+- 某桶 `ended`（endTurn 标记）才允许空桶前移；流动中（未 ended）空桶挂起等下一批，不恢复音乐；全部桶都 ended 且空才收尾恢复音乐。
+- 打断有 **3 个入口**，都是用户**快捷键**，每个带**打断来源**标识：
   | 用户动作 | 入口 | 来源 |
   |---------|------|------|
-  | in agent 发消息 | 非流式 agent（Claude/Codex/Qwen）提交瞬间：停止帧 `{type:stop,source:x}` → `cancelAll` | `stop:x` |
-  | 〃 | 流式 agent（pi/dsh）发新消息：新流首帧 → `beginTurn`/`enqueue` 里的 bargeIn | `turn:<source>` |
   | 说话 | right⌘ / right⌃ → `cancelAll` | `speech` |
   | 划词翻译 | Cmd+D → `speakUserInitiated`（打断且立刻念译文） | `dict` |
-  这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。Escape 放弃自己那轮（`cancelTurn`）是**自取消**，不是从别人手里抢喇叭，不占打断来源。普通键/方向键不打断，**agent 回复到达时的普通播报也不打断（排队）**
+  | 闭嘴 | Ctrl+Esc → `cancelAll` | `esc` |
+  这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。**`{type:stop}` 停止帧（`hook.sh interrupt` / `ivox quiet`）已完全失效**，daemon 收到只记日志忽略、不再打断。流式新轮（pi/dsh）不再顶替——排队。Escape 放弃自己那轮（`cancelTurn`）只删该轮自己的桶，不占打断来源。**agent 回复到达时一律排队，不抢麦**。
 
 ### 7. MediaController
 

@@ -1,6 +1,6 @@
 # PlaybackQueue 状态机与场景矩阵
 
-> ⚠️ **部分内容已过时**：下文围绕 `skipCurrent()` 与「↓ 键跳段」的状态矩阵，在改为「真人对话」打断模型后**该方法与 ↓ 键已整体删除**（打断只保留 right⌘ 开口说话的 `cancelAll()` 与新轮次 `bargeIn`）。媒体命令源头唯一、连续播放管道等原则仍有效；凡出现 ↓ / skipCurrent 的小节请视为历史记录。
+> ⚠️ **部分内容已过时**：下文围绕 `skipCurrent()` 与「↓ 键跳段」的状态矩阵，在改为「真人对话」打断模型后**该方法与 ↓ 键已整体删除**。随后**打断权进一步收紧**：只保留用户快捷键（右⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴），`stop` 停止帧与流式新轮顶替均不再打断（队列改为**按轮分桶排队、播全播完**）。媒体命令源头唯一、连续播放管道等原则仍有效；凡出现 ↓ / skipCurrent 的小节请视为历史记录，打断相关表述以本行下方的最新版为准。
 
 > PlaybackQueue 是 iVox 的 TTS 播放调度核心（actor）。本文档固化其媒体控制的状态转移规则，防止后续修改重新引入 race。
 
@@ -42,14 +42,14 @@
 - **线性化点**：bargeIn 只 cancel 旧任务不清 `currentTask`；要立刻起新管道的调用方（enqueue/beginTurn）必须 `await currentTask.value`（`awaitCurrentPipelineFinished()`）等旧 producer+consumer **彻底退出**后才起新的，否则两个 consumer 并发 write 同一 player。
 - 队列瞬时排空时：`turnOpen == true`（流式轮次还在生成）→ 挂起在 `waitForJobs()`（continuation 存入 `jobWaiters`），**不退出、不恢复音乐**；`turnOpen == false` → 退出循环 → consumer 排空 → 末端 drain → 恢复音乐。
 - `signalJobs()` resume 并清空所有 `jobWaiters`，调用点只有：`enqueue`（新 job 到达）、`endTurn`（轮次结束）、`bargeIn`（打断/取消）。三者覆盖了挂起的全部唤醒路径，无 continuation 泄漏。
-- 轮次语义：`beginTurn/new turn`（用户发言）打断旧轮；同 `turnID` 的分块顺序 append；**无 turn 的普通播报（`ivox speak`/hook.sh）只 append 排队，不抢麦**——打断权只属于「用户开口」（右⌘、`hook.sh interrupt` 哨兵、pi/dsh 新轮），详见下一节的 `cancelAll()`。
+- 轮次语义（v【版】按桶排队）：**打断权只归用户快捷键**——右⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴。`stop` 停止帧与 pi/dsh 新轮**不再打断**播报。队列按到达序存桶（每桶一轮，nil-turn 桶=普通播报），`processNext` 播完队首桶才前移：**旧轮播全、播完才进下一轮**——这是「按轮排队」的载体。同 `turnID` 的分块并入同桶顺序 append；新 turn 在队尾追加新桶，不打断在播旧轮。
 - **⚠️ 调用顺序必须先于状态判定：连接内的四个操作要按帧序落地**（`ConnectionHandler.StreamOpChain` 串成一链）。`{type:stream}` 首帧、每个入队块、`{end}`/`{cancel}` 原先各自 `Task {}` 投递到本 actor，**落地顺序全凭调度器**。实测 `{end}` 的 Task 抢在同一连接后一个入队 Task 之前执行：`endTurn` 已把轮次关闭（`turnOpen=0`），迟到的**同轮** `enqueue` 走同轮分支又把它打开，而此时再无帧可关它——分块全部播完后管道永久停在 `waitForJobs()`：`/health` 恒 `playing=true`、`queued=0`、无「播放收尾完成」，而**两把兜底都够不着**（背压看门狗要求 `pendingCount>0`，此刻已 0；drain 还没轮到）。黑盒 A-tail / E3 用例的「未收尾」即此，现场探针原始顺序为 `enqueue(open=1) → endTurn(open=0) → enqueue(open=1)`，6 秒后进入永久挂起。
-- **轮次身份靠「轮次栈 + 墓碑」判定，不靠「是否等于 currentTurn」**（`turnStack` / `deadTurns`）：
-  - **栈顶 = 当前属主**（`currentTurn` 是 `turnStack.last` 的派生值）；非栈顶的历史轮 = 被更新轮顶掉的旧轮，其迟到帧（含 EOF 残尾）静默 return，**绝不 bargeIn**（否则旧轮残音会反杀、打断刚开的新轮）。
+- **轮次身份靠「轮次栈 + 墓碑」判定**（`turnStack` / `deadTurns`），**消费靠「队首桶」**：
+  - **`turnStack` 只做 pi 双流的空流 `{cancel}` 认证**（回答「这个 turnID 是不是合法新轮、属主该不该交还」）；**`currentTurn` 是消费视角 = `frontBucket?.turnID`**（队首待播桶的轮），二者解耦、正交。非当前桶的迟到帧静默 return。
   - **`{cancel}` 的轮出栈**：被取消的轮没有内容需要保护，属主交还给被它顶掉的那一轮。**这条是 pi 「整轮没声音」的修复关键**：pi 一个用户消息会开两条流、其中一条刚开就被 `{cancel}`，而承载正文的是先开的那条——若取消的轮继续占着栈顶，正文那条就被永久判成过期旧轮、整轮哑掉。
   - **墓碑 `deadTurns`**：`{cancel}`、用户开口（`cancelAll()`）之后该轮不再开口，含客户端关闭连接后 EOF 兜底补出的残尾。容量 64，防止无限增长。
   只判「不等于 currentTurn」是不够的：那会把新轮的首帧和旧轮的迟到帧混为一谈；只按「见过没见过」判也不行：会把**并行那条空流**的取消算到真正在跑的轮头上。
-- **`cancelAll()` = 「用户开口」的唯一语义：停当场 + 作废全部流式轮**（`buryAllTurns()` + `bargeIn()`）。右⌘ 语音打断与 `{type:stop}` 停止帧（`hook.sh interrupt <source>` / `ivox quiet`）都走它，**不再分档**。停止帧由独立短连送达、**不带自己的新轮**，故无「作废把刚到的新轮也掐哑」之虞——pi 侧曾因在同一事件里并行发哨兵 + 开新流踩过这个坑，现改为不再自己发哨兵（靠 `cancelTurn` + 新轮首帧 `beginTurn` 的 bargeIn 清场），并行随之消失。
+- **`cancelAll()` = 用户快捷键打断的唯一语义：停当场 + 作废全部流式轮**（`buryAllTurns()` + `bargeIn()`）。调用方只有右⌘（`speech`）、Cmd+D（`dict`）、Ctrl+Esc（`esc`）。**`{type:stop}` 停止帧已完全失效**（hook.sh interrupt / ivox quiet 不再打断），收到时 ConnectionHandler 仅记日志忽略。`turn` 顶替也不再经 bargeIn——新轮排队。
 - **`pipelineSeq` 代号作废在途管道（修「旧 producer 消费新轮任务」）**：`Task {}` 是结构化外的子任务，**不继承取消**——`bargeIn` 的 `currentTask?.cancel()` 根本停不住已进 MLX 的 producer。故 `bargeIn`/`shutdown` 递增 `pipelineSeq`，producer 每轮循环、consumer 每次循环都比对「代号是否仍是自己的」，不等即立即退场。`currentTaskSeq` 同理：管道收尾只在 `currentTaskSeq == 自己` 时才清 `currentTask`，防止旧管道把新起的管道清掉。
 - **收敛兜底 `pumpOrResume()`**：轮次顶替时序可能留下「有 job 但没管道」的孤儿态。`endTurn`/`cancelAll` 收尾统一走它——无管道且有活就补起管道，否则才 `media.resume()`。任何路径结束都不会挂住。⚠️ **恢复归属**：管道自身收尾只在**未被取消**时恢复音乐，被取消的轮次由调用方补——所以 `pumpOrResume` 遇到「管道仍在退出中 + 已取消 + 无待播」时必须**等它退净再补恢复**，不能一律直接返回（`guard currentTask == nil else { return }` 的旧写法就是这样）：两边都不恢复，音乐永久卡在暂停。外部停止哨兵（`hook.sh interrupt` / `ivox quiet`）恰好落在旧管道退出窗口时必现，且因为「没有恢复日志」，黑盒自检的收尾断言会一路等到超时（实测跑测时被别的会话的哨兵打断即触发）。
 - **`drain()` 超时定时器绑定自身序号 `drainSeq`**：超时兜底的 `asyncAfter` 闭包必须校验 `drainSeq == 自己`，否则**上一次 drain 遗留的定时器会提前放行下一次 drain**，表现为尾音被掐（曾实测 `drain 超时强制返回（pendingCount=28 尾音=1.12s）`）。

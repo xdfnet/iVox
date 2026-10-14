@@ -230,11 +230,7 @@ actor ConnectionHandler {
             let source = inner.split(separator: ",")
                 .first { $0.hasPrefix("source:") }
                 .map { String($0.dropFirst("source:".count)) }
-            Log.info("收到停止：来源=\(source ?? "未知")（fd=\(fd) bytes=\(data.count)）")
-            Task {
-                await queue.cancelAll(origin: .stop(source ?? ""))
-                await queue.resumeIfIdle()   // cancelAll 不再管音乐；打断后无后续播报则恢复音乐
-            }
+            Log.info("收到停止帧，忽略：打断权已收紧为快捷键（右⌘ 说话 / Ctrl+Esc 闭嘴 / Cmd+D 译文）(source=\(source ?? "未知") fd=\(fd) bytes=\(data.count))")
             return
         }
 
