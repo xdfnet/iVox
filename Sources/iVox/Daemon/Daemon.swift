@@ -327,16 +327,32 @@ actor Daemon {
         await wechat?.sendTyping(status: .start)
 
         do {
-            // ② 调常驻桥获取回复
-            let response = try await claudeAsk.ask(text: msg.content)
+            // ② 走流式桥：assistant 过程段逐段发回微信（过程可见），最终 result 收尾
+            // onSegment 是 @Sendable 闭包，不能捕获 self 的 actor 属性；把 wechat 弱引用拷成本地 let。
+            let w = wechat
+            let (response, _) = try await claudeAsk.askStreaming(text: msg.content) { seg in
+                // 微信 sendMessage 是 actor 方法，需异步；错误静默降级（微信偶发失败不阻塞主流程）。
+                Task { @MainActor [w] in
+                    do {
+                        try await w?.sendMessage(text: seg)
+                        Log.info("📤 已发送过程段 \(seg.count) 字符")
+                    } catch {
+                        Log.warn("过程段发送失败: \(error.localizedDescription)")
+                    }
+                }
+            }
 
             // ③ 发 stop typing（"正在输入"先消失，再出现消息）
             await wechat?.sendTyping(status: .stop)
 
-            // ④ 发微信回复
-            try await wechat?.sendMessage(text: response)
-            Log.info("📤 已发送 \(response.count) 字符")
-            //   TTS 由 claude 完成后的 Stop Hook 触发，不在这里处理
+            // ④ 发微信回复收尾。result 与最后一段过程段相同 → askStreaming 返回空串，跳过不重复发；
+            //    不同（工具多段/长回复）→ 补发完整结尾。
+            if !response.isEmpty {
+                try await wechat?.sendMessage(text: response)
+                Log.info("📤 已发送 \(response.count) 字符")
+            } else {
+                Log.info("结尾与过程段相同，去重不重发")
+            }
         } catch {
             // 异常时也要发 stop typing，避免"正在输入"一直显示
             await wechat?.sendTyping(status: .stop)

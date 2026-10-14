@@ -9,7 +9,6 @@ actor ClaudeAskService {
     private let workDir: String
     private let stateFile: String
     private let claudePath: String
-    private let model: String
     private let timeoutSeconds: Int
 
     private var proc: Process?
@@ -17,8 +16,12 @@ actor ClaudeAskService {
     private var sessionID = ""
 
     private var nextID = 0
-    private var pending: [String: CheckedContinuation<String, Error>] = [:]
+    private var pending: [String: CheckedContinuation<(response: String, isDuplicateOfLast: Bool), Error>] = [:]
     private var waitOrder: [String] = []   // FIFO：result 按发送顺序匹配
+    /// 每个在等结果的问题，额外挂一个「过程段」回调：assistant 帧到达时调用，把过程增量吐出去。
+    private var pendingOnSegment: [String: @Sendable (String) -> Void] = [:]
+    /// 每个等待者已回传的最后一段 assistant 文本：result 到达时与其比较，判定结尾是否重复。
+    private var lastSegment: [String: String] = [:]
     private var stdoutBuffer = Data()
 
     init(dataDir: String, claudePath: String = "", timeoutSeconds: Int = 120) {
@@ -28,9 +31,9 @@ actor ClaudeAskService {
         self.claudePath = NSString(string: claudePath.isEmpty ? "~/.local/bin/claude" : claudePath).expandingTildeInPath
         self.timeoutSeconds = timeoutSeconds
 
-        let env = ProcessInfo.processInfo.environment
-        self.model = env["ANTHROPIC_MODEL"] ?? "doubao-seed-2.0-mini"
-
+        // 不在这里配模型：claude 子进程自动继承环境/自身配置（~/.claude/settings.json 的 ANTHROPIC_MODEL）。
+        // 曾在此硬编码 model 并 spawn 自带 --model——daemon 启动环境缺该变量会兜底错模型（doubao），
+        // 且这个隐含覆盖点藏得深、极易被忘记（飞哥点名）。spawn 时不再传 --model，全走进程自身默认。
         try? FileManager.default.createDirectory(atPath: workDir, withIntermediateDirectories: true)
         self.sessionID = Self.readSessionID(stateFile: stateFile)
     }
@@ -49,8 +52,39 @@ actor ClaudeAskService {
 
         try ensureProcess()
         let id = String(format: "%08x", consumeID())
+        // ask 不经过程段回传，等价于「只取 result」，绕开去重（保持原语义：result 原样返回）。
+        let (response, _) = try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<(response: String, isDuplicateOfLast: Bool), Error>) in
+            pending[id] = continuation
+            waitOrder.append(id)
+            let wrapped = ClaudeInput(type: "user", message: .init(role: "user", content: text))
+            if let line = try? JSONEncoder().encode(wrapped) {
+                stdinPipe?.fileHandleForWriting.write(line)
+                stdinPipe?.fileHandleForWriting.write(Data("\n".utf8))
+            }
+            armTimeout(id: id)
+        }
+        return response
+    }
+
+    /// 带过程段回传的提问：claude 的 assistant 帧到达时调 onSegment（每段完整回复文本），
+    /// 最终 result 作为返回值收尾。用于微信「过程可见 + 完整结尾」。
+    /// 返回值第二个元素 = 是否「result 内容与最后一个已回传的 assistant 段相同」——
+    /// 相同说明结尾已随过程段发过，调用方不必重复发 result；不同才需补发完整结尾。
+    func askStreaming(
+        text: String,
+        onSegment: @escaping @Sendable (String) -> Void
+    ) async throws -> (response: String, isDuplicateOfLast: Bool) {
+        if text.trimmingCharacters(in: .whitespaces) == "/new" {
+            await terminateProc()
+            sessionID = ""
+            saveState()
+            return ("已开启新会话", false)
+        }
+        try ensureProcess()
+        let id = String(format: "%08x", consumeID())
         return try await withCheckedThrowingContinuation { continuation in
             pending[id] = continuation
+            pendingOnSegment[id] = onSegment
             waitOrder.append(id)
             let wrapped = ClaudeInput(type: "user", message: .init(role: "user", content: text))
             if let line = try? JSONEncoder().encode(wrapped) {
@@ -86,7 +120,6 @@ actor ClaudeAskService {
             "--output-format", "stream-json",
             "--verbose",
             "--dangerously-skip-permissions",
-            "--model", model,
         ]
         if !sessionID.isEmpty { args += ["--resume", sessionID] }
         p.arguments = args
@@ -137,9 +170,10 @@ actor ClaudeAskService {
         }
     }
 
-    private func resolve(id: String, result: Result<String, Error>) {
+    private func resolve(id: String, result: Result<(response: String, isDuplicateOfLast: Bool), Error>) {
         guard let cont = pending.removeValue(forKey: id) else { return }
         waitOrder.removeAll { $0 == id }
+        pendingOnSegment.removeValue(forKey: id)
         cont.resume(with: result)
     }
 
@@ -147,6 +181,7 @@ actor ClaudeAskService {
         for (_, cont) in pending { cont.resume(throwing: error) }
         pending.removeAll()
         waitOrder.removeAll()
+        pendingOnSegment.removeAll()
     }
 
     // MARK: - stdout 解析
@@ -180,6 +215,15 @@ actor ClaudeAskService {
             stdoutBuffer.removeSubrange(0...nl)
             guard !lineData.isEmpty,
                   let o = try? JSONDecoder().decode(ClaudeOutput.self, from: lineData) else { continue }
+
+            // assistant 帧 = 一段完整回复文本 → 当过程段回调吐给最早等待者（需在 result 前）
+            if o.type == "assistant", let seg = o.assistantText, !seg.isEmpty {
+                if let id = waitOrder.first(where: { pending[$0] != nil }) {
+                    pendingOnSegment[id]?(seg)
+                    lastSegment[id] = seg   // 记录最后一段，供 result 去重
+                }
+                continue   // assistant 帧不终结本轮，继续等 result
+            }
             guard o.type == "result" else { continue }
 
             if let sid = o.sessionID, !sid.isEmpty {
@@ -189,10 +233,16 @@ actor ClaudeAskService {
             // result 按 FIFO 匹配当前最早等待者（单 agent 串行，无 user 路由）
             guard let id = waitOrder.first(where: { pending[$0] != nil }) else { continue }
             waitOrder.removeAll { $0 == id }
+            pendingOnSegment.removeValue(forKey: id)   // 收尾，清掉过程回调
+            let last = lastSegment.removeValue(forKey: id)
+            // 去重：result 内容 = 最后一段已回传的 assistant → 返回空串，调用方不重复发结尾。
+            // 纯文本回复（assistant 整段 = result）不发第二条；工具多段/长回复（不同）才补发完整结尾。
+            let resultText = o.resultText ?? ""
+            let isDuplicate = !resultText.isEmpty && last == resultText
             if o.isError == true {
                 resolve(id: id, result: .failure(WeChatError.unknown(o.resultText ?? "agent 执行出错")))
             } else {
-                resolve(id: id, result: .success(o.resultText ?? ""))
+                resolve(id: id, result: .success((isDuplicate ? "" : resultText, isDuplicate)))
             }
         }
     }
@@ -238,17 +288,40 @@ private struct ClaudeInput: Codable, Sendable {
     struct Message: Codable, Sendable { let role: String; let content: String }
 }
 
-private struct ClaudeOutput: Codable, Sendable {
+private struct ClaudeOutput: Decodable, Sendable {
     let type: String
     let resultText: String?
     let sessionID: String?
     let isError: Bool?
+    /// {type:assistant} 帧的文本——`message.content[]` 里各 `text` 块拼起来。
+    /// 关键：assistant 是「整段回复文本」，不是逐字 delta（探针实测）。用于把过程段回传。
+    let assistantText: String?
 
     enum CodingKeys: String, CodingKey {
         case type
         case resultText = "result"
         case sessionID = "session_id"
         case isError = "is_error"
+        case assistantMessage = "message"
+    }
+
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        type = try c.decode(String.self, forKey: .type)
+        resultText = try c.decodeIfPresent(String.self, forKey: .resultText)
+        sessionID = try c.decodeIfPresent(String.self, forKey: .sessionID)
+        isError = try c.decodeIfPresent(Bool.self, forKey: .isError)
+        // assistant 帧的文本藏在 message.content[]（array，text 块）。非 assistant 帧没有 message 则留空。
+        assistantText = try Self.extractAssistantText(from: c)
+    }
+
+    private static func extractAssistantText(from c: KeyedDecodingContainer<CodingKeys>) throws -> String? {
+        struct ContentBlock: Decodable { let text: String? }
+        struct Msg: Decodable { let content: [ContentBlock]? }
+        guard let m = try? c.decodeIfPresent(Msg.self, forKey: .assistantMessage),
+              let blocks = m.content else { return nil }
+        let joined = blocks.compactMap { $0.text }.joined()
+        return joined.isEmpty ? nil : joined
     }
 }
 
