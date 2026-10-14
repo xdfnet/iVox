@@ -67,9 +67,9 @@
 | pi 扩展 | `message_update` 流式（新轮排队，不打断） | `~/.pi/agent/extensions/ivox.ts` |
 | DeepSeek Harness | `agent/assistant-stream` 逐 token 流式（主）；socket 不可用时 turn-stopping 整段直投 hook.sh（兜底） | `~/.dsh/profiles/desktop/cordis.patch.yml` |
 
-> ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文 / Ctrl+Esc 闭嘴）。在 Claude Code 里提交、后台 agent 轮次、pi/dsh 新轮均不再打断当前播报，只排队等播全再播。`Stop` 钩子仍在（回复完成后念新回复）。
+> ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文 / Ctrl+Esc 闭嘴）。在 Claude Code 里提交、后台 agent 轮次、pi/dsh 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（`ivox quiet` 手动能力保留在 ivox CLI）。
 
-Claude Code 和 Codex 的 Stop 事件在每次 AI 回复完成时触发，payload 自带 `last_assistant_message`。
+Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`）：assistant 消息流式显示时按行批触发、取 `delta` 增量逐句播，final 批含完整结尾，故不再挂 `Stop`（否则与 MessageDisplay 同播重复）。Codex 仍用 `Stop`（payload 自带 `last_assistant_message`，Codex 无 MessageDisplay 事件就只能终了一次）。
 
 DeepSeek Harness 不同：它内置的桥接插件（`dsh-hooks-claude-code` / `dsh-hooks-codex`）的 Stop payload **不含回复文本**（`stopPayload()` 只给 `session_id` / `cwd` / `hook_event_name`；codex 版把 `last_assistant_message` 写死成 `null`）。文本由本地 cordis 插件 `ivox-tts` 在内存中取出。**默认走与 pi 同构的第二层流式**，只在 socket 连不上时退回整段 hook.sh：
 
