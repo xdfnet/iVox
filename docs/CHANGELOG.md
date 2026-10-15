@@ -2,6 +2,8 @@
 
 ## Unreleased（下一版）
 
+- **QuickActions 新增 `Opt+X` 打开 pi CLI** — 六键全收归左手：终端 `Opt+Z`、Claude `Opt+A`、Qwen `Opt+Q`、Codex `Opt+W`、复制路径 `Opt+C`，新增强 pi（`Opt+P` 原为右手位，改为左手 `Opt+X`，实现在 `GlobalKeyTap.bindings` + `Daemon.setUpHotKeys()` + `QuickActionsService.handle`，与 openTerminalCodex 同款：Finder 当前目录开 Terminal 并 `exec pi`）。
+
 ## v3.8.0 — 2026-10-14
 
 - **Claude 会话过程内容逐句播报（MessageDisplay 钩子）+ 播报去重收敛** — 交互式 Claude Code 会话里「提交后过程回复听不见」：此前只靠 `Stop` 钩子在回复写完一次性播最终文本，分步/工具多段的中间过程没通路进 ivox。现改用 **`MessageDisplay` 钩子**（`hook.sh msgdisplay claude`）——assistant 消息流式显示时按行批触发，`delta` 增量逐句进桶播报，过程（第一步/第二步…）边写边播，最后一条 assistant 即完整结尾。**修复播两遍**：根因是 MessageDisplay 的 final 批已含完整结尾、与 `Stop` 的 `last_assistant_message` 同播重复，且 `make update` 经 `install-hooks.sh` 把 UserPromptSubmit interrupt 写回 settings.json、提交即触发打断叠加错乱。处置：摘 `Stop`（只留 MessageDisplay）、摘 `UserPromptSubmit`、`hook.sh` 移除 **interrupt 分支**（`ivox quiet` 手动能力保留）、`install-hooks.sh` 的 `write_prompt_hook` 置 no-op（不再自动挂提交打断）。`MessageDisplay` 钩子须极快返回（Claude 等它渲染该批）。**微信链路只拿 assistant 帧**——最后一条 assistant 即结尾，不单独取 result（内容重复），`askStreaming` 简化为只回调过程段、去重逻辑删除。

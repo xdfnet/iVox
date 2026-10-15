@@ -36,6 +36,8 @@ final class QuickActionsService {
             await openTerminal(running: "qwen")
         case .openTerminalCodex:
             await openTerminal(running: "codex")
+        case .openTerminalPi:
+            await openTerminal(running: "pi")
         case .copyPath:
             copySelectedPath()
         case .escInterrupt:

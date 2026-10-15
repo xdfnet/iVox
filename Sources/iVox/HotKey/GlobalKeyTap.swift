@@ -29,6 +29,7 @@ final class GlobalKeyTap: @unchecked Sendable {
         case openTerminalClaude   // Opt+A
         case openTerminalQwen     // Opt+Q
         case openTerminalCodex    // Opt+W
+        case openTerminalPi       // Opt+X
         case copyPath             // Opt+C
         case escInterrupt         // Ctrl+Esc 手动闭嘴（不录音）
     }
@@ -194,6 +195,7 @@ final class GlobalKeyTap: @unchecked Sendable {
         Binding(keyCode: 0x00, modifiers: .maskAlternate, hotKey: .openTerminalClaude),// A
         Binding(keyCode: 0x0C, modifiers: .maskAlternate, hotKey: .openTerminalQwen),  // Q
         Binding(keyCode: 0x0D, modifiers: .maskAlternate, hotKey: .openTerminalCodex), // W
+        Binding(keyCode: 0x07, modifiers: .maskAlternate, hotKey: .openTerminalPi),     // X
         Binding(keyCode: 0x08, modifiers: .maskAlternate, hotKey: .copyPath),          // C
         Binding(keyCode: 0x35, modifiers: .maskControl, hotKey: .escInterrupt),        // Esc（Ctrl+Esc）
     ]

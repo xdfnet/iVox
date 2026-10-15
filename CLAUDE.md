@@ -33,7 +33,7 @@ Sources/iVox/          — 主程序 target
   Playback/            — 自动播报：TTSEngine（mlx-audio-swift 流式合成）+ PlaybackQueue + AudioPlayer
   SpeechInput/         — 语音输入：右⌘/右⌃ 录音 + ASR + 浮窗（事件由 HotKey 层送来）
   Translation/         — 划词翻译（Cmd+D）：复制 → 翻译 → 浮窗 + 朗读
-  QuickActions/        — 快速操作：Finder/终端快捷（Opt+Z/A/Q/W/C）
+  QuickActions/        — 快速操作：Finder/终端快捷（Opt+Z/A/Q/W/X/C）
   WeChat/              — 微信桥接：ilink HTTP 客户端 + 长轮询平台
   MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI）+ MediaController
 
@@ -81,7 +81,7 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
                                                                    ├─ GlobalKeyTap (键盘事件层，一个 tap)
                                                                    │    ├─ SpeechInputService (右⌘/右⌃ + ASR)
                                                                    │    ├─ TranslationService (Cmd+D 划词翻译)
-                                                                   │    └─ QuickActionsService (Opt+Z/A/Q/W/C)
+                                                                   │    └─ QuickActionsService (Opt+Z/A/Q/W/X/C)
                                                                    └─ MediaHTTPServer (端口 8888, Web UI)
 ```
 
@@ -95,7 +95,7 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
 - **流式 turn 协议**：pi 扩展经一条长连接按 `\n` 分帧：首帧 `{type:stream,source,turn}` → 原文增量帧（仅 text_delta）→ `{end}`/`{cancel}`，EOF=end。服务端 `StreamBuffer`（iVoxKit 纯逻辑）累积原文，只在安全边界（句末/段落、代码围栏配平、≥`minFlushChars`=24）抽出整段复用同一套 cleanText→splitSentences。`PlaybackJob.turnID`：**队列按轮分桶排队，播全播完**——同一 `turnID` 分块并入同桶顺序追加，新 turn 在队尾追加新桶、**不打断**在播旧轮（桶播完才前移）；无 turn 的普通播报（`ivox speak`/hook.sh）同上排队。**打断权只归用户快捷键**：右⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴（`cancelAll`）；`{type:stop}` 停止帧与流式新轮**不再打断**（ConnectionHandler 对 stop 帧仅记日志忽略）。某桶 `ended` 才允许空桶前移；流动中空桶保活等下一批。连接内这四类操作经 `ConnectionHandler.StreamOpChain` **按帧序执行**（乱序会让 `{end}` 之后到达的同轮分块把已关轮次重新打开、管道永久挂起）。详见 `docs/socket-api.md`。
 - **播报通路（hook / 微信 / MessageDisplay）**：①Claude Code 交互会话的播报**只靠 `MessageDisplay` 钩子**（`hook.sh msgdisplay claude`）——assistant 消息按行批增量播报，过程内容（分步/工具多段）逐句进桶、边写边播，**不再挂 Stop / UserPromptSubmit**（摘 Stop 因 MessageDisplay 的 final 批已含完整结尾，两者同播会重复；摘 UserPromptSubmit 因打断权只归快捷键）。`hook.sh` 已**移除 interrupt 分支**（`ivox quiet` 手动能力保留，只是不经 hook.sh 自动触发）。②微信链路（`ClaudeAskService` spawn claude 读 stream-json）**只用 assistant 帧**——最后一条 assistant 即完整结尾，不单独取 result（内容重复），无去重逻辑。③pi/dsh 走流式（见下）。
 
-- **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者三名：右⌘/右⌃ → `SpeechInputService`，`Cmd+D` → `TranslationService`，`Opt+Z/A/Q/W/C` → `QuickActionsService`（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `GlobalKeyTap.bindings` 加一条 + 在 `setUpHotKeys` 加一个消费者。** 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Cmd+D 毫无反应"。
+- **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者三名：右⌘/右⌃ → `SpeechInputService`，`Cmd+D` → `TranslationService`，`Opt+Z/A/Q/W/X/C` → `QuickActionsService`（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `GlobalKeyTap.bindings` 加一条 + 在 `setUpHotKeys` 加一个消费者。** 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Cmd+D 毫无反应"。
 
 - **配置**：`~/.config/ivox/config.json`，所有运行时文件在 `~/.config/ivox/` 下。
 

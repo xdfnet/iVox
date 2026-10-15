@@ -273,7 +273,7 @@ actor Daemon {
                     guard coordinator.isEnabled else { return }
                     await coordinator.translateSelection()
                 case .openTerminal, .openTerminalClaude, .openTerminalQwen,
-                     .openTerminalCodex, .copyPath:
+                     .openTerminalCodex, .openTerminalPi, .copyPath:
                     await quickActionsService.handle(hotKey, at: location)
                 case .escInterrupt:
                     // Ctrl+Esc 手动闭嘴：用户不想说话，只静音播报 + 恢复音乐。
