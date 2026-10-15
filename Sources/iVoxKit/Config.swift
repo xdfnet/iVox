@@ -85,7 +85,9 @@ public struct WeChatConfig: Codable, Sendable {
 
     public var enabled: Bool { !token.isEmpty }
     public var resolvedClaudePath: String { claudePath ?? "~/.local/bin/claude" }
-    public var resolvedAskTimeoutSeconds: Int { askTimeoutSeconds ?? 120 }
+    /// 单条提问的等待上限。300s 给长任务留余量——测网络、跑脚本这类要串几次带超时的
+    /// 外部调用，120s 常在任务真跑完前就放弃（2026-10-16 实测：微信问「GitHub 通不」因此超时）。
+    public var resolvedAskTimeoutSeconds: Int { askTimeoutSeconds ?? 300 }
 
     private enum CodingKeys: String, CodingKey {
         case token

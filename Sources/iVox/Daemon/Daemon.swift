@@ -348,6 +348,10 @@ actor Daemon {
             // 异常时也要发 stop typing，避免"正在输入"一直显示
             await wechat?.sendTyping(status: .stop)
             Log.error("❌ Claude 请求失败: \(error)")
+            // 失败必须回微信：只记日志的话，用户那头看到"正在输入"消失后再无下文，
+            // 会误判成链路挂了（2026-10-16 实际踩过，连发三条都石沉大海）。
+            let reason = (error as? LocalizedError)?.errorDescription ?? "\(error)"
+            try? await wechat?.sendMessage(text: "⚠️ 这条没跑完：\(reason)。可以再发一次，或把任务拆小些。")
         }
     }
 
