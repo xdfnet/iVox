@@ -116,6 +116,12 @@ struct AutostartCommand: ParsableCommand {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: "/bin/launchctl")
         p.arguments = args
+        // 丢弃子进程输出：job 已加载时 `bootstrap` 会报 EEXIST（表现为 "Bootstrap failed:
+        // 5: Input/output error"），而那是 On 的**正常**分支——它随即改走 kickstart 重载。
+        // 不重定向的话这行吓人的报错会直接漏进用户终端，看着像失败了。
+        // 各调用点都判了 terminationStatus，真失败仍有可见反馈。
+        p.standardOutput = FileHandle.nullDevice
+        p.standardError = FileHandle.nullDevice
         do { try p.run(); p.waitUntilExit(); return p.terminationStatus }
         catch { return -1 }
     }
