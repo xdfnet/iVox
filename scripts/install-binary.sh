@@ -186,12 +186,13 @@ else
   done
 fi
 
-# ── 6. 服务管理 ──
-section "服务管理（LaunchAgent 托管）"
-echo "  ivox 由 LaunchAgent 托管（登录自启 + 崩溃自动重启）:"
-echo "    启动: ${BIN_DIR}/ivox autostart on"
-echo "    停止: ${BIN_DIR}/ivox autostart off"
-echo "    状态: ${BIN_DIR}/ivox status"
+# ── 6. 服务管理：装完即启动（LaunchAgent 托管：登录自启 + 崩溃自动重启）──
+# 装完就跑，用户不用再敲一条命令；失败只提示不中断安装。
+section "启动服务"
+if ! "${BIN_DIR}/ivox" autostart on; then
+  info "启动失败，可稍后手动执行 ${BIN_DIR}/ivox autostart on"
+fi
+echo "    停止: ${BIN_DIR}/ivox autostart off    状态: ${BIN_DIR}/ivox status"
 
 # ── 完成 ──
 echo ""
