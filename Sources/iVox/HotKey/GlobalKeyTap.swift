@@ -22,12 +22,11 @@ import iVoxKit
 /// `keyUp` 一律透传：`keyDown` 已被吃掉，放行 `keyUp` 对目标 app 无害，
 /// 反过来若按 keyCode 宽松匹配 keyUp，就会把「单独按 D」的抬起也吞掉、干扰打字。
 final class GlobalKeyTap: @unchecked Sendable {
-    /// 组合热键（一一对应到 iDict 原有的六个）
+    /// 组合热键（iDict 时代沿用；Qwen 键已随 Qwen Code 支持下线，现五个）
     enum HotKey: Sendable {
         case translate            // Cmd+D
         case openTerminal         // Opt+Z
         case openTerminalClaude   // Opt+A
-        case openTerminalQwen     // Opt+Q
         case openTerminalCodex    // Opt+W
         case openTerminalPi       // Opt+X
         case copyPath             // Opt+C
@@ -105,7 +104,7 @@ final class GlobalKeyTap: @unchecked Sendable {
             runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         }
-        Log.info("键盘事件层已启动（右 ⌘/⌃ 语音；Cmd+D 划词翻译；Opt+Z/A/Q/W/C Finder）")
+        Log.info("键盘事件层已启动（右 ⌘/⌃ 语音；Cmd+D 划词翻译；Opt+Z/A/W/X/C Finder）")
         CFRunLoopRun()
         stateQueue.sync { runLoop = nil }
     }
@@ -193,7 +192,6 @@ final class GlobalKeyTap: @unchecked Sendable {
         Binding(keyCode: 0x02, modifiers: .maskCommand, hotKey: .translate),           // D
         Binding(keyCode: 0x06, modifiers: .maskAlternate, hotKey: .openTerminal),      // Z
         Binding(keyCode: 0x00, modifiers: .maskAlternate, hotKey: .openTerminalClaude),// A
-        Binding(keyCode: 0x0C, modifiers: .maskAlternate, hotKey: .openTerminalQwen),  // Q
         Binding(keyCode: 0x0D, modifiers: .maskAlternate, hotKey: .openTerminalCodex), // W
         Binding(keyCode: 0x07, modifiers: .maskAlternate, hotKey: .openTerminalPi),     // X
         Binding(keyCode: 0x08, modifiers: .maskAlternate, hotKey: .copyPath),          // C

@@ -10,7 +10,7 @@ struct SpeakCommand: AsyncParsableCommand {
         abstract: "朗读一段文本"
     )
 
-    @Option(name: .shortAndLong, help: "来源（claude/codex/dsh/qwen/pi），决定默认音色")
+    @Option(name: .shortAndLong, help: "来源（claude/codex/pi），决定默认音色")
     var source: String?
 
     @Option(name: .shortAndLong, help: "音色 ID（用 ivox voice list 查看）")

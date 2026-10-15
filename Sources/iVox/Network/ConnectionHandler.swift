@@ -223,7 +223,7 @@ actor ConnectionHandler {
         defer { Darwin.close(fd) }
         guard let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
               !text.isEmpty else { return }
-        // 停止帧 `{type:stop,source:claude}`：识别是哪个来源（Claude/Codex/Qwen 的提交、
+        // 停止帧 `{type:stop,source:claude}`：识别是哪个来源（Claude/Codex 的提交、
         // 或手动 ivox quiet --source）打断的播报。无 source 记成「来源未知」。
         if text.hasPrefix("{type:stop"), let end = text.firstIndex(of: "}") {
             let inner = String(text[text.index(text.startIndex, offsetBy: 1)..<end])

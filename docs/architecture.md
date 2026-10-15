@@ -2,7 +2,7 @@
 
 ## 概览
 
-macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、Codex、Qwen Code、DeepSeek Harness、PI coding agent）、微信与全局热键，输出侧走本地 MLX TTS/ASR + 系统媒体控制；另有划词翻译（`Cmd+D`）与 Finder/终端快捷（QuickActions）。
+macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、Codex、PI coding agent）、微信与全局热键，输出侧走本地 MLX TTS/ASR + 系统媒体控制；另有划词翻译（`Cmd+D`）与 Finder/终端快捷（QuickActions）。
 
 ```
                           用户
@@ -23,7 +23,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
               │  WeChatPlatform ←──┤
               │  SocketServer ←────┤
               │  GlobalKeyTap ←────┤  ←  键盘事件层：一个 tap，按归属路由
-              │                     │      右⌘/右⌃ 语音 · Cmd+D 翻译 · Opt+Z/A/Q/W/X/C 快捷
+              │                     │      右⌘/右⌃ 语音 · Cmd+D 翻译 · Opt+Z/A/W/X/C 快捷
               │  MediaHTTPServer   │  →  Web UI (8888)
               │         │          │
               │         ▼          │
@@ -162,7 +162,7 @@ Daemon (actor)
 - 键盘监听由 `HotKey/GlobalKeyTap` **独占**（一个 tap 服务多个消费者，见下节），本服务只订阅**修饰键**：右⌘(0x36) / 右⌃(0x3E) 的状态变化由它回调进来
 - **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」——用户快捷键打断之一）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 打断权一共三个快捷键：right⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴（后者只静音播报 + 恢复音乐，不录音）。**pi/dsh 新轮与停止帧不再打断**，一律排队
+- 打断权一共三个快捷键：right⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴（后者只静音播报 + 恢复音乐，不录音）。**pi 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 
@@ -171,7 +171,7 @@ Daemon (actor)
 `Sources/iVox/HotKey/GlobalKeyTap.swift`
 
 - 独占一个 CGEvent tap 与**专用线程的 run loop**，只按事件类型 / keyCode **路由**，不含任何业务判断
-- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/Q/W/X/C` → `QuickActionsService`
+- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/W/X/C` → `QuickActionsService`
 - 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
 - ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
 - 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Cmd+D` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
@@ -190,7 +190,7 @@ Daemon (actor)
 
 `Sources/iVox/QuickActions/QuickActionsService.swift`
 
-- `Opt+Z` 在 Finder 当前目录开终端；`Opt+A`/`Opt+Q`/`Opt+W`/`Opt+X` 开终端并执行 `claude`/`qwen`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
+- `Opt+Z` 在 Finder 当前目录开终端；`Opt+A`/`Opt+W`/`Opt+X` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
 - 控 Terminal **不用 AppleScript `do script`**（那要 Terminal 的 Automation 授权，且 iDict 时代有双窗问题）：开终端用 `open -a Terminal <dir>`，要跑命令就先写一个临时 `.command` 再 `open` 它
 - 取 Finder 路径仍走 AppleScript（唯一需要 Automation 授权的点，面积很小）
 - 选中项是**文件**时：开终端取它的**所在目录**，复制路径取**文件本身**
@@ -313,7 +313,7 @@ ConnectionHandler.extractVoicePrefix():
 ~/.local/share/ivox/runtime/iVox          # 实际二进制
 ~/.config/ivox/config.json                 # 配置
 ~/.config/ivox/integrations/               # 集成资产权威源（随发布包解包，分发器读这里）
-~/.config/ivox/hook.sh                     # 分发后的 hook（Claude/Codex/Qwen 挂载引用它）
+~/.config/ivox/hook.sh                     # 分发后的 hook（Claude/Codex 挂载引用它）
 ~/.config/ivox/model/                      # TTS/ASR MLX 模型
 ~/.config/ivox/voices/                     # 参考音频
 ~/.config/ivox/wechat/                     # 微信轮询状态
@@ -343,10 +343,8 @@ ConnectionHandler.extractVoicePrefix():
 |------|----------|----------|
 | Claude Code（交互会话） | `~/.claude/settings.json` | **MessageDisplay → `hook.sh msgdisplay claude`**（assistant 行批增量，过程逐句播、final 批含完整结尾；**不再挂 Stop**） |
 | Codex | `~/.codex/hooks.json` | Stop → hook.sh codex |
-| Qwen Code | `~/.qwen/settings.json` | Stop → hook.sh qwen |
-| DeepSeek Harness | `~/.dsh/profiles/desktop` 插件 `ivox-tts.mjs` | `agent/assistant-stream` 逐 text-delta 流式；socket 不可用时 turn-stopping 退回 hook.sh（内置桥接 Stop payload 无文本） |
 | PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_update` 流式（`agent_settled` 兜底） |
 
-由 `install-hooks.sh` 统一安装（Claude 挂 MessageDisplay，Codex/Qwen 仍挂 Stop）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。`hook.sh` 有 `speak` / `msgdisplay` 两模式：`speak` 提取 `last_assistant_message`、`msgdisplay` 提取 `delta` 增量，都经 `ivox speak` 排队进桶（不打断）。
+由 `install-hooks.sh` 统一安装（Claude 挂 MessageDisplay，Codex 仍挂 Stop）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。`hook.sh` 有 `speak` / `msgdisplay` 两模式：`speak` 提取 `last_assistant_message`、`msgdisplay` 提取 `delta` 增量，都经 `ivox speak` 排队进桶（不打断）。
 
 **集成资产随发布包自包含**：release tarball 除 `ivox` 外含整个 `integrations/`（含 `install-hooks.sh`），安装/升级时解包到权威源 `~/.config/ivox/integrations/`，再由分发器幂等铺到各 agent 位置。同步只发生在三个显式时机：`make update`（runtime.sh deploy-bin）、`ivox upgrade`（UpgradeCommand 解包后 Process 调分发器）、`install-binary.sh`（curl|bash 首次安装也补齐集成）；守护进程启动不自动同步。分发器按自身位置探测素材源：脚本在 `integrations/` 内（部署态）用同级目录，在 `scripts/`（源码态）用 `../integrations`。

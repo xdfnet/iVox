@@ -13,7 +13,7 @@ struct QuietCommand: ParsableCommand {
         abstract: "停止当前及排队播报（守护进程继续运行）"
     )
 
-    /// 声明打断来源（如 claude/codex/qwen），daemon 会记进日志；缺省发无来源的裸哨兵
+    /// 声明打断来源（如 claude/codex/pi），daemon 会记进日志；缺省发无来源的裸哨兵
     @Option(name: .long, help: "声明打断来源（可选，如 claude）")
     var source: String?
 

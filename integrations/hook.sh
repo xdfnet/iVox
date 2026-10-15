@@ -1,6 +1,6 @@
 #!/bin/bash
-# iVox + iW Hook — Claude Code / Codex / Qwen Code / DeepSeek Harness 播报 Hook
-# Usage: hook.sh <speak|msgdisplay> <source>   # source: claude | codex | qwen | dsh
+# iVox + iW Hook — Claude Code / Codex / PI 播报 Hook
+# Usage: hook.sh <speak|msgdisplay> <source>   # source: claude | codex | pi
 #   hook.sh speak claude       → 念 claude 的回复（Stop / ivox speak 场景）
 #   hook.sh msgdisplay claude  → MessageDisplay process：assistant 行批增量，过程内容逐句进桶
 # 协议：stdout 必须保持干净；exit 0 = 继续，非 0 = 停止
@@ -48,8 +48,6 @@ source="$2"
 exec 3>&1
 exec 1>/dev/null
 
-# 注：dsh 的回复文本由 profile 本地插件 ivox-tts.mjs 直接写进 payload 的
-# last_assistant_message，这里不再回头读 ~/.dsh/sessions/*.zstd。
 payload="$(cat)"
 
 text=$(python3 -c "

@@ -47,7 +47,7 @@ assets: voices
 build:
 	$(SWIFT) build $(SWIFT_RELEASE_FLAGS)
 
-# 打发布包：二进制 + 自包含集成资产（install/upgrade 解包后自动分发 hook/pi/dsh）
+# 打发布包：二进制 + 自包含集成资产（install/upgrade 解包后自动分发 hook/pi）
 VERSION ?= $(shell sed -n 's/.*iVoxVersion = "\(.*\)"/\1/p' Sources/iVox/Utilities/Version.swift)
 PKG := ivox-v$(VERSION)-macos-arm64
 package: build

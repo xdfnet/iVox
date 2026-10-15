@@ -463,7 +463,7 @@ const cases = [
 
   // ───────── E7：停止哨兵作废全部流式轮（你开口 = 全场闭嘴）─────────
   // 语义：哨兵（hook.sh stop / ivox quiet）不只停当场，还作废此前所有流式轮。
-  // 场景：在 Claude 里提交 prompt 时，pi/dsh 手里正在生成的那一轮后续增量不该再开口
+  // 场景：在 Claude 里提交 prompt 时，pi 手里正在生成的那一轮后续增量不该再开口
   //（否则「我说话电脑就不说了」不成立——当场静音了，下一句生成出来照样念）。
   {
     name: "E7-stop-sentinel-buries-live-turn",

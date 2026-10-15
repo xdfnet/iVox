@@ -154,7 +154,7 @@ struct UpgradeCommand: AsyncParsableCommand {
             print("警告: ad-hoc 重签失败（退出码 \(sign.terminationStatus)），如遇权限异常可手动执行 codesign --force --sign - \(binPath)")
         }
 
-        // 7.5 同步集成资产（hook/pi/dsh）到各 agent；幂等，失败仅告警不阻断升级
+        // 7.5 同步集成资产（hook/pi）到各 agent；幂等，失败仅告警不阻断升级
         let installer = configDir + "/integrations/install-hooks.sh"
         if FileManager.default.fileExists(atPath: installer) {
             let sync = Process()
@@ -163,7 +163,7 @@ struct UpgradeCommand: AsyncParsableCommand {
             try? sync.run()
             sync.waitUntilExit()
             if sync.terminationStatus == 0 {
-                print("✓ 集成资产已同步（hook / pi / dsh）")
+                print("✓ 集成资产已同步（hook / pi）")
             } else {
                 print("警告: 集成资产同步失败（退出码 \(sync.terminationStatus)），可稍后重跑安装脚本")
             }

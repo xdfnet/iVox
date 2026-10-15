@@ -43,7 +43,7 @@ init_config() {
 }
 
 # 组装集成资产权威源（~/.config/ivox/integrations）并幂等分发到各 agent。
-# install（init）与 upgrade（deploy-bin）共用，保证升级即同步 hook/pi/dsh。
+# install（init）与 upgrade（deploy-bin）共用，保证升级即同步 hook/pi。
 sync_integrations() {
   mkdir -p "${INTEGRATIONS_DIR}"
   cp -R "${ROOT}/integrations/." "${INTEGRATIONS_DIR}/"
@@ -105,9 +105,9 @@ deploy_bin() {
   sign_bin
 
   # 升级也要刷新全部集成资产（make update 走这里，不走 init）：权威源 integrations/
-  # 整体重铺，再幂等分发 hook/pi/dsh（挂载已存在则跳过，未安装的 agent 安全跳过）。
+  # 整体重铺，再幂等分发 hook/pi（挂载已存在则跳过，未安装的 agent 安全跳过）。
   sync_integrations >/dev/null 2>&1 || true
-  echo "✓  集成资产已同步: hook / pi / dsh"
+  echo "✓  集成资产已同步: hook / pi"
 }
 
 uninstall_runtime() {

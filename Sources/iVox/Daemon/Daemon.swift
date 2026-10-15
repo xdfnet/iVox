@@ -272,7 +272,7 @@ actor Daemon {
                 case .translate:
                     guard coordinator.isEnabled else { return }
                     await coordinator.translateSelection()
-                case .openTerminal, .openTerminalClaude, .openTerminalQwen,
+                case .openTerminal, .openTerminalClaude,
                      .openTerminalCodex, .openTerminalPi, .copyPath:
                     await quickActionsService.handle(hotKey, at: location)
                 case .escInterrupt:
@@ -287,7 +287,7 @@ actor Daemon {
         // 处理器都装好了，这时才开 tap（顺序反了会让启动瞬间的按键落到 nil handler 上）
         keyTap.start()
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
-        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/W/C QuickActions；Ctrl+Esc 手动闭嘴）")
+        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/W/X/C QuickActions；Ctrl+Esc 手动闭嘴）")
     }
 
     private func startMediaHTTPServer() {

@@ -18,8 +18,6 @@
   "sourceVoices": {
     "claude": "taozi",
     "codex": "wanwan",
-    "dsh": "taozi",
-    "qwen": "wanwan",
     "pi": "taozi"
   },
   "speechInput": {
@@ -60,7 +58,7 @@
       "name": "米仔",
       "refAudio": "~/.config/ivox/voices/ref_mizai.wav",
       "refText": "大家好，我是米仔。我的声音温暖自然，适合日常播报和语音助手场景。无论是读书、讲故事，还是播报天气新闻，我都能轻松应对。",
-      "description": "Qwen Code 音色"
+      "description": "备用音色"
     },
     {
       "id": "dayi",

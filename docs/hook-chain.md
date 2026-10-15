@@ -61,35 +61,13 @@
 
 | 工具 | 回复完成播报 | 配置位置 |
 |------|-------------|----------|
-| Claude Code | Stop → `hook.sh speak claude` | `~/.claude/settings.json` |
+| Claude Code | MessageDisplay → `hook.sh msgdisplay claude` | `~/.claude/settings.json` |
 | Codex | Stop → `hook.sh speak codex` | `~/.codex/hooks.json` |
-| Qwen Code | Stop → `hook.sh speak qwen` | `~/.qwen/settings.json` |
 | pi 扩展 | `message_update` 流式（新轮排队，不打断） | `~/.pi/agent/extensions/ivox.ts` |
-| DeepSeek Harness | `agent/assistant-stream` 逐 token 流式（主）；socket 不可用时 turn-stopping 整段直投 hook.sh（兜底） | `~/.dsh/profiles/desktop/cordis.patch.yml` |
 
-> ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文 / Ctrl+Esc 闭嘴）。在 Claude Code 里提交、后台 agent 轮次、pi/dsh 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（`ivox quiet` 手动能力保留在 ivox CLI）。
+> ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文 / Ctrl+Esc 闭嘴）。在 Claude Code 里提交、后台 agent 轮次、pi 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（`ivox quiet` 手动能力保留在 ivox CLI）。
 
 Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`）：assistant 消息流式显示时按行批触发、取 `delta` 增量逐句播，final 批含完整结尾，故不再挂 `Stop`（否则与 MessageDisplay 同播重复）。Codex 仍用 `Stop`（payload 自带 `last_assistant_message`，Codex 无 MessageDisplay 事件就只能终了一次）。
-
-DeepSeek Harness 不同：它内置的桥接插件（`dsh-hooks-claude-code` / `dsh-hooks-codex`）的 Stop payload **不含回复文本**（`stopPayload()` 只给 `session_id` / `cwd` / `hook_event_name`；codex 版把 `last_assistant_message` 写死成 `null`）。文本由本地 cordis 插件 `ivox-tts` 在内存中取出。**默认走与 pi 同构的第二层流式**，只在 socket 连不上时退回整段 hook.sh：
-
-```
-模型生成中
-  └─ ctx.on("agent/assistant-stream")  frame=start/chunk/end
-        chunk.chunk.type==="text-delta" → 增量原文帧写长连接（跳过 reasoning/tool-call）
-一轮结束
-  └─ ctx.on("agent/turn-stopping")  发 {end} 关流
-        · 已流式成功 → 结束
-        · socket 不可用 → spawn: bash hook.sh dsh
-              stdin: {hook_event_name:"Stop", last_assistant_message:"<最终文本>"}
-          （最终文本仍由 session/event 缓存的最后一条非空 assistant/message 选出）
-```
-
-> `assistant/message`/`attempt` 的 `data.stream` 是该 step 的**累计**紧凑流，不能逐帧转发；真增量只在 `agent/assistant-stream` 的 chunk frame。
-
-装在 `~/.dsh/profiles/desktop/plugins/ivox-tts.mjs`，由 `scripts/install-hooks.sh` 安装，源码在仓库 `integrations/dsh/`。
-
-机制细节、安装步骤、踩坑清单（`.mjs` 后缀要求、匿名 `package.json`、子代理过滤、旧的 zstd 取文本方案为何废弃）见 **[`dsh-tts.md`](dsh-tts.md)**。
 
 ### 2. Hook 脚本
 
@@ -98,7 +76,7 @@ DeepSeek Harness 不同：它内置的桥接插件（`dsh-hooks-claude-code` / `
 播报模式：
 
 - **`hook.sh msgdisplay <source>`（MessageDisplay，Claude Code 交互会话主路径）**：assistant 消息流式显示时按行批触发，`delta` = 自上一批以来新完成的整行文本。**必须极快返回**（Claude Code 等本钩子返回才渲染该批），故 delta 提取 + 审计用单个 python、播报用后台 `&`。走 `ivox speak --source <source> <text>` 排队进桶，过程内容（分步/工具多段）逐句播报；最后一条 assistant 即完整结尾。空/过短纯西文 delta 不播。
-- **`hook.sh speak <source>`（Stop / ivox speak 场景）**：从 stdin JSON 提取 `last_assistant_message`。dsh 的 payload 由本地插件 `ivox-tts` 直接投喂。调用 `ivox speak` 后台运行，不阻塞 AI 工具。
+- **`hook.sh speak <source>`（Stop / ivox speak 场景）**：从 stdin JSON 提取 `last_assistant_message`。调用 `ivox speak` 后台运行，不阻塞 AI 工具。
   - 注：Claude Code 交互会话现有配置**只挂 `MessageDisplay`**（不再挂 Stop），因 MessageDisplay 的 final 批已含完整结尾、与 Stop 同播会重复；`speak` 模式保留给其他工具/手动 `ivox speak`。
 
 > **`interrupt` 分支已从 hook.sh 移除**——打断权只归 ivox 快捷键（右⌘/Cmd+D/Ctrl+Esc）与手动 `ivox quiet`，不再经 hook.sh 自动打断（UserPromptSubmit 亦不挂）。`ivox quiet` 能力保留在 ivox CLI 侧。
@@ -187,7 +165,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
   | 说话 | right⌘ / right⌃ → `cancelAll` | `speech` |
   | 划词翻译 | Cmd+D → `speakUserInitiated`（打断且立刻念译文） | `dict` |
   | 闭嘴 | Ctrl+Esc → `cancelAll` | `esc` |
-  这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。**`{type:stop}` 停止帧（`hook.sh interrupt` / `ivox quiet`）已完全失效**，daemon 收到只记日志忽略、不再打断。流式新轮（pi/dsh）不再顶替——排队。Escape 放弃自己那轮（`cancelTurn`）只删该轮自己的桶，不占打断来源。**agent 回复到达时一律排队，不抢麦**。
+  这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。**`{type:stop}` 停止帧（`hook.sh interrupt` / `ivox quiet`）已完全失效**，daemon 收到只记日志忽略、不再打断。流式新轮（pi）不再顶替——排队。Escape 放弃自己那轮（`cancelTurn`）只删该轮自己的桶，不占打断来源。**agent 回复到达时一律排队，不抢麦**。
 
 ### 7. MediaController
 
@@ -272,9 +250,6 @@ codesign -dv ~/.local/share/ivox/runtime/iVox 2>&1 | grep -E 'flags|Signature|Te
 | 日志有播放但没声音 | AudioPlayer 引擎异常？音量设置？扬声器？ |
 | 播放完音乐没恢复 | 日志里有没有「媒体控制: 恢复」；Web 服务在不在 `curl http://127.0.0.1:8888/health` |
 | Hook 不触发 | settings.json / hooks.json 配置是否正确？Shell 权限？ |
-| DSH 播报不触发 | `~/.dsh/profiles/desktop/plugins/ivox-tts.mjs` 在不在？`cordis.patch.yml` 有没有 `ivox-tts` 挂载？改完重启 dsh 了没？ |
-| DSH 每次请求都在 prepare 阶段报错（如 auto-review REQUEST_EXTENSION） | `plugins/package.json` 匿名包缺失，原因见 [`dsh-tts.md`](dsh-tts.md) |
-| DSH 念了过程话 / 播到上一轮 | 是否被改回「读 zstd 轮询」的老实现？正常实现只在 `agent/turn-stopping` 取该轮最后一条 `assistant/message` |
 
 ## 参考
 
