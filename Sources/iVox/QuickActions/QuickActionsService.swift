@@ -57,9 +57,12 @@ final class QuickActionsService {
         // 静默忽略（实测：带 -n 生效、不带则命令根本不跑），只有新实例收得到。
         var args = ["--working-directory=\(dir)"]
         if let command {
-            // 经 login shell 跑：Ghostty 的 `-e` 是直接 exec，继承不到用户 PATH
-            // （/opt/homebrew/bin、~/.local/bin 都不在 launchd 给 GUI 的最小 PATH 里）。
-            args += ["-e", "/bin/zsh", "-lc", command]
+            // 用 `--initial-command` 而非 `-e`：**`-e` 每次都会弹 macOS 的
+            // 「Allow Ghostty to execute "/bin/zsh"?」确认框**（Ghostty 的安全机制，
+            // 目前没有配置项能关，issue #8648 仍在讨论），initial-command 不走那条通道。
+            // 它默认经 `/bin/bash --noprofile --norc -c` 执行，所以这里再套一层 login shell
+            // 才拿得到用户 PATH（/opt/homebrew/bin、~/.local/bin 都不在 GUI 的最小 PATH 里）。
+            args.append("--initial-command=/bin/zsh -lc \(command)")
         }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = args
