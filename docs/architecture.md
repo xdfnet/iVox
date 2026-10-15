@@ -23,7 +23,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
               │  WeChatPlatform ←──┤
               │  SocketServer ←────┤
               │  GlobalKeyTap ←────┤  ←  键盘事件层：一个 tap，按归属路由
-              │                     │      右⌘/右⌃ 语音 · Cmd+D 翻译 · Opt+Z/A/W/X/C 快捷
+              │                     │      右⌘/右⌃ 语音 · Cmd+D 翻译 · Opt+Z/A/Q/X/C 快捷
               │  MediaHTTPServer   │  →  Web UI (8888)
               │         │          │
               │         ▼          │
@@ -171,7 +171,7 @@ Daemon (actor)
 `Sources/iVox/HotKey/GlobalKeyTap.swift`
 
 - 独占一个 CGEvent tap 与**专用线程的 run loop**，只按事件类型 / keyCode **路由**，不含任何业务判断
-- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/W/X/C` → `QuickActionsService`
+- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/Q/X/C` → `QuickActionsService`
 - 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
 - ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
 - 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Cmd+D` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
@@ -190,7 +190,7 @@ Daemon (actor)
 
 `Sources/iVox/QuickActions/QuickActionsService.swift`
 
-- `Opt+Z` 在 Finder 当前目录开终端；`Opt+A`/`Opt+W`/`Opt+X` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
+- `Opt+Z` 在 Finder 当前目录开终端；`Opt+A`/`Opt+X`/`Opt+Q` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
 - 控 Terminal **不用 AppleScript `do script`**（那要 Terminal 的 Automation 授权，且 iDict 时代有双窗问题）：开终端用 `open -a Terminal <dir>`，要跑命令就先写一个临时 `.command` 再 `open` 它
 - 取 Finder 路径仍走 AppleScript（唯一需要 Automation 授权的点，面积很小）
 - 选中项是**文件**时：开终端取它的**所在目录**，复制路径取**文件本身**

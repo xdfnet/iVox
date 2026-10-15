@@ -27,8 +27,8 @@ final class GlobalKeyTap: @unchecked Sendable {
         case translate            // Cmd+D
         case openTerminal         // Opt+Z
         case openTerminalClaude   // Opt+A
-        case openTerminalCodex    // Opt+W
-        case openTerminalPi       // Opt+X
+        case openTerminalCodex    // Opt+X
+        case openTerminalPi       // Opt+Q
         case copyPath             // Opt+C
         case escInterrupt         // Ctrl+Esc 手动闭嘴（不录音）
     }
@@ -104,7 +104,7 @@ final class GlobalKeyTap: @unchecked Sendable {
             runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         }
-        Log.info("键盘事件层已启动（右 ⌘/⌃ 语音；Cmd+D 划词翻译；Opt+Z/A/W/X/C Finder）")
+        Log.info("键盘事件层已启动（右 ⌘/⌃ 语音；Cmd+D 划词翻译；Opt+Z/A/Q/X/C Finder）")
         CFRunLoopRun()
         stateQueue.sync { runLoop = nil }
     }
@@ -192,8 +192,8 @@ final class GlobalKeyTap: @unchecked Sendable {
         Binding(keyCode: 0x02, modifiers: .maskCommand, hotKey: .translate),           // D
         Binding(keyCode: 0x06, modifiers: .maskAlternate, hotKey: .openTerminal),      // Z
         Binding(keyCode: 0x00, modifiers: .maskAlternate, hotKey: .openTerminalClaude),// A
-        Binding(keyCode: 0x0D, modifiers: .maskAlternate, hotKey: .openTerminalCodex), // W
-        Binding(keyCode: 0x07, modifiers: .maskAlternate, hotKey: .openTerminalPi),     // X
+        Binding(keyCode: 0x07, modifiers: .maskAlternate, hotKey: .openTerminalCodex), // X
+        Binding(keyCode: 0x0C, modifiers: .maskAlternate, hotKey: .openTerminalPi),     // Q
         Binding(keyCode: 0x08, modifiers: .maskAlternate, hotKey: .copyPath),          // C
         Binding(keyCode: 0x35, modifiers: .maskControl, hotKey: .escInterrupt),        // Esc（Ctrl+Esc）
     ]

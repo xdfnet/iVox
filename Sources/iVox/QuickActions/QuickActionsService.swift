@@ -9,7 +9,7 @@ import iVoxKit
 ///
 /// 对应五个热键：
 /// - `Opt+Z` 在 Finder 当前目录打开终端
-/// - `Opt+A` / `Opt+W` 打开终端并分别执行 `claude` / `codex`
+/// - `Opt+A` / `Opt+X` / `Opt+Q` 打开终端并分别执行 `claude` / `codex` / `pi`
 /// - `Opt+C` 把 Finder 选中项的路径写进剪贴板
 ///
 /// 它和划词翻译同为「用户按了组合键」的入口，但**是两个能力域**：`Translation/` 管文本工具，
