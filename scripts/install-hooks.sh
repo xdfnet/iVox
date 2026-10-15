@@ -68,41 +68,17 @@ write_prompt_hook() {
   return 0   # no-op：不再挂 UserPromptSubmit interrupt
 }
 
-# 摘除 Claude 配置里**存量**的 Stop 播报条目（只删本项目的 `hook.sh speak`，不碰别的 Stop hook）。
-# 必要性：Claude 改走 MessageDisplay 后，老配置里的 Stop 与它同播会**把整条回复再念一遍**；
-# 而本脚本「有则跳过」永不删除，不去动它就会一直留着。幂等，无变化则不动文件。
-remove_claude_stop() {
-  local config_path="$1"
-  command -v python3 &>/dev/null || return 0
-  python3 - "$config_path" <<'PYEOF' 2>/dev/null
-import json, sys
-p = sys.argv[1]
-with open(p) as f:
-    d = json.load(f)
-groups = (d.get('hooks') or {}).get('Stop') or []
-kept = [g for g in groups
-        if not any('hook.sh speak' in h.get('command', '') for h in g.get('hooks', []))]
-if len(kept) == len(groups):
-    raise SystemExit(0)
-d.setdefault('hooks', {})['Stop'] = kept
-with open(p, 'w') as f:
-    json.dump(d, f, indent=2)
-    f.write('\n')
-print('✓  已摘除 Claude 遗留的 Stop 播报（与 MessageDisplay 同播会重复）')
-PYEOF
-}
-
 # ── Claude ──
 # Claude 交互会话的播报**只走 MessageDisplay**（assistant 行批增量：过程逐句播、final 批含完整结尾）。
-# **不再挂 Stop**——Stop 拿 `last_assistant_message` 是整条回复，而 MessageDisplay 已经逐段播完，
-# 两者并存会把整条回复再念一遍（飞哥实测"同样内容播两遍"）。
+# **不再挂 Stop**——Stop 拿 `last_assistant_message` 是整条回复，而 MessageDisplay 已逐段播完，
+# 两者并存会把整条回复再念一遍（实测"同样内容播两遍"）。
 # 历史坑：去重那次（57179ae）commit 说「摘 Stop」，实际只把 UserPromptSubmit 置了 no-op，
-# 这里的 Claude 分支仍默认 event=Stop；因「有则跳过」永不删除，Stop 就这么一直留着，
-# **光手改 settings.json 治不了本**——下次 make update 会被 elif 分支补写回来。故此处一并清存量。
+# 这里仍默认 event=Stop；又因本脚本「有则跳过、无则补写」，每次 make update 都把 Stop 留住/补回。
+# **本脚本只写不删**——老配置里遗留的 Stop 请人工摘除（settings.json 的 hooks.Stop），
+# 安装器不做删除，避免越权改到别人的配置。
 # 注：Codex / Qwen 无 MessageDisplay 事件，仍走 Stop（见下），别跟着一起改。
 CLAUDE_JSON="$HOME/.claude/settings.json"
 if [[ -f "$CLAUDE_JSON" ]]; then
-  remove_claude_stop "$CLAUDE_JSON"
   if grep -q 'hook.sh msgdisplay claude' "$CLAUDE_JSON" 2>/dev/null; then
     echo "[i] Claude MessageDisplay hook 已存在"
   elif write_hook "$CLAUDE_JSON" "claude" 10 MessageDisplay; then
