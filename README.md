@@ -150,6 +150,7 @@ pi 扩展（逐句流式）──────────┴→ Unix Socket → 
 - macOS 14+ / Apple Silicon
 - Swift 6.4 开发快照 / Xcode 26+
 - [Claude Code](https://claude.com/claude-code) CLI — 微信常驻 Agent（Swift 经 stdio 直连）
+- [Ghostty](https://ghostty.org) — 终端模拟器；快速操作的「开终端跑 `claude`/`codex`/`pi`」（`Opt+A`/`Opt+X`/`Opt+Q`）用它（`brew install --cask ghostty`）
 - [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) — 本地 MLX 推理
 - [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) — TTS 模型（[官方博客](https://qwen.ai/blog?id=qwen3tts-0115)）
 - Qwen3-ASR-1.7B — 本地语音识别模型（首次安装自动下载）

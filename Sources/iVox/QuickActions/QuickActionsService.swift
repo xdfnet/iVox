@@ -15,14 +15,15 @@ import iVoxKit
 /// 它和划词翻译同为「用户按了组合键」的入口，但**是两个能力域**：`Translation/` 管文本工具，
 /// `QuickActions/` 管这类系统快捷，`Daemon` 只按归属分派。
 ///
-/// 控 Terminal 刻意**不用** AppleScript `do script`（那要 Terminal 的 Automation 授权，
-/// 且 iDict 时代有双窗问题）：开终端用 `open -a Terminal <dir>`，要跑命令则先写一个临时
-/// `.command` 文件再 `open` 它。取 Finder 路径仍走 AppleScript（这是唯一需要 Automation 的地方，
-/// 面积很小）。
+/// 开终端走 **Ghostty**：它的 `--working-directory` + `-e` 是原生 CLI 参数，一条
+/// LaunchServices 调用就够了，不需要临时文件、也不需要 Terminal 的 Automation 授权。
+/// （用 Terminal.app 时这两样总得沾一样：AppleScript `do script` 要多一份 Automation 授权
+/// 且 iDict 时代有双窗问题；写临时 `.command` 则要额外做回收和 mtime 竞态处理。Ghostty
+/// 把这条路直接打通了。）
+/// 取 Finder 路径仍走 AppleScript——这是唯一需要 Automation 的地方，面积很小。
 @MainActor
 final class QuickActionsService {
-    private static let terminalApp = URL(
-        fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+    private static let ghosttyApp = URL(fileURLWithPath: "/Applications/Ghostty.app")
 
     func handle(_ hotKey: GlobalKeyTap.HotKey, at location: CGPoint) async {
         switch hotKey {
@@ -50,52 +51,28 @@ final class QuickActionsService {
             Log.warn("QuickActions: 取不到 Finder 目录")
             return
         }
+        // 参数经 `NSWorkspace.OpenConfiguration` 下发（等价于 `open -na Ghostty.app --args …`，
+        // macOS 上官方就这一条路——Ghostty 不支持直接从 CLI 启动终端）。
+        // **必须配 createsNewApplicationInstance**：复用已运行的 Ghostty 实例时参数会被
+        // 静默忽略（实测：带 -n 生效、不带则命令根本不跑），只有新实例收得到。
+        var args = ["--working-directory=\(dir)"]
+        if let command {
+            // 经 login shell 跑：Ghostty 的 `-e` 是直接 exec，继承不到用户 PATH
+            // （/opt/homebrew/bin、~/.local/bin 都不在 launchd 给 GUI 的最小 PATH 里）。
+            args += ["-e", "/bin/zsh", "-lc", command]
+        }
+        let config = NSWorkspace.OpenConfiguration()
+        config.arguments = args
+        config.createsNewApplicationInstance = true
         do {
+            try await NSWorkspace.shared.openApplication(at: Self.ghosttyApp, configuration: config)
             if let command {
-                let script = try makeCommandFile(directory: dir, command: command)
-                try await NSWorkspace.shared.open(
-                    [script], withApplicationAt: Self.terminalApp, configuration: .init())
                 Log.info("QuickActions: 在 \(dir) 执行 \(command)")
             } else {
-                try await NSWorkspace.shared.open(
-                    [URL(fileURLWithPath: dir)], withApplicationAt: Self.terminalApp, configuration: .init())
                 Log.info("QuickActions: 在 \(dir) 打开终端")
             }
         } catch {
-            Log.warn("QuickActions: 打开终端失败 \(error.localizedDescription)")
-        }
-    }
-
-    /// 写一个可执行的 `.command`（Terminal 会执行它），放在缓存目录里。
-    /// 不直接用 `do script` 是因为那需要 Terminal 的 Apple Events 授权。
-    private func makeCommandFile(directory: String, command: String) throws -> URL {
-        let dir = FileManager.default.homeDirectoryForCurrentUser
-            .appendingPathComponent("Library/Caches/ivox", isDirectory: true)
-        try FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        cleanupOldCommandFiles(in: dir)
-
-        let url = dir.appendingPathComponent("quickaction-\(UUID().uuidString.prefix(8)).command")
-        let script = """
-        #!/bin/zsh
-        cd \(shellQuote(directory)) && exec \(command)
-        """
-        try script.write(to: url, atomically: true, encoding: .utf8)
-        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: url.path)
-        return url
-    }
-
-    /// 回收上次留下的 `.command`：它们只是把命令喂给 Terminal 的载体，喂完就没用了。
-    /// 只删**超过 1 分钟**的——刚写下的那个可能正被 Terminal 读取，删早了会执行到空文件。
-    private func cleanupOldCommandFiles(in dir: URL) {
-        let fm = FileManager.default
-        guard let items = try? fm.contentsOfDirectory(
-            at: dir, includingPropertiesForKeys: [.contentModificationDateKey]) else { return }
-        for url in items where url.lastPathComponent.hasPrefix("quickaction-") {
-            guard let mtime = try? url.resourceValues(forKeys: [.contentModificationDateKey])
-                .contentModificationDate else { continue }
-            if Date().timeIntervalSince(mtime) > 60 {
-                try? fm.removeItem(at: url)
-            }
+            Log.warn("QuickActions: 打开 Ghostty 失败（装了没？brew install --cask ghostty）: \(error.localizedDescription)")
         }
     }
 

@@ -191,7 +191,8 @@ Daemon (actor)
 `Sources/iVox/QuickActions/QuickActionsService.swift`
 
 - `Opt+Z` 在 Finder 当前目录开终端；`Opt+A`/`Opt+X`/`Opt+Q` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
-- 控 Terminal **不用 AppleScript `do script`**（那要 Terminal 的 Automation 授权，且 iDict 时代有双窗问题）：开终端用 `open -a Terminal <dir>`，要跑命令就先写一个临时 `.command` 再 `open` 它
+- 开终端走 **Ghostty**（`--working-directory` + `-e` 是它的原生 CLI 参数）：一条 LaunchServices 调用就够了，**不需要**临时 `.command` 文件，也不沾 Terminal 的 Automation 授权。参数经 `NSWorkspace.OpenConfiguration` 下发，**必须配 `createsNewApplicationInstance`**——复用已运行的 Ghostty 实例时参数会被静默忽略（实测）
+- 命令写作 `-e /bin/zsh -lc <cmd>`：Ghostty 的 `-e` 是直接 exec、继承不到用户 PATH（`/opt/homebrew/bin`、`~/.local/bin` 都不在 launchd 给 GUI 的最小 PATH 里）；经 login shell 跑则天然可用（Ghostty 实际会把它包进 `/usr/bin/login`）
 - 取 Finder 路径仍走 AppleScript（唯一需要 Automation 授权的点，面积很小）
 - 选中项是**文件**时：开终端取它的**所在目录**，复制路径取**文件本身**
 
