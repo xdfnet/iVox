@@ -21,7 +21,8 @@ install:
 	@$(MAKE) models
 	@$(MAKE) build voices
 	@$(RUNTIME) deploy-bin
-	@echo "✓  iVox 已就绪（启动: ~/.local/bin/ivox autostart on）"
+	@$(RUNTIME) start
+	@echo "✓  iVox 已就绪并已启动"
 
 # 停/起统一走 runtime.sh 的 stop/start（LaunchAgent 下即 bootout → cp → bootstrap）：
 # 先停干净再覆盖再起。直接在进程活着时 cp 覆盖二进制会让 macOS 判签名失配
