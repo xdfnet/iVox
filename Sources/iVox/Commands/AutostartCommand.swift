@@ -2,10 +2,12 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
-// CLI 子命令 ivox autostart on|off：登录自启 + 崩溃自动重启守护进程（LaunchAgent）。
-// daemon 原来靠 `ivox on`（nohup）手动拉起、无 launchd；这里用 LaunchAgent 托管，
-// RunAtLoad 登录自启、KeepAlive 崩溃自动重启。注意：KeepAlive 下 `ivox off` 发停止会被
-// 立刻拉起，要真停得 `ivox autostart off`。
+// CLI 子命令 ivox autostart on|off：守护进程的**唯一启停入口**（LaunchAgent 托管）。
+// RunAtLoad 登录自启、KeepAlive 崩溃自动重启。
+// 原先另有 `ivox on/off/restart`（nohup 手动模式），两套并存时 KeepAlive 会把收到停止
+// 信号的进程立刻拉回来——`ivox off` 因此总误报「守护进程未退出」，`make update` 还会在
+// 进程活着时 cp 覆盖二进制（签名失配 OS_REASON_CODESIGNING、极端情况拉起到截断文件）。
+// 已删除那套，启停一律走这里。
 
 struct AutostartCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
@@ -20,15 +22,18 @@ struct AutostartCommand: ParsableCommand {
     }
     /// autostart 是否已配置（LaunchAgent plist 存在）
     static var isEnabled: Bool { FileManager.default.fileExists(atPath: plistPath) }
+    /// job 是否已加载进 launchd——已加载时 `bootstrap` 会报 EEXIST，该走 `kickstart -k` 重启
+    static var isJobLoaded: Bool { launchctl(["print", guiTarget + "/" + label]) == 0 }
     /// 当前登录用户的 launchd 作用域（gui/<UID>）
     static var guiTarget: String { "gui/\(getuid())" }
 
     struct On: ParsableCommand {
-        static let configuration = CommandConfiguration(commandName: "on", abstract: "开启自启")
+        static let configuration = CommandConfiguration(commandName: "on", abstract: "启动守护进程（并开启登录自启）")
         func run() throws {
-            // 1) 停掉当前手动 nohup 起的 daemon，交回 launchd 托管，避免双 serve 抢 socket
+            // 1) 若有非托管的 daemon（旧版 nohup 起的）在跑，先停掉，避免双 serve 抢 socket。
+            //    托管中的 job 不用动——下面 kickstart 会重启它。
             let socket = AppPaths.socketPath
-            if SocketClient.isRunning(path: socket) {
+            if SocketClient.isRunning(path: socket), !AutostartCommand.isJobLoaded {
                 _ = try? SocketClient.send("__IVOX_STOP__", to: socket)
                 for _ in 0..<40 {
                     if !SocketClient.isRunning(path: socket) { break }
@@ -43,20 +48,22 @@ struct AutostartCommand: ParsableCommand {
             let plist = AutostartCommand.plistXML(program: binary, log: log)
             try? FileManager.default.removeItem(atPath: AutostartCommand.plistPath)
             try plist.write(toFile: AutostartCommand.plistPath, atomically: true, encoding: .utf8)
-            // 3) bootstrap 载入并启动（RunAtLoad 立即拉起 serve）
-            let status = AutostartCommand.launchctl(["bootstrap", AutostartCommand.guiTarget, AutostartCommand.plistPath])
+            // 3) 起或重启：未加载则 bootstrap（首次），已加载则 kickstart -k 重载新二进制。
+            //    做成幂等是必须的——`ivox upgrade` 与微信授权后都靠本命令重启，
+            //    而那时 job 通常已加载（bootstrap 会报 EEXIST）。
+            var status = AutostartCommand.launchctl(["bootstrap", AutostartCommand.guiTarget, AutostartCommand.plistPath])
             if status != 0 {
-                print("⚠️  launchctl bootstrap 失败（exit \(status)），先卸掉旧 job 再试一次")
+                status = AutostartCommand.launchctl(["kickstart", "-k", AutostartCommand.guiTarget + "/" + AutostartCommand.label])
             }
-            // 4) 等 socket 就绪
-            for _ in 0..<40 {
+            // 4) 等 socket 就绪（30s：模型加载 + 键盘层权限轮询实测要十几秒，10s 会误报）
+            for _ in 0..<120 {
                 if SocketClient.isRunning(path: socket) {
-                    print("✓  已开启登录自启 + 崩溃自动重启（LaunchAgent: \(AutostartCommand.label)）")
+                    print("✓  守护进程已启动（登录自启 + 崩溃自动重启，LaunchAgent: \(AutostartCommand.label)）")
                     return
                 }
                 Thread.sleep(forTimeInterval: 0.25)
             }
-            print("⚠️  自启已配置，但 daemon 未就绪，请查看 \(log)")
+            print("⚠️  daemon 30s 内未就绪（launchctl exit \(status)），请查看 \(log)")
         }
     }
 
@@ -75,9 +82,9 @@ struct AutostartCommand: ParsableCommand {
             }
             try? FileManager.default.removeItem(atPath: AutostartCommand.plistPath)
             if SocketClient.isRunning(path: socket) {
-                print("⚠️  daemon 仍在运行（可能有手动 daemon），可再执行 ivox off 停止")
+                print("⚠️  daemon 仍在运行，可手动 pkill -f 'ivox serve'")
             } else {
-                print("✓  已关闭自启（daemon 已停止；手动启动执行 ivox on）")
+                print("✓  守护进程已停止（登录自启已关闭；重新启动执行 ivox autostart on）")
             }
         }
     }

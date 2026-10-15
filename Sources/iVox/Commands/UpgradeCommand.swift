@@ -173,11 +173,11 @@ struct UpgradeCommand: AsyncParsableCommand {
         if wasRunning {
             print("重新启动守护进程…")
             try? FileManager.default.removeItem(atPath: socketPath)
-            try RestartCommand().run()
+            try AutostartCommand.On().run()
         }
         print("✓ 已升级到 v\(latest)")
         if !wasRunning {
-            print("守护进程此前未运行，需要时执行 ivox on 启动")
+            print("守护进程此前未运行，需要时执行 ivox autostart on 启动")
         }
     }
 

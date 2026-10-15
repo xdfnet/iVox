@@ -7,7 +7,7 @@ import iVoxKit
 struct ServeCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "serve",
-        abstract: "以前台模式运行守护进程（供 on 后台拉起）"
+        abstract: "以前台模式运行守护进程（供 LaunchAgent 拉起）"
     )
 
     func run() async throws {
@@ -18,7 +18,7 @@ struct ServeCommand: AsyncParsableCommand {
 
         let socketPath = AppPaths.socketPath
         if SocketClient.isRunning(path: socketPath) {
-            print("错误: 守护进程已在运行，使用 ivox off 停止后再启动前台进程")
+            print("错误: 守护进程已在运行，使用 ivox autostart off 停止后再启动前台进程")
             throw ExitCode.failure
         }
 

@@ -187,10 +187,10 @@ else
 fi
 
 # ── 6. 服务管理 ──
-section "服务管理（不注册 launchd 自启）"
-echo "  ivox 不再注册 launchd 自启动，需要时手动控制:"
-echo "    启动: ${BIN_DIR}/ivox on"
-echo "    停止: ${BIN_DIR}/ivox off"
+section "服务管理（LaunchAgent 托管）"
+echo "  ivox 由 LaunchAgent 托管（登录自启 + 崩溃自动重启）:"
+echo "    启动: ${BIN_DIR}/ivox autostart on"
+echo "    停止: ${BIN_DIR}/ivox autostart off"
 echo "    状态: ${BIN_DIR}/ivox status"
 
 # ── 完成 ──

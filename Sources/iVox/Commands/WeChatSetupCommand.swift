@@ -198,12 +198,7 @@ struct WeChatSetupCommand: AsyncParsableCommand {
     }
 
     private func restartDaemon() {
-        // 无 launchd：停止后重新拉起
-        let socketPath = AppPaths.socketPath
-        if SocketClient.isRunning(path: socketPath) {
-            try? SocketClient.send("__IVOX_STOP__", to: socketPath)
-            Thread.sleep(forTimeInterval: 0.5)
-        }
-        try? StartCommand().run()
+        // 幂等：未加载则起、已加载则 kickstart 重启（On 内部会先停掉非托管的旧 daemon）
+        try? AutostartCommand.On().run()
     }
 }

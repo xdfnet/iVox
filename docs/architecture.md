@@ -331,7 +331,7 @@ ConnectionHandler.extractVoicePrefix():
 | Target | 作用 |
 |--------|------|
 | `make build` | `swift build -c release -Xswiftc -Osize` |
-| `make update` | ivox off → build + voices + deploy-bin → ivox on |
+| `make update` | runtime.sh stop（launchctl bootout）→ build + voices + deploy-bin → runtime.sh start（bootstrap） |
 | `make run` | build + 前台运行（调试） |
 | `make test` | 运行 iVoxKit 测试 |
 

@@ -21,13 +21,17 @@ install:
 	@$(MAKE) models
 	@$(MAKE) build voices
 	@$(RUNTIME) deploy-bin
-	@echo "✓  iVox 已就绪（手动启动: ~/.local/bin/ivox on）"
+	@echo "✓  iVox 已就绪（启动: ~/.local/bin/ivox autostart on）"
 
+# 停/起统一走 runtime.sh 的 stop/start（LaunchAgent 下即 bootout → cp → bootstrap）：
+# 先停干净再覆盖再起。直接在进程活着时 cp 覆盖二进制会让 macOS 判签名失配
+# （OS_REASON_CODESIGNING）把进程杀掉，极端情况 launchd 还可能拉起到写了一半的文件。
+# 只卸 job 不删 plist，所以中途失败也不会丢登录自启配置。
 update:
-	@~/.local/bin/ivox off 2>/dev/null || true
+	@$(RUNTIME) stop
 	@$(MAKE) build voices
 	@$(RUNTIME) deploy-bin
-	@~/.local/bin/ivox on
+	@$(RUNTIME) start
 	@echo "✓  iVox 已更新"
 
 check:
@@ -72,7 +76,7 @@ sign:
 test:
 	$(SWIFT) test
 
-# 播报黑盒自检（压真实 daemon，需先 ivox on 且模型就绪）。用法: make check-tts / ARGS="-f protocol"
+# 播报黑盒自检（压真实 daemon，需先 ivox autostart on 且模型就绪）。用法: make check-tts / ARGS="-f protocol"
 check-tts:
 	@scripts/tts-check.sh $(ARGS)
 

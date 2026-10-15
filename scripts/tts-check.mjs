@@ -5,7 +5,7 @@
 // 用法:
 //   node scripts/tts-check.mjs                # 跑全部用例（附加到已在跑的 daemon）
 //   node scripts/tts-check.mjs -f protocol    # 只跑名字匹配正则的用例
-//   node scripts/tts-check.mjs --managed      # 自己 ivox off/on 起 daemon（退出时保持运行）
+//   node scripts/tts-check.mjs --managed      # 自己 ivox autostart on 重启 daemon（退出时保持运行）
 //   node scripts/tts-check.mjs --strict       # advisory 用例也计入失败
 //
 // 退出码: 0 全过(允许 skip) / 1 有失败或 run 级致命关键字 / 2 预检或用法错误
@@ -627,12 +627,12 @@ async function probeAudio(log) {
 async function main() {
   // 预检
   if (!existsSync(SOCKET)) {
-    console.error(`✗ 找不到 socket ${SOCKET}，daemon 未运行？先 \`ivox on\``);
+    console.error(`✗ 找不到 socket ${SOCKET}，daemon 未运行？先 \`ivox autostart on\``);
     process.exit(2);
   }
   if (MANAGED) {
     console.log("# --managed: 重启 daemon ...");
-    execFileSync(IVOX, ["restart"], { stdio: "inherit" });
+    execFileSync(IVOX, ["autostart", "on"], { stdio: "inherit" });
   }
   runnerLog = new LogTail();
   await runnerLog.baseline();
