@@ -55,7 +55,10 @@ final class QuickActionsService {
         // macOS 上官方就这一条路——Ghostty 不支持直接从 CLI 启动终端）。
         // **必须配 createsNewApplicationInstance**：复用已运行的 Ghostty 实例时参数会被
         // 静默忽略（实测：带 -n 生效、不带则命令根本不跑），只有新实例收得到。
-        var args = ["--working-directory=\(dir)"]
+        // wait-after-command：命令退出后**保留窗口**（Ghostty 默认 false＝直接关窗）。
+        // 开 claude/codex/pi 退出时要能看见最后的输出——原 Terminal.app + `.command`
+        // 的行为就是留着窗口，这里对齐它。
+        var args = ["--working-directory=\(dir)", "--wait-after-command=true"]
         if let command {
             // 用 `--initial-command` 而非 `-e`：**`-e` 每次都会弹 macOS 的
             // 「Allow Ghostty to execute "/bin/zsh"?」确认框**（Ghostty 的安全机制，
