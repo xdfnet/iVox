@@ -1,6 +1,6 @@
 # iVox 开发日志
 
-## Unreleased（下一版）
+## v3.9.0 — 2026-10-16
 
 - **修复「同样内容播两遍」：这次真正摘掉了 Claude 的 Stop 钩子** — v3.8.0 宣称「摘 Stop、只留 MessageDisplay」，但那次 commit 实际只把 `UserPromptSubmit` 置成了 no-op，`install-hooks.sh` 的 Claude 分支**仍是默认 `event=Stop`**；而该脚本是「有则跳过、无则补写」，于是每次 `make update` 都把 Stop 留住/补回。结果 `settings.json` 里 Stop 与 MessageDisplay 并存——MessageDisplay 已把回复逐段播完（final 批含完整结尾），Stop 又拿 `last_assistant_message` **整条再念一遍**。日志实证：相邻两条请求，55 字（MessageDisplay 末批）+ 983 字（Stop 重播）。处置：Claude 分支改挂 **MessageDisplay**，`write_hook` 补 `MessageDisplay` 事件分派；`install-hooks.sh` 守住「**只写不删**」的边界（存量 Stop 须人工摘除，已写进 architecture.md 与脚本注释）。Codex / Qwen 无 MessageDisplay 事件，仍走 Stop（Qwen 见下条已下线）。
 - **下线 Qwen Code 与 DeepSeek Harness 支持（快捷键 + 播报）** — 项目不再支持这两个 agent，一次摘干净：删 QuickActions 的 `Opt+Q`（原「开终端跑 qwen」，三处枚举同改）、`install-hooks.sh` 的 Qwen 与 DSH 两个分支（后者含 cordis 插件铺装与 `cordis.patch.yml` 挂载）、`integrations/dsh/` 整个目录、配置模板 `sourceVoices` 里的 `qwen`/`dsh` 键，并同步 `CLAUDE.md` / `architecture.md` / `hook-chain.md`（含整篇 `dsh-tts.md`）/ `README.md` 等文档。**顺带堵住一个坑**：素材源探测判据原为「同级同时有 `pi/` 与 `dsh/`」，删掉 `dsh/` 后它在部署态永远不成立、会落到不存在的 `../integrations` —— 已改为只看 `pi/`。**特意没动** `Qwen3-TTS`/`Qwen3-ASR`（本地模型名，与 Qwen Code 无关）与 CHANGELOG/archive 的历史条目。
