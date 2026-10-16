@@ -16,6 +16,8 @@ actor Daemon {
     private let keyTap = GlobalKeyTap()
     private var translationCoordinator: TranslationCoordinator?
     private var quickActions: QuickActionsService?
+    /// 播报字幕浮窗（配置开启才创建）
+    private var captionPanel: CaptionPanel?
     private let mediaController: MediaController
     private var wechat: WeChatPlatform?
     private var claudeAsk: ClaudeAskService?
@@ -94,6 +96,7 @@ actor Daemon {
         }
         startModelLoading()
         await setUpHotKeys()
+        await setUpCaption()
 
         // 启动微信轮询
         if let wechat {
@@ -294,6 +297,21 @@ actor Daemon {
         keyTap.start()
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
         Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/X/C QuickActions；手动打断三档：Ctrl+2 跳这句 / Ctrl+1 跳整轮 / Ctrl+Esc 掀桌）")
+    }
+
+    /// 播报字幕（配置开启才装）：把队列广播的「正在念的这句」显示到屏幕下方浮窗。
+    /// 队列在后台 actor、AppKit 必须在主线程——跨过去由闭包里的 `Task { @MainActor in }` 承担。
+    private func setUpCaption() async {
+        guard config.resolvedPlayback.resolvedCaptions else {
+            Log.info("播报字幕: 未开启（config 的 playback.captions）")
+            return
+        }
+        let panel = await MainActor.run { CaptionPanel() }   // 面板是 @MainActor 类型，构造要在主线程
+        captionPanel = panel
+        await queue.setCaptionSink { text in
+            Task { @MainActor in panel.update(text) }
+        }
+        Log.info("播报字幕: 已开启")
     }
 
     private func startMediaHTTPServer() {

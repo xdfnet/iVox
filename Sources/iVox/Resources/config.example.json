@@ -14,6 +14,9 @@
     "enabled": true,
     "httpServerEnabled": true
   },
+  "playback": {
+    "captions": false
+  },
   "defaultVoice": "taozi",
   "sourceVoices": {
     "claude": "taozi",

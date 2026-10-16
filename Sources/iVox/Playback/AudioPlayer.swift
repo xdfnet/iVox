@@ -31,6 +31,9 @@ final class AudioPlayer: @unchecked Sendable {
     private static let drainSlack: TimeInterval = 2.0   // drain 超时余量（秒）
     /// 设备断流判定门槛（秒）：有排队音频却这么久无任何消费回调 = 设备已死（正常消费是连续的）
     private static let stallGrace: TimeInterval = 10
+    /// 「某句开始被设备消费」回调（字幕用）：句首块被读出时触发——**比从合成侧取准得多**
+    /// （合成领先播放一两句，字幕会早到）。由 PlaybackQueue 在 init 时一次性注入，之后只读。
+    var onSentenceStarted: (@Sendable (String) -> Void)?
     private var needsPrime = true  // 是否需要先调度前导静音 buffer 唤醒 player node
     // 背压水位：排队音频超过 4s 暂停合成，降到 2s 再放行（留足预取掩盖下一句合成启动）
     private let highWaterFrames: Int
@@ -74,7 +77,9 @@ final class AudioPlayer: @unchecked Sendable {
 
     /// 写入一块 PCM。排队音频超高水位时挂起，等设备消费到低水位再返回（背压）。
     /// 被取消时由 cancelPendingPlayback 恢复挂起，调用方靠 Task.checkCancellation 退出。
-    func write(_ pcm: Data) async {
+    /// - Parameter startsSentence: 非 nil 表示这是**某句的第一块**，值是这句的文本；
+    ///   该块被设备读出（≈ 这句开始响）时回调 `onSentenceStarted`，让字幕跟声音对齐。
+    func write(_ pcm: Data, startsSentence: String? = nil) async {
         guard started, !pcm.isEmpty else { return }
         let frames = AVAudioFrameCount(pcm.count / 2)
         // 进入时所属世代：被 bargeIn（cancelPendingPlayback 递增世代）唤醒后据此判定本 writer
@@ -156,6 +161,8 @@ final class AudioPlayer: @unchecked Sendable {
                 self.serialQueue.async {
                     guard self.generation == gen else { return }   // 已被取消的旧世代回调直接丢弃
                     self.onConsumed(frames: Int(frames))
+                    // 句首块被读出 ≈ 这句开始响：此刻才报字幕。世代校验已过，被掐掉的旧句不会误报
+                    if let text = startsSentence { self.onSentenceStarted?(text) }
                 }
             }
         }

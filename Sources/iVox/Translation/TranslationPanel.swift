@@ -23,12 +23,14 @@ final class TranslationPanel {
     private static let maxContentWidth: CGFloat = 600
     /// 内容区高度上限占屏幕可见高的比例（超过就截译文）
     private static let maxHeightRatio: CGFloat = 0.45
-    /// 距屏幕可见区底部的留白
-    private static let bottomInset: CGFloat = 28
+    /// 距屏幕可见区底部的留白：抬到播报字幕（24pt，贴底）**之上**，两者不重叠。
+    /// 曾是 28pt（与字幕同区），飞哥定了「翻译在上、字幕在下」之后上移。
+    private static let bottomInset: CGFloat = 96
     private static let padding: CGFloat = 14
     private static let cornerRadius: CGFloat = 10
     private static let gap: CGFloat = 6
-    private static let originalFontSize: CGFloat = 12
+    /// 原文与译文**同号**，层次只靠亮度拉开（原文 55% 透明、译文纯白）——原为 12pt，飞哥定的统一 16
+    private static let originalFontSize: CGFloat = 16
     private static let translatedFontSize: CGFloat = 16
 
     private var panel: NSPanel?

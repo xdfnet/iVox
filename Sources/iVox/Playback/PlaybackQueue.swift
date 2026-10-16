@@ -12,6 +12,14 @@ struct PlaybackJob: Sendable {
     var turnID: String? = nil
 }
 
+/// 管道里流的一小块音频：PCM +（**仅句首块**）这句的文本。
+/// 文本跟着音频一起流到播放器，句首块被设备读出时正好用它报字幕——
+/// 队列不必另存一张「已合成待播句子表」，省掉一处要跟打断/取消对齐的状态。
+private struct AudioChunk: Sendable {
+    let pcm: Data
+    let sentenceText: String?
+}
+
 /// 打断来源：与 `PlaybackJob.source`（这段播报是谁发的）是一对账的标识——
 /// 前者回答「谁在说」，这个回答「这次打断是谁干的」。打断权**只归用户物理快捷键**
 /// （right⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴）；agent 流式轮只排队、不打断。
@@ -90,6 +98,9 @@ actor PlaybackQueue {
     private var deadTurns: [String] = []
     /// processNext 在 anyTurnInFlight 下等待新 job 的挂起点；入队/结束/打断时恢复
     private var jobWaiters: [CheckedContinuation<Void, Never>] = []
+    /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播该句文本，收起广播 nil。
+    /// 在**本 actor 上**被调用，实现方自己切回主线程再碰 UI。
+    private var onCaption: (@Sendable (String?) -> Void)?
     private let player: AudioPlayer
     private let engine: TTSEngine
     private let media: MediaController
@@ -97,6 +108,11 @@ actor PlaybackQueue {
         self.engine = engine
         self.player = AudioPlayer()
         self.media = mediaController
+        // 字幕跟**播放**走（不是合成）：句首块被设备读出时才报，与声音对齐。
+        // 回调在播放器的 serialQueue 上，跳回本 actor 再转发（onCaption 是本 actor 状态）。
+        player.onSentenceStarted = { [weak self] text in
+            Task { await self?.emitCaption(text) }
+        }
     }
 
     func shutdown() {
@@ -108,6 +124,18 @@ actor PlaybackQueue {
         player.cancelPendingPlayback()
         player.stop()
         Task { await media.resume() }   // 退出时确保 music 恢复，避免 daemon 重启后卡暂停
+    }
+
+    /// 注入播报字幕接收端（`nil` = 关闭字幕）。
+    /// 文本来自**播放侧**（`AudioPlayer.onSentenceStarted`：句首块被设备读出），不是合成侧——
+    /// 合成领先播放一两句，从那儿取会让字幕比声音早。
+    func setCaptionSink(_ sink: (@Sendable (String?) -> Void)?) {
+        onCaption = sink
+    }
+
+    /// 音频侧报「这句开始响」→ 转发给字幕（已在本 actor 上）。
+    private func emitCaption(_ text: String) {
+        onCaption?(text)
     }
 
     /// 队列中等待播放的条数（/health 用）
@@ -265,6 +293,7 @@ actor PlaybackQueue {
         let label = origin?.description ?? "自取消"
         Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(pendingCount))、作废管道 seq\(pipelineSeq&+1)")
         buckets.removeAll()
+        onCaption?(nil)   // 掀桌：字幕立刻收（插队/跳桶不走这里——它们的字幕由下一句广播接续）
         await preemptCurrent(origin)
     }
 
@@ -370,7 +399,7 @@ actor PlaybackQueue {
 
         // PCM 管道：unbounded 只承接「预取门控允许的提前量」（领先一两句），
         // 真正的容量上移到句间 awaitPrefetchCapacity 判定，不会无限堆积。
-        let (pcmAsync, pcmContinuation) = AsyncStream<Data>.makeStream(bufferingPolicy: .unbounded)
+        let (pcmAsync, pcmContinuation) = AsyncStream<AudioChunk>.makeStream(bufferingPolicy: .unbounded)
 
         let producer = Task {
             defer { pcmContinuation.finish() }
@@ -423,10 +452,14 @@ actor PlaybackQueue {
                     claimed = true
                     let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
 
+                    // 句首块捎上这句的文本：播放器在它被设备读出时报字幕（跟随声音，而非合成）
+                    var isFirstBlock = true
                     for try await pcm in stream {
                         // MLX 流不响应中途取消：一旦发起本句只能跑完，但被作废后不再向下游灌 PCM
                         if Task.isCancelled || pipelineSeq != seq { break }
-                        pcmContinuation.yield(pcm)
+                        pcmContinuation.yield(AudioChunk(pcm: pcm,
+                                                         sentenceText: isFirstBlock ? job.text : nil))
+                        isFirstBlock = false
                     }
                     try Task.checkCancellation()
                 } catch is CancellationError {
@@ -450,13 +483,13 @@ actor PlaybackQueue {
         // 播放 task：消费 PCM 连续排队，句间零停顿；取消后绝不再 write
         //（否则会和下一轮管道并发争用 player 的单一背压 continuation，造成泄漏/串音）。
         let consumer = Task {
-            for await pcm in pcmAsync {
+            for await chunk in pcmAsync {
                 if Task.isCancelled { break }
                 // 已被 bargeIn 作废：立刻停止灌 PCM。write 是「进入时取世代」，作废后再进来的
                 // write 会取到新世代、通过世代校验，把旧轮的缓冲 PCM 排进播放器——旧音频因此继续
                 // 响（打断失效），旧管道也迟迟不退出（新轮在 awaitCurrentPipelineFinished 干等）。
                 if pipelineSeq != seq { break }
-                await player.write(pcm)
+                await player.write(chunk.pcm, startsSentence: chunk.sentenceText)
             }
         }
 
@@ -485,6 +518,7 @@ actor PlaybackQueue {
         }
         // 还有流动中的轮（未 endTurn）时不恢复音乐——该轮分块可能马上到
         if !hasPendingBuckets, gen == generation, !anyTurnInFlight, !Task.isCancelled {
+            onCaption?(nil)   // 整队播完：字幕收起
             await media.resume()
         }
     }

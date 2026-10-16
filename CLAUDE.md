@@ -30,7 +30,7 @@ Sources/iVox/          — 主程序 target
   EntryPoint.swift     — @main, ArgumentParser 子命令
 
   ── 六个能力域（目录与 README 功能表、ivox status 一一对应）──
-  Playback/            — 自动播报：TTSEngine（mlx-audio-swift 流式合成）+ PlaybackQueue + AudioPlayer
+  Playback/            — 自动播报：TTSEngine（mlx-audio-swift 流式合成）+ PlaybackQueue + AudioPlayer + CaptionPanel（播报字幕，config 可开关）
   SpeechInput/         — 语音输入：右⌘/右⌃ 录音 + ASR + 浮窗（事件由 HotKey 层送来）
   Translation/         — 划词翻译（Cmd+D）：复制 → 翻译 → 浮窗 + 朗读
   QuickActions/        — 快速操作：Finder/终端快捷（Opt+Z/A/Q/X/C）
@@ -76,6 +76,7 @@ Claude Code/Codex → hook.sh               ┐
 pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬─ PlaybackQueue (actor)
 微信 ilink 长轮询                          ┘                       │   ├─ TTSEngine (mlx-audio-swift)
                                                                    │   └─ AudioPlayer (AVAudioEngine)
+                                                                   │        └─ CaptionPanel (播报字幕，可选)
                                                                    ├─ GlobalKeyTap (键盘事件层，一个 tap)
                                                                    │    ├─ SpeechInputService (右⌘/右⌃ + ASR)
                                                                    │    ├─ TranslationService (Cmd+D 划词翻译)

@@ -43,6 +43,16 @@ public struct MediaControlConfig: Codable, Sendable {
     public static let `default` = MediaControlConfig(enabled: true)
 }
 
+public struct PlaybackConfig: Codable, Sendable {
+    /// 播报字幕：念到哪句就在屏幕下方显示哪句（常驻，默认关）
+    public var captions: Bool?
+
+    public static let `default` = PlaybackConfig(captions: nil)
+
+    /// 默认关：字幕会一直占着屏幕下方，只在你明确要看时才开
+    public var resolvedCaptions: Bool { captions ?? false }
+}
+
 public struct SpeechInputConfig: Codable, Sendable {
     public var enabled: Bool
     public var language: String
@@ -128,6 +138,7 @@ public struct Config: Codable, Sendable {
     public var models: ModelConfig?
     public var tts: TTSConfig? = nil
     public var mediaControl: MediaControlConfig? = nil
+    public var playback: PlaybackConfig? = nil
     public var defaultVoice: String
     public var sourceVoices: [String: String]
     public var voices: [VoiceInfo]
@@ -148,12 +159,14 @@ public struct Config: Codable, Sendable {
 
     public var resolvedTTS: TTSConfig { tts ?? .default }
     public var resolvedMediaControl: MediaControlConfig { mediaControl ?? .default }
+    public var resolvedPlayback: PlaybackConfig { playback ?? .default }
     public var resolvedTranslation: TranslationConfig { translation ?? .default }
 
     private enum CodingKeys: String, CodingKey {
         case models
         case tts
         case mediaControl
+        case playback
         case speechInput
         case wechat
         case translation
