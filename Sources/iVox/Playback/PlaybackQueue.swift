@@ -222,6 +222,10 @@ actor PlaybackQueue {
         if hasPendingBuckets {
             startPipelineIfPending()
         } else if currentTask == nil {
+            // 队列真的空了：字幕收起。**跳句/跳桶把队列跳空时也走这里**——那条路径没有"下一句
+            // 广播"来顶替，不在这里收就会永久挂在屏幕上（跟着播放改时漏过）。还有流动中的轮
+            // （未收尾）则留着，它后面还会念。
+            if !anyTurnInFlight { onCaption?(nil) }
             await media.resume()
         }
     }
@@ -253,6 +257,7 @@ actor PlaybackQueue {
         // 那是另一个语义，这里不做。
         if let turn = head.turnID { bury(turn) }
         await preemptCurrent(origin)
+        onCaption?(nil)   // 被跳掉的那轮立刻从字幕撤下；下一桶开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移，避免两个 consumer 抢 player
         if !buckets.isEmpty { buckets.removeFirst() }   // 挂起期间可能已被别的路径清掉，别越界
         signalJobs()
@@ -266,6 +271,7 @@ actor PlaybackQueue {
     func skipCurrentSentence(_ origin: InterruptSource) async {
         Log.info("跳过当前句（来源=\(origin)）：只丢正在播的这句，同轮剩下的接着念")
         await preemptCurrent(origin)
+        onCaption?(nil)   // 被跳掉的这句立刻从字幕撤下；同轮下一句开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
         signalJobs()
         await pumpOrResume()   // 同桶还有剩块则接着播；若这轮正等下一批字则原地等

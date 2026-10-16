@@ -44,6 +44,7 @@ final class CaptionPanel {
             guard !current.isEmpty else { return }
             current = ""
             panel?.orderOut(nil)
+            Log.debug("播报字幕: 收起")
             return
         }
         guard text != current else { return }
