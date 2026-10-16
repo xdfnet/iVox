@@ -66,7 +66,7 @@ final class TranslationCoordinator {
 
     // MARK: - 内部
 
-    /// 朗读译文。走 `speakUserInitiated`（用户开口 → 打断在播），不是 hook 那条排队路径。
+    /// 朗读译文。走 `speakUserInitiated`（用户开口 → 掐在播、插队到队首立刻念），不是 hook 那条排队路径。
     private func speak(_ text: String) async {
         let cleaned = cleanText(text)
         guard !cleaned.isEmpty else { return }

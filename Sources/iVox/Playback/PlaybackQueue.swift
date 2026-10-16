@@ -23,6 +23,9 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     /// Ctrl+Esc 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，
     /// 静音播报后由调用方恢复音乐（语义同停止帧，不走右⌘ 的录音暂停）
     case esc
+    /// Ctrl+1 跳过当前桶：丢正在播的这一轮（连同其后分块），从下一桶接着播。
+    /// 与 `.esc` 的分工——那个全场闭嘴，这个只跳当前、后面的照播。
+    case skip
     /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
     case shutdown
 
@@ -31,6 +34,7 @@ enum InterruptSource: Sendable, CustomStringConvertible {
         case .speech: return "speech"
         case .dict: return "dict"
         case .esc: return "esc"
+        case .skip: return "skip"
         case .shutdown: return "shutdown"
         }
     }
@@ -108,7 +112,8 @@ actor PlaybackQueue {
     var isProcessing: Bool { currentTask != nil }
 
     /// 取消所有播放（正在播的和队列中等待的），并作废全部流式轮次。
-    /// 「打断权只归用户快捷键」：右⌘ 说话（speech）、Ctrl+Esc 闭嘴（esc）、Cmd+D 译文（dict）。
+    /// 「打断权只归用户快捷键」：右⌘ 说话（speech）、Ctrl+Esc 闭嘴（esc）。
+    /// Cmd+D 念译文不走这里——它是 `speakUserInitiated` 的「插队」（只掐在播、不清场）。
     /// 停止帧 `{type:stop}` 已失效（hook.sh interrupt / ivox quiet 不再打断播报）。
     /// 当场静音 + 清空全部桶（一个喇叭，你快捷键开口全场停）。
     func cancelAll(origin: InterruptSource) async {
@@ -120,20 +125,20 @@ actor PlaybackQueue {
         // cancelAll 只管打断清场。要恢复的调用方在自己侧调 resumeIfIdle()。
     }
 
-    /// 用户主动要求开口（如 Cmd+D 念译文）：作废全部流式轮 + 取消在播/清队列，然后立刻播这份。
+    /// 用户主动要求开口（Cmd+D 念译文）：**插队**——掐掉正在播的那一句让译文立刻响，
+    /// 但**不掀桌**：其余排队桶照旧、流式轮不作废（其后分块仍会念，播完译文接着播）。
     ///
     /// 与 `enqueue(_:turnID:)` 无 turnID 路径的「只排队」语义**相反**——那条是 agent 自动汇报，
-    /// 不该抢麦（否则两个后台会话收尾会互相掐掉对方内容）；这条是用户自己按的，必须打断当前播报。
-    /// 做成**一个原子方法**而不在调用方 `cancelAll()` + `enqueue()` 两步拼：actor 可重入，
+    /// 不该抢麦（否则两个后台会话收尾会互相掐掉对方内容）；这条是用户自己按的，必须立刻响。
+    /// 做成**一个原子方法**而不在调用方 `preemptCurrent + enqueue` 两步拼：actor 可重入，
     /// 两步之间会插进别的消息。
     func speakUserInitiated(_ newJobs: [PlaybackJob]) async {
         guard !newJobs.isEmpty else { return }
-        Log.info("用户主动开口（Cmd+D 划词译文）：打断当前播报")
-        buryAllTurns()
-        await bargeIn(.dict)
+        Log.info("用户主动开口（Cmd+D 划词译文）：插队到队首，其余排队内容保留")
+        await preemptCurrent(.dict)
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
-        // Cmd+D 译文自成一轮（用户主动，抢麦后立刻念）：独立 nil-turn 桶排到队尾。
-        buckets.append(QueueBucket(turnID: nil, jobs: newJobs, ended: true))
+        // 译文自成一轮（用户主动）：独立的 nil-turn 桶**插到队首**立刻播；其余桶顺序不动。
+        buckets.insert(QueueBucket(turnID: nil, jobs: newJobs, ended: true), at: 0)
         signalJobs()
         if currentTask == nil { startPipeline() }
     }
@@ -204,21 +209,47 @@ actor PlaybackQueue {
         await pumpOrResume()   // 还有待播则补起管道，否则恢复音乐（统一收敛点）
     }
 
-    /// 打断：取消在播任务、清空队列（新轮或无 turn 的普通播报调用）。
+    /// 跳过当前桶（Ctrl+1）：丢掉正在播的**这一轮**（连同其后分块），从下一桶接着播。
+    /// 与 `cancelTurn` 的区别：那个是「自取消不占打断来源」、也不掐在播（等它自己弹空）；
+    /// 这个是用户主动跳，必须立刻掐在播、丢桶、前移。与 `cancelAll` 的区别：那个清全场，
+    /// 这个只丢当前、后面的照播。
+    func skipCurrentBucket(_ origin: InterruptSource) async {
+        guard let head = frontBucket else { return }
+        Log.info("跳过当前桶（来源=\(origin)）：丢 turn=\(head.turnID ?? "-") 余 \(head.jobs.count) 块，从下一桶接着播")
+        // 整轮丢掉：立墓碑，该轮后续分块（含关连接后 EOF 兜底补出的残尾）也不再开口。
+        // 不碰 turnStack——墓碑已在 claimTurn 里优先拦住；出栈会把它顶掉的旧轮重新认成属主，
+        // 那是另一个语义，这里不做。
+        if let turn = head.turnID { bury(turn) }
+        await preemptCurrent(origin)
+        await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移，避免两个 consumer 抢 player
+        if !buckets.isEmpty { buckets.removeFirst() }   // 挂起期间可能已被别的路径清掉，别越界
+        signalJobs()
+        await pumpOrResume()   // 有下一桶则起管道接着播；没有则收尾并恢复音乐
+    }
+
+    /// 掐掉「正在播的这一句/这一轮」：作废管道代号 + 取消在播 + 取消已排队合成与音频。
+    /// **不动 `buckets`**——它是「插队」与「掀桌」的公共前置：插队（Cmd+D 译文）只掐在播、
+    /// 保留其余排队内容；掀桌（bargeIn）先清场再调它。
     /// 不在此清 currentTask——由旧 processNext 自然结束时自清；调用方若要立刻起新管道，
-    /// 必须 `await currentTask?.value`（线性化点），否则新旧两个 consumer 会并发 write
-    /// 同一个 player、争夺单一背压 continuation 槽，造成 continuation 泄漏/竞态。
-    private func bargeIn(_ origin: InterruptSource?) async {
+    /// 必须 `await awaitCurrentPipelineFinished()`（线性化点），否则新旧两个 consumer 会并发
+    /// write 同一个 player、争夺单一背压 continuation 槽，造成 continuation 泄漏/竞态。
+    private func preemptCurrent(_ origin: InterruptSource?) async {
         // nil = 自取消（用户 Esc 放弃自己那轮），不是从别人手里抢喇叭，不占打断来源。
         let label = origin?.description ?? "自取消"
-        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(pendingCount))、作废管道 seq\(pipelineSeq&+1)")
         lastInterrupt = origin
         pipelineSeq &+= 1      // 作废在跑管道：其 producer/consumer 靠代号不等立即停止
         currentTask?.cancel()
-        buckets.removeAll()
         signalJobs()
         await engine.cancelActiveSynthesis(reason: label)   // 显式作废旧纪元排队合成，不依赖任务取消传播
         player.cancelPendingPlayback()
+    }
+
+    /// 打断（掀桌）：掐掉在播 + 清空全部排队桶（右⌘ 说话 / Ctrl+Esc 闭嘴）。
+    private func bargeIn(_ origin: InterruptSource?) async {
+        let label = origin?.description ?? "自取消"
+        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(pendingCount))、作废管道 seq\(pipelineSeq&+1)")
+        buckets.removeAll()
+        await preemptCurrent(origin)
     }
 
     /// 线性化点：等当前管道（producer+consumer）彻底退出后再起新的。
@@ -248,8 +279,8 @@ actor PlaybackQueue {
         if deadTurns.count > 64 { deadTurns.removeFirst() }
     }
 
-    /// 作废全部流式轮次（「用户开口」时用：此前所有流式轮一律不再开口）。
-    /// 调用方只有 `cancelAll()` 与 `speakUserInitiated()`——普通播报（无 turnID）现在只排队，不经过这里。
+    /// 作废全部流式轮次（「全场闭嘴」时用：此前所有流式轮一律不再开口）。
+    /// 调用方只剩 `cancelAll()`——`speakUserInitiated` 改成插队后不再掀桌；普通播报（无 turnID）只排队，不经过这里。
     private func buryAllTurns() {
         turnStack.forEach { bury($0) }
         turnStack.removeAll()
