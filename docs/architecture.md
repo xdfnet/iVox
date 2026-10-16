@@ -132,7 +132,7 @@ Daemon (actor)
 - **连续播放管道**：`processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，句间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
 - `enqueue` **按轮分桶**追加到队列尾部，同 `turnID` 分块并入同桶顺序 append；新 turn 在队尾追加新桶**不打断**在播旧轮；**无 turn 的普通播报（hook.sh / `ivox speak`）同排队**。`processNext` 播完队首桶才前移 = 「按轮排队、播全播完」
 - **过期轮次静默丢弃**：`turnID` 已被作废（`deadTurns` 墓碑）的迟到帧/`endTurn` 一律 no-op，不再开口，避免残音反杀
-- 还有未结束的流式轮（`anyTurnInFlight`，由各桶 `ended` 推导）时队列瞬时排空就挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐；全部轮 `ended` 且排空才收尾
+- 还有未结束的流式轮（`anyTurnInFlight`，由各桶 `ended` 推导）时队列瞬时排空就挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐（最多挂 8 秒空闲宽限，超时由 `sealIdleTurns()` 判说完）；全部轮 `ended` 且排空才收尾
 （播报的术语只有四个——**摞** = 一次回复、**页** = 一个 MessageDisplay、**块** = 内部合成单位、**桶** = 排队单位；完整术语表与「读法」见 `docs/playback-queue.md` 的「概念」一节。）
 
 - **打断权只归用户快捷键**，手动打断三档：**轻** Ctrl+2 读下一页（`skipCurrentPage`：丢掉当前页剩下的块，翻页）、**中** Ctrl+1 跳整摞（`skipCurrentBucket`：丢这一摞的全部桶，下一摞接着播）、**掀桌** Ctrl+Esc 清楚（`cancelAll` 全场清）+ right⌘ 说话；Cmd+D 译文走 `speakUserInitiated` **插队**（只掐在播、译文桶插到队首，其余桶全保留）。**`{type:stop}` 停止帧与流式新轮不再打断**。agent 回复到达的普通播报只排队。旧的 ↓ 跳段已删，「跳」统一走 Ctrl+1 / Ctrl+2

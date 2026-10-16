@@ -110,8 +110,19 @@ actor PlaybackQueue {
     /// 代价：多个来源交错时会互相盖（实测：我的回复与另一组交错，两边互相收尾），那一摞可能被
     /// 拆成几个桶、Ctrl+1 跳不干净；单个来源（日常）不触发。
     private var openGroup: String?
-    /// processNext 在 anyTurnInFlight 下等待新 job 的挂起点；入队/结束/打断时恢复
-    private var jobWaiters: [CheckedContinuation<Void, Never>] = []
+    /// 空闲宽限期（秒）：队列见底却仍有未结束的轮时，最多再等这么久就判「这一摞说完了」。
+    /// 取值理由：一轮里页与页之间夹工具调用，间隔是秒级——太短会在页间来回切音乐（恢复→掐掉→再恢复），
+    /// 太长又让「说完音乐不回来」的等待变久。8 秒是两者的折中。
+    private static let idleGraceSeconds: Double = 8
+    /// `waitForJobs` 的等待者。用引用类型让「入队唤醒」与「宽限超时」**互斥**：两边都在本 actor 上
+    /// 串行地从 `jobWaiters` 摘除，先摘到的 resume、后到的发现已不在数组里即放弃——
+    /// `CheckedContinuation` 双重 resume 会 fatal crash，这条互斥是硬要求。
+    private final class JobWaiter: @unchecked Sendable {
+        let continuation: CheckedContinuation<Bool, Never>
+        init(_ continuation: CheckedContinuation<Bool, Never>) { self.continuation = continuation }
+    }
+    /// processNext 等下一批块的挂起点：入队/结束/打断唤醒（true），`idleGraceSeconds` 到点也唤醒（false）。
+    private var jobWaiters: [JobWaiter] = []
     /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播该句文本，收起广播 nil。
     /// 在**本 actor 上**被调用，实现方自己切回主线程再碰 UI。
     private var onCaption: (@Sendable (String?) -> Void)?
@@ -396,7 +407,7 @@ actor PlaybackQueue {
     private func signalJobs() {
         let waiters = jobWaiters
         jobWaiters.removeAll()
-        waiters.forEach { $0.resume() }
+        waiters.forEach { $0.continuation.resume(returning: true) }
     }
 
     /// 批量入队（分桶）：一次 append 完再启动处理，消除逐条入队时队列瞬时为空的音乐跳动窗口。
@@ -408,6 +419,8 @@ actor PlaybackQueue {
             // 同轮追加：并入该轮已存在的桶（可能在队首正在播、也可能在队尾排队）。
             if let idx = buckets.firstIndex(where: { $0.turnID == turnID }) {
                 buckets[idx].jobs.append(contentsOf: newJobs)
+                // 又来货了：揭掉空闲宽限封的印（`sealIdleTurns` 只是猜"说完"，不是判死）
+                buckets[idx].ended = false
             } else {
                 // 首帧或迟到的新轮：**排队，不打断**——认证通过则新增桶在队尾追加。
                 guard claimTurn(turnID) else { return }   // 已作废轮：迟到帧静默丢弃
@@ -464,6 +477,8 @@ actor PlaybackQueue {
         if !newJobs.isEmpty {
             if let idx = buckets.firstIndex(where: { $0.turnID == group }) {
                 buckets[idx].jobs.append(contentsOf: newJobs)
+                // 同 `enqueue`：同一摞的下一页到了，揭掉空闲宽限封的印
+                buckets[idx].ended = false
             } else {
                 buckets.append(QueueBucket(turnID: group, jobs: newJobs, ended: false))
             }
@@ -512,7 +527,8 @@ actor PlaybackQueue {
                 if pipelineSeq != seq { return }   // 已被 bargeIn 作废：立即退出，不再合成
                 if !hasPendingBuckets {
                     if anyTurnInFlight {
-                        await waitForJobs()   // 还有流动中的轮在等块；被入队/endTurn/打断恢复
+                        // 还有流动中的轮在等块：等唤醒（入队/endTurn/打断）或等宽限到点
+                        if !(await waitForJobs()) { sealIdleTurns() }
                         continue
                     }
                     return
@@ -533,7 +549,9 @@ actor PlaybackQueue {
                 // 进不来），播报就此永久瘫痪，外加烧满一核。凑齐条件：队首轮已播空正等下一批块
                 //（常态）+ 其后已排了别人的话（多 agent 交错）。
                 guard let job = frontBucket?.jobs.first else {
-                    await waitForJobs()
+                    // 队首桶播空、等下一批块：同样给宽限期，否则「这一摞的最后一块念完」
+                    // 就永远停在这个挂起点上（恢复音乐与收字幕都在收尾条件里，走不到）
+                    if !(await waitForJobs()) { sealIdleTurns() }
                     continue
                 }
                 // 队首桶空则前移到下一桶：这就是「播全播完」——旧桶播完才进新轮。
@@ -644,10 +662,41 @@ actor PlaybackQueue {
     }
 
     /// 挂起直到有新 job 入队 / 轮次结束 / 被打断（signalJobs 恢复）。
-    private func waitForJobs() async {
-        await withCheckedContinuation { continuation in
-            jobWaiters.append(continuation)
+    /// 等下一批块：返回 true = 等来了新货，false = 宽限期到、仍然没有。
+    ///
+    /// **为什么必须带超时**：收尾判据是「新的 turn 来了就把上一个盖上」，可用户说完一轮之后
+    /// **不会有下一条 turn**——那一摞就永远挂着 `ended=false`，`anyTurnInFlight` 永真，
+    /// 收尾条件（恢复音乐 + 收字幕）永不成立。实测两条路径都卡死：自然播完、跳页后队列见底。
+    /// 宽限期就是这个判据的兜底：等够了就当作说完了。
+    private func waitForJobs() async -> Bool {
+        if hasPendingBuckets { return true }   // 还没挂起又来了货
+        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
+            let waiter = JobWaiter(continuation)
+            jobWaiters.append(waiter)
+            // 超时支：到点若还没被 `signalJobs` 摘走，就由这里摘走并唤醒 false
+            Task { [weak self] in
+                try? await Task.sleep(for: .seconds(Self.idleGraceSeconds))
+                await self?.expire(waiter: waiter)
+            }
         }
+    }
+
+    /// 宽限到点：把等待者从挂起表摘掉并唤醒 false。已被 `signalJobs` 摘过则什么都不做。
+    private func expire(waiter: JobWaiter) {
+        guard let idx = jobWaiters.firstIndex(where: { $0 === waiter }) else { return }
+        jobWaiters.remove(at: idx)
+        waiter.continuation.resume(returning: false)
+    }
+
+    /// 空闲宽限到点：把还挂着的桶一并盖上（= 视为「这一摞说完了」）。
+    /// 与「新 turn 盖上」的分工：同样标 `ended`，但**不立墓碑**——这只是猜"说完了"、不是判定该轮已死；
+    /// 它之后若又来页，`enqueue*` 会把 `ended` 揭回 false 继续播。标完 `anyTurnInFlight` 自然归 false，
+    /// 收尾条件成立 → 恢复音乐 + 收字幕。
+    private func sealIdleTurns() {
+        let ids = buckets.filter { $0.turnID != nil && !$0.ended }.compactMap(\.turnID)
+        guard !ids.isEmpty else { return }
+        Log.info("空闲 \(Int(Self.idleGraceSeconds))秒无新内容，判定说完了：盖上 \(ids.joined(separator: ","))")
+        ids.forEach { closeGroup($0) }
     }
 
     private func waitUntilEngineReady() async throws {
