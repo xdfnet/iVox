@@ -2,6 +2,8 @@
 
 ## v3.9.0 — 2026-10-16
 
+- **修自检脚本三处「沉默的假绿」（产品行为本就正确，是测试烂了）** — 今天跑全量 `make check-tts` 才发现红了 3 个，逐个查下来**全是测试侧问题**：① `E2`/`E5` grep 的 `流式入队: turn=` 与现在的日志格式对不上（日志中间早插了 `source=`/`page=` 字段，加字段时没同步测试）——一直以为在验、其实永远不匹配；② `E4` 经 `waitSettled` 硬要求"必须有 `媒体控制: 恢复` 日志"，而拆掉「新 turn 盖上」后管道不再每轮重启，"这一轮压根没借过音乐"成了常态，打的 `无需恢复` 被当成没收尾；③ `E7` 被我上次改的噪声检测**自己抓成外部干扰**、整条用例直接 skip（等于白挂）。修法：正则放宽成 `流式入队: .*turn=`、`settled` 判据改为 `(?:恢复|无需恢复)`、自检发的打断信号带 `tag=<runId>` 由服务端记进日志（`handleSkip` 解析）供检测排除。**修完全量 13/13 全绿**（含此前一直被 skip 的 `E7`/`E8`/尾音两组）。教训：check-tts 被定位成"排障工具、不必每次改动都跑"，代价就是测试悄悄腐烂——**改播报核心路径时必须跑它**。
+
 - **拆掉全局 `openGroup`：每摞按自己的 `turn_id` 收尾，「多来源互相盖」这个老毛病一并消失** — 原来收尾靠「新的 turn 来了就把上一个盖上」，而 `openGroup` 是个**全局单值**：两个会话并行时，A 的新轮会关掉 B 正在念的那一摞（文档里一直记为"已知代价"）。现在趁 Stop 钩子复活，把这条判据整个删掉：Stop 的 payload **没有 `turn_id`**（从二进制里挖出的构造是 `{hook_event_name:"Stop", stop_hook_active, last_assistant_message, …session 字段}`），但它有 `session_id`，而 MessageDisplay **两者都有** → 让 msgdisplay 顺手把「这条会话最后一次是哪一摞」记进 `~/.config/ivox/lastturn/<session_id>`，Stop 时反查、**精确点名**收尾（`finishTurn`）。`openGroup`、`closeOpenGroup()`、"盖上上一摞"整块删除；`deadTurns` 从此只由**用户显式作废**的动作来立（跳整摞 / 掀桌 / 取消轮次），不再由"下一轮开始"代劳。**实测**：A 摞在播时 B 摞插入 → 日志里再无「盖上上一摞」，两个收尾信号各自命中自己那一摞。
 
 - **修 daemon 卡死（紧循环）：`waitForJobs` 那句"有货就早返回"拆掉了挂起点** — 上一版给 `waitForJobs` 加空闲宽限时顺手加了 `if hasPendingBuckets { return true }`，以为是"有货就赶紧回去取"。它破坏的正是 `processNext` 里注释明写的约束（「队首空桶正等下一批块时必须挂起，不能 `continue` 重问」）：那个场景下 `hasPendingBuckets` 为真（后面还排着别的桶）而 `frontBucket` 取不到 job，早返回让调用方 `continue` 后**无挂起点地空转** —— 实测 daemon 整个卡死（`/health` 不响应、SIGTERM 被死循环吞掉、只能 `kill -9`），`sample` 抓到 3 秒内 871 个样本全在 `processNext` 的 `checkCancellation` + `waitForJobs` 之间。修法是**恢复无条件挂起**（真有货时入队末尾的 `signalJobs()` 会立刻唤醒，挂起只是一瞬）。复现姿势：发一摞（很短，很快播空 → 空桶但未结束）再紧接着发第二摞（排在它后面）。

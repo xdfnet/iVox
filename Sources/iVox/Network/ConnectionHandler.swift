@@ -306,8 +306,12 @@ actor ConnectionHandler {
     /// `all` 是两行不是一行——Ctrl+Esc 那档打断后要立刻恢复音乐，命令行版少一行就与热键行为不一致。
     private nonisolated func handleSkip(fd: Int32, header: String) {
         defer { Darwin.close(fd) }
-        let mode = parseMetaKV(header)["mode"] ?? "page"
-        Log.info("跳过请求: mode=\(mode)")
+        let kv = parseMetaKV(header)
+        let mode = kv["mode"] ?? "page"
+        // tag：自检脚本发打断时带上自己的 runId，好把自己的信号从"外部干扰"里择出去——
+        // 否则它会被自己的检测抓成噪音，整条用例直接 skip（等于白挂）。
+        let tag = kv["tag"].map { " tag=\($0)" } ?? ""
+        Log.info("跳过请求: mode=\(mode)\(tag)")
         Task {
             switch mode {
             case "all":

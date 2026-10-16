@@ -71,7 +71,7 @@ async function speak(source, text) {
 // 历史的 `ivox quiet`（发 `{type:stop}`）已随该帧一起退役，改用 `{type:skip,mode:all}`。
 async function skipAll() {
   const s = await conn();
-  s.end("{type:skip,mode:all}\n");
+  s.end(`{type:skip,mode:all,tag:${runId}}\n`);
 }
 
 // 流式连接句柄。登记到 openSocks，用例结束统一清理，避免连接泄漏压垮 daemon。
@@ -230,7 +230,7 @@ async function waitSettled(log, sinceTs, { timeout = 60000 } = {}) {
   while (nowMs() < deadline) {
     await log.poll(sinceTs);
     if (!resumedAt) {
-      const r = log.grep(/媒体控制: 恢复/, sinceTs).at(-1);
+      const r = log.grep(/媒体控制: (?:恢复|无需恢复)/, sinceTs).at(-1);
       if (r) resumedAt = r.ts;
     }
     const h = await health();
@@ -290,7 +290,7 @@ async function runCase(c) {
   // 掐掉本轮，尾音/收尾/恢复类断言必然失真——同样降级为 skip 并给出证据。
   // 判据是「跳过请求」而非旧的「收到停止播放指令」：那句文案早在停止帧退役时就没了，
   // 旧正则从此永不命中（一条沉默的假绿检测，本次一并修掉）。
-  const sentinel = log.grep(/跳过请求: mode=/, t0);
+  const sentinel = log.grep(new RegExp(`跳过请求: mode=(?!.*tag=${runId})`), t0);
   const hit = foreign[0] ?? sentinel[0];
   return { name: c.name, advisory: !!c.advisory, needsAudio: !!c.needsAudio, failures: ctx.failures,
            interfered: hit ? hit.msg : "", ms: nowMs() - t0,
@@ -362,7 +362,7 @@ const cases = [
       st.sendRawLine("{end}");
       const settled = await ctx.settled(40000);
       ctx.check(!!settled, "未收尾");
-      const enq = ctx.log.grep(new RegExp(`流式入队: turn=${ctx.turn}`), ctx.t0);
+      const enq = ctx.log.grep(new RegExp(`流式入队: .*turn=${ctx.turn}`), ctx.t0);
       ctx.check(enq.length >= 1, "裸文本帧未入队");
       ctx.noBad();
     },
@@ -418,7 +418,7 @@ const cases = [
       const cancel = await ctx.log.waitFor(new RegExp(`流式取消: turn=${ctx.turn}`), { sinceTs: ctx.t0, timeout: 8000 });
       ctx.check(!!cancel, "缺流式取消日志");
       await sleep(800);
-      const after = ctx.log.grep(new RegExp(`流式入队: turn=${ctx.turn}`), cancel ? cancel.ts : ctx.t0);
+      const after = ctx.log.grep(new RegExp(`流式入队: .*turn=${ctx.turn}`), cancel ? cancel.ts : ctx.t0);
       ctx.check(after.length === 0, "取消后仍有入队");
       // 取消轮会恢复音乐，等其收尾避免污染后续用例窗口
       await ctx.settled(20000);
@@ -438,7 +438,7 @@ const cases = [
       ctx.check(!!end, "EOF 未触发流式结束");
       const settled = await ctx.settled(40000);
       ctx.check(!!settled, "未收尾");
-      const enq = ctx.log.grep(new RegExp(`流式入队: turn=${ctx.turn}`), ctx.t0);
+      const enq = ctx.log.grep(new RegExp(`流式入队: .*turn=${ctx.turn}`), ctx.t0);
       ctx.check(enq.length >= 1, "残尾未 flush 入队");
       ctx.noBad();
     },
