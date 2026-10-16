@@ -62,6 +62,9 @@ private struct QueueBucket {
     /// 分桶后空桶不一定是「播完/取消」——可能轮还在流式生成、块还没到。只有 ended 的空桶
     /// 才允许前移；仍在的轮（ended=false）空桶要挂起等下一批块或 endTurn。
     var ended: Bool
+    /// 弱分组桶（Claude 的 MessageDisplay：一次回复 = 一摞），由 `Stop` 钩子收尾、不走 `turnStack`。
+    /// 收尾信号丢包时的兜底靠它把"Claude 的摞"与"pi 的强轮 / 普通播报桶"分开——兜底只该动前者，
+    /// 别去拆 pi 的轮（pi 有 `{end}`/EOF 兜底，不靠这里救）。
 }
 
 actor PlaybackQueue {
@@ -96,9 +99,10 @@ actor PlaybackQueue {
     /// 已作废轮次墓碑（容量有上限）：`{cancel}`、语音打断、普通 speak 之后，该轮不再开口
     /// （含客户端关闭连接后 EOF 兜底补出的残尾）。
     private var deadTurns: [String] = []
-    /// 弱分组（Claude 的 MessageDisplay 把一条回复按行批分多次短连接送来）里**当前开着**的那条。
-    /// 换新分组即收尾它——这是 `final` 丢包时的兜底（实测 1357 条 0 丢，但「会话被杀」那种
-    /// 日志里没有样本，不能赌）。
+    /// **当前正开着的那一摞**（Claude 的 MessageDisplay：一次回复 = 一摞，分组号 = `turn_id`）。
+    /// 收尾判据是「新的 turn 来了就把上一个盖上」——不需要 `Stop` 钩子，也不用定时器。
+    /// 代价：多个来源交错时会互相盖（实测：我的回复与另一组交错，两边互相收尾），那一摞可能被
+    /// 拆成几个桶、Ctrl+1 跳不干净；单个来源（日常）不触发。
     private var openGroup: String?
     /// processNext 在 anyTurnInFlight 下等待新 job 的挂起点；入队/结束/打断时恢复
     private var jobWaiters: [CheckedContinuation<Void, Never>] = []
@@ -270,7 +274,6 @@ actor PlaybackQueue {
         // 只弹队首会把这一轮的残部留在队里接着念，「跳整轮」就跳不干净。
         if let group {
             buckets.removeAll { $0.turnID == group }   // 挂起期间可能已被别的路径清掉，removeAll 天然不越界
-            if openGroup == group { openGroup = nil }
         } else if !buckets.isEmpty {
             buckets.removeFirst()   // 无轮次号的普通播报：只丢队首这一桶
         }
@@ -353,10 +356,6 @@ actor PlaybackQueue {
         // 弱分组（Claude 多批）也要立墓碑——它们刻意不进 turnStack（见 enqueueGrouped），
         // 不从桶里捞一遍，掀桌后这条回复的后续批次就会照响，「掀不干净」。
         buckets.compactMap(\.turnID).forEach { bury($0) }
-        // openGroup 指向的那一组此刻通常还在桶里（上面已捞到），但多补一刀不吃亏：
-        // 它的桶若已被别的路径弹掉，光靠捞桶就漏了，这条回复的后续批次会照响。
-        if let g = openGroup { bury(g) }
-        openGroup = nil
     }
 
     /// 起一条新管道（producer+consumer），并登记其身份序号。
@@ -415,43 +414,59 @@ actor PlaybackQueue {
         await enqueue([job], turnID: job.turnID)
     }
 
-    /// 弱分组入队（Claude 的 MessageDisplay：一条回复按行批分多次短连接送来）。
+    /// 弱分组入队（Claude 的 MessageDisplay：一次回复按行批分多次短连接送来）。
+    /// 分组号是 **`turn_id`（一次回复 = 一摞）**，不是 `message_id`（一条 message = 一页）——
+    /// 「一桶 = 一摞」是「Ctrl+1 跳整摞」成立的前提：一次回复里夹了工具调用就会有**好几页**，
+    /// 按页分桶的话 Ctrl+1 只能跳掉一页。
     /// 与 `enqueue(_:turnID:)` 的分工：那条走 `turnStack`（pi 双流认证），这条**绝不碰它**，
-    /// 只做两件事——同 group 的多批并进同桶（一轮一桶），以及被跳掉/掀桌后拦住该 group 的
-    /// **后续批次**（查 `deadTurns`，与 `bury` 配对）。
+    /// 只做两件事——同一摞的各页并进同桶，以及被跳掉/掀桌后拦住该摞的**后续批次**（查 `deadTurns`）。
     ///
-    /// 桶初始 `ended: false`：要等这条回复的 `final` 批才收尾。中途播空也**不弹**——否则
-    /// Claude 一停顿（去调工具、想几秒）这轮就被拆成好几个桶，「一轮一桶」名存实亡。
-    ///
-    /// - Parameter isFinal: 这批是该回复的最后一批（收尾该分组，放桶前移）。
-    func enqueueGrouped(_ newJobs: [PlaybackJob], group: String, isFinal: Bool) async {
-        // 兜底：换了新 group 说明上一条已经过去了（正常它自己会带 final 收尾）。把还开着的
-        // 关掉——否则 final 一丢，空桶就卡在队首把后面所有播报全堵死（生产管道挂起的经典形态）。
-        if let prev = openGroup, prev != group { closeGroup(prev) }
+    /// 桶初始 `ended: false`：要等 `closeOpenGroup()`（`Stop` 钩子的收尾信号）。中途播空也**不弹**：
+    /// 页级的 `final` 只说明"这页说完"，拿它收尾会让桶在第一页就"结束"、又掉回页的粒度。
+    func enqueueGrouped(_ newJobs: [PlaybackJob], group: String) async {
+        // ① **先看自己死没死**：老桶（已被盖上 / 被 Ctrl+1 跳掉 / 被掀桌）的后续页直接丢掉。
+        //    这一步**必须在"盖上一个"之前**——实测踩过：一个已死 turn 的迟到页会先盖掉当前活跃的
+        //    那一摞、再把自己丢掉，顺手把活的也打死了（日志里 `丢弃 PP` 的前一行正是 `盖上 QQ`）。
+        if deadTurns.contains(group) {
+            Log.debug("丢弃：turn=\(group) 那一摞已被盖上")
+            return
+        }
+        // ② **新的 turn 来了：把上一个盖上、并立墓碑**——这是「一摞 = 一次回复」的收尾判据，
+        //    不需要 Stop 钩子。立墓碑是必须的：光把桶标 ended 的话，只要那个桶还在，
+        //    下面的 `firstIndex` 照样能把后续页追加进去、照样播出来（飞哥：老桶里再来新的就丢掉）。
+        if let prev = openGroup, prev != group {
+            Log.info("盖上上一摞（新 turn 到来）: turn=\(prev)")
+            closeGroup(prev)
+            bury(prev)
+        }
+        openGroup = group
         if !newJobs.isEmpty {
             if let idx = buckets.firstIndex(where: { $0.turnID == group }) {
                 buckets[idx].jobs.append(contentsOf: newJobs)
-            } else if !deadTurns.contains(group) {
-                buckets.append(QueueBucket(turnID: group, jobs: newJobs, ended: isFinal))
+            } else {
+                buckets.append(QueueBucket(turnID: group, jobs: newJobs, ended: false))
             }
-            // 已作废分组（被 Ctrl+1 跳掉 / 被掀桌）的迟到批次落进 else 的空档：静默丢弃
-        }
-        if isFinal {
-            closeGroup(group)
-            if openGroup == group { openGroup = nil }
-        } else {
-            openGroup = group
         }
         signalJobs()
-        Log.debug("队列状态: pending=\(pendingCount) processing=\(currentTask != nil) group=\(group) final=\(isFinal)")
+        Log.debug("队列状态: pending=\(pendingCount) processing=\(currentTask != nil) group=\(group)")
         // 有管道则 while 自动消费新 job；无则新起。**必须查 `hasPendingBuckets`**：本方法不像
-        // `enqueue` 那样在最前面挡掉空入队（空 `final` 批要放行），所以可能一次都没加 job——
-        // 光看 `currentTask == nil` 会起一条空管道，它入口就 `media.pause()`，随即发现无事可做
-        // 收尾再 resume：音乐平白顿一下。
+        // `enqueue` 那样在最前面挡掉空入队，所以可能一次都没加 job——光看 `currentTask == nil`
+        // 会起一条空管道，它入口就 `media.pause()`，随即发现无事可做收尾再 resume：音乐平白顿一下。
         if currentTask == nil, hasPendingBuckets { startPipeline() }
     }
 
-    /// 给一个弱分组的全部桶标记 ended（这条回复说完了）。pi 那种强轮走 `endTurn`，不走这里。
+    /// 手动收尾当前那一摞（`ivox speak --final` 的空信号）。
+    /// 日常**不靠它**——日常的收尾判据是「新的 turn 来了就把上一个盖上」（见 `enqueueGrouped`）。
+    /// 留着是给手动/排障一个口子。
+    func closeOpenGroup() {
+        guard let group = openGroup else { return }
+        Log.info("收尾当前摞（手动信号）: turn=\(group)")
+        closeGroup(group)
+        openGroup = nil
+        signalJobs()
+    }
+
+    /// 给一个弱分组的**全部桶**标记 ended（这一摞说完了）。pi 那种强轮走 `endTurn`，不走这里。
     private func closeGroup(_ group: String) {
         for i in buckets.indices where buckets[i].turnID == group { buckets[i].ended = true }
     }

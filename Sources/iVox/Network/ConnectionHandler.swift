@@ -244,9 +244,10 @@ actor ConnectionHandler {
         Log.info("请求解析: source=\(source) voice=\(voiceID) group=\(group ?? "-") final=\(isFinal) raw_chars=\(content.count)")
         Log.debug("请求原始内容: source=\(source) raw=\(logPreview(content))")
         let cleaned = cleanText(content)
-        // 分组请求即使清洗后为空也不能直接 return：`final` 批常常没有新内容（delta 被 hook
-        // 过滤成空），漏掉它就没人给这条回复收尾，空桶会卡在队首把后面所有播报堵死。
-        if cleaned.isEmpty, group == nil {
+        // 分组请求、以及不带分组的收尾信号（Stop），即使清洗后为空也不能直接 return：
+        // 它们可能一丁点内容都没有，但承载的是"这几页属于同一摞"/"这一摞完了"的结构信息，
+        // 漏掉就会让空桶卡在队首把后面所有播报堵死。
+        if cleaned.isEmpty, group == nil, !isFinal {
             Log.info("清洗后为空，跳过")
             return
         }
@@ -261,8 +262,13 @@ actor ConnectionHandler {
         let chunks = cleaned.isEmpty ? [] : splitSentences(cleaned)
         let jobs = chunks.map { PlaybackJob(text: $0, voiceID: voiceID, source: source) }
         if let group {
-            Log.info("队列入队（分组）: source=\(source) voice=\(voiceID) group=\(group) final=\(isFinal) chars=\(clen) 分块=\(jobs.count)")
-            Task { await queue.enqueueGrouped(jobs, group: group, isFinal: isFinal) }
+            // 分组号 = Claude 的 `turn_id`（一次回复 = 一摞）；同一摞的每一页都带同一个号
+            Log.info("队列入队（摞）: source=\(source) voice=\(voiceID) turn=\(group) chars=\(clen) 分块=\(jobs.count)")
+            Task { await queue.enqueueGrouped(jobs, group: group) }
+        } else if isFinal {
+            // 不带分组的结束信号 = Stop 钩子：一次回复真正说完了，收尾当前那一摞（不播任何东西）
+            Log.info("收尾当前摞（Stop 信号）: source=\(source) chars=\(clen)")
+            Task { await queue.closeOpenGroup() }
         } else {
             Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(clen) 分块=\(jobs.count)")
             Task { await queue.enqueue(jobs) }

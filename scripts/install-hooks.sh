@@ -25,7 +25,7 @@ fi
 
 # ── 公共函数：用 jq 或 python3 安全写入 hook 配置 ──
 # 用法：write_hook <config> <source> <timeout> [event]
-#   event 默认 Stop（念回复）；UserPromptSubmit → hook.sh interrupt；MessageDisplay → hook.sh msgdisplay
+#   event 默认 Stop（念回复）；MessageDisplay → hook.sh msgdisplay
 write_hook() {
   local config_path="$1"
   local tool_name="$2"
@@ -71,13 +71,11 @@ write_prompt_hook() {
 }
 
 # ── Claude ──
-# Claude 交互会话的播报**只走 MessageDisplay**（assistant 行批增量：过程逐句播、final 批含完整结尾）。
-# **不再挂 Stop**——Stop 拿 `last_assistant_message` 是整条回复，而 MessageDisplay 已逐段播完，
-# 两者并存会把整条回复再念一遍（实测"同样内容播两遍"）。
-# 历史坑：去重那次（57179ae）commit 说「摘 Stop」，实际只把 UserPromptSubmit 置了 no-op，
-# 这里仍默认 event=Stop；又因本脚本「有则跳过、无则补写」，每次 make update 都把 Stop 留住/补回。
-# **本脚本只写不删**——老配置里遗留的 Stop 请人工摘除（settings.json 的 hooks.Stop），
-# 安装器不做删除，避免越权改到别人的配置。
+# 播报走 MessageDisplay：assistant 行批增量，**按 `turn_id` 装进同一摞**（一摞 = 一次回复）。
+# **不挂 Stop**——收尾判据是「新的 turn 来了就把上一个盖上」（服务端 `enqueueGrouped` 里做），
+# 不需要回合结束事件。历史坑：去重那次（57179ae）commit 说「摘 Stop」，实际只把
+# UserPromptSubmit 置了 no-op、这里仍默认 event=Stop，每次 make update 又把它补回来；
+# **本脚本只写不删**，遗留的 Stop 请人工摘除（settings.json 的 hooks.Stop）。
 # 注：Codex 无 MessageDisplay 事件，仍走 Stop（见下），别跟着一起改。
 CLAUDE_JSON="$HOME/.claude/settings.json"
 if [[ -f "$CLAUDE_JSON" ]]; then

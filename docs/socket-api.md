@@ -29,16 +29,17 @@
 |------|------|------|
 | `source` | 否 | 来源标识，默认 `default` |
 | `voice` | 否 | 音色 ID，默认按 `config.json` 中 `sourceVoices` 映射 |
-| `group` | 否 | 分组号：同一轮内容分多次发时带上同一个值，服务端把它们并进**同一个桶**（一轮一桶）；跳桶/掀桌时按它拦住"这一轮的后续批次" |
+| `group` | 否 | 分组号 = **一摞**（一次回复）：同一摞分多次发时带上同一个值（Claude 传 `turn_id`），服务端把它们并进**同一个桶**；跳桶/掀桌时按它拦住"这一摞的后续批次"。**不必发结束标记**——下一条 `group` 到来时，服务端自动把上一个盖上 |
 | `end` | 否 | 出现即表示**这是该分组的最后一批**，收尾该轮（桶可前移）。漏发它桶会一直开着，直到下一个分组到来才被兜底收尾 |
 
 **无响应**（fire-and-forget）
 
-**`group` / `end` 用法**（Claude 的 MessageDisplay 走的就是这条：一条回复按行批分多次送来）
+**`group` 用法**（Claude 的 MessageDisplay 走的就是这条：一次回复按行批分多次送来）
 ```bash
-echo "{source:claude,group:msg-1}第一段" | nc -U ~/.config/ivox/ivox.sock
-echo "{source:claude,group:msg-1}第二段" | nc -U ~/.config/ivox/ivox.sock
-echo "{source:claude,group:msg-1,end:1}末段" | nc -U ~/.config/ivox/ivox.sock   # 收尾
+echo "{source:claude,group:turn-1}第一段" | nc -U ~/.config/ivox/ivox.sock
+echo "{source:claude,group:turn-1}第二段" | nc -U ~/.config/ivox/ivox.sock
+# 一次回复说完就完了——下一条 turn-2 到来时，服务端自动把 turn-1 这一摞盖上
+echo "{source:claude,group:turn-2}下一轮" | nc -U ~/.config/ivox/ivox.sock
 ```
 `group` 里不要出现 `,` 和 `:`（协议按这两个字符切分字段）。
 
