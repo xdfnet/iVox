@@ -11,7 +11,8 @@ import iVoxKit
 ///
 /// 与翻译浮窗的两处**刻意不同**：
 /// - **不跟鼠标收**：字幕是「一边听一边看」，手总会动；收起只由播报状态驱动（`update(nil)`）
-/// - **不跟鼠标所在屏**：常驻若跟着鼠标会来回跳，固定用 `NSScreen.main`
+/// - **不跟鼠标、也不跟焦点所在屏**：常驻若跟着鼠标会来回跳；而 `NSScreen.main` 是**键盘焦点所在屏**，
+///   多屏下焦点一动字幕就跑到别的屏去（人看不见）。固定钉在主屏（`screens.first`，含菜单栏那块）
 ///
 /// 同步口径：跟**播放**——文本随音频块流到播放器，**句首块被设备读出**时才来报
 /// （`AudioPlayer` 的 `.dataConsumed` 回调），与声音对齐（误差约一个 IO 缓冲）。
@@ -55,7 +56,10 @@ final class CaptionPanel {
     // MARK: - 内部
 
     private func show(_ text: String) {
-        let screen = NSScreen.main ?? NSScreen.screens.first
+        // 固定主屏（含菜单栏那块）：`NSScreen.main` 是**键盘焦点所在屏**、不是主屏——多屏下焦点一动，
+        // 字幕就跟着跑到别的屏去，人在自己那块屏上反而看不见（实测日志里出现过别块屏的负 y 坐标）。
+        // `screens.first` 才是主屏。
+        let screen = NSScreen.screens.first
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
         let label = baseLabel()
