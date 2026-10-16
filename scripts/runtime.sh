@@ -9,7 +9,6 @@ LABEL="com.user.ivox"
 CONFIG="${HOME}/.config/ivox/config.json"
 HOOK_SH="${HOME}/.config/ivox/hook.sh"
 INTEGRATIONS_DIR="${HOME}/.config/ivox/integrations"
-LOG="${HOME}/.config/ivox/daemon.log"
 SOCKET="${HOME}/.config/ivox/ivox.sock"
 AUTOSTART_PLIST="${HOME}/Library/LaunchAgents/com.ivox.daemon.plist"
 VOICE_DIR="${HOME}/.config/ivox/voices"
@@ -111,49 +110,18 @@ deploy_bin() {
   echo "✓  集成资产已同步: hook / pi"
 }
 
-# 是否还有 daemon 进程（不依赖 socket 文件——进程刚死时 socket 可能残留）。
-daemon_alive() {
-  pgrep -f "ivox serve" >/dev/null 2>&1
-}
-
-# 停止守护进程：bootout 卸载 job。KeepAlive 下只有它能真正停住——直接发停止信号会被
-# 立刻拉回（旧版 `ivox off` 因此总误报「守护进程未退出」）。只卸 job、**不删 plist、
-# 也不 disable**：这是升级中途的临时停，不该动用户的自启开关（那是 `ivox off` 的活）。
+# 停止守护进程：交给 CLI 的 `ivox off`，这里不再自己拼 launchctl——两处各写一套已经吃过
+# 一次亏（`ivox autostart off` 删 plist、本文件的 stop 却保留 plist，同样叫「停」却是两回事）。
+# `|| true` 兜住首装场景（那时 ~/.local/bin/ivox 还不存在）与 set -e。
 stop_daemon() {
-  launchctl bootout "gui/$(id -u)/com.ivox.daemon" 2>/dev/null || true
-  for _ in $(seq 1 40); do
-    if ! daemon_alive; then
-      echo "✓  守护进程已停止（launchctl bootout）"
-      return 0
-    fi
-    sleep 0.25
-  done
-  echo "⚠️  守护进程未在 10s 内退出"
-  return 0
+  "${LAUNCHER}" off || true
 }
 
-# 启动守护进程：已装 plist 则 bootstrap 重载（RunAtLoad 拉起刚部署的二进制）；尚未装过
-# （首装 / 从更早版本升级上来）则交给 CLI 写 plist 并起。
-# 就绪窗口 30s——模型加载 + 键盘层权限轮询实测要十几秒，10s 会误报失败。
+# 启动守护进程：交给 CLI 的 `ivox on`（enable + 写 plist + bootstrap + 等 socket 就绪）。
+# 就绪窗口在 CLI 里（30s：模型加载 + 键盘层权限轮询实测要十几秒）。
+# 于是 update 就是字面的 off → 干活 → on，与 `ivox off` / `ivox on` 完全同一套语义。
 start_daemon() {
-  if [[ -f "${AUTOSTART_PLIST}" ]]; then
-    # 先 enable：`ivox off` 会 disable 本服务，被 disable 的 job 是 bootstrap 不进去的
-    launchctl enable "gui/$(id -u)/com.ivox.daemon" 2>/dev/null || true
-    launchctl bootstrap "gui/$(id -u)" "${AUTOSTART_PLIST}" 2>/dev/null \
-      || launchctl kickstart -k "gui/$(id -u)/com.ivox.daemon" 2>/dev/null || true
-  else
-    "${LAUNCHER}" on
-    return 0
-  fi
-  for _ in $(seq 1 120); do
-    if daemon_alive; then
-      echo "✓  守护进程已启动（launchctl bootstrap）"
-      return 0
-    fi
-    sleep 0.25
-  done
-  echo "⚠️  守护进程 30s 内未启动，请查看 ${LOG}"
-  return 0
+  "${LAUNCHER}" on || true
 }
 
 # 卸载要彻底：`ivox off` 只卸 job、保留 plist（那是留给「下次登录自动回来」的），

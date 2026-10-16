@@ -24,10 +24,9 @@ install:
 	@$(RUNTIME) start
 	@echo "✓  iVox 已就绪并已启动"
 
-# 停/起统一走 runtime.sh 的 stop/start（LaunchAgent 下即 bootout → cp → bootstrap）：
-# 先停干净再覆盖再起。直接在进程活着时 cp 覆盖二进制会让 macOS 判签名失配
-# （OS_REASON_CODESIGNING）把进程杀掉，极端情况 launchd 还可能拉起到写了一半的文件。
-# 只卸 job 不删 plist，所以中途失败也不会丢登录自启配置。
+# update 就是字面的「off → 干活 → on」。先停干净再覆盖再起：在进程活着时 cp 覆盖
+# 二进制会让 macOS 判签名失配（OS_REASON_CODESIGNING）把进程杀掉，极端情况 launchd
+# 还可能拉起到写了一半的文件。停/起交给 CLI 的 `ivox off` / `ivox on`，不在这里各写一套。
 update:
 	@$(RUNTIME) stop
 	@$(MAKE) build voices
