@@ -240,7 +240,7 @@ actor ConnectionHandler {
             exit(0)
         }
         
-        let (source, voiceID, content, group, isFinal) = extractVoicePrefix(text, config: config)
+        let (source, voiceID, content, group, isFinal, page) = extractVoicePrefix(text, config: config)
         Log.info("请求解析: source=\(source) voice=\(voiceID) group=\(group ?? "-") final=\(isFinal) raw_chars=\(content.count)")
         Log.debug("请求原始内容: source=\(source) raw=\(logPreview(content))")
         let cleaned = cleanText(content)
@@ -260,10 +260,11 @@ actor ConnectionHandler {
 
         // 分块入队：整条一次合成会长时间占住播放（且要等整段合成完才出声），逐句入队才能边合成边播
         let chunks = cleaned.isEmpty ? [] : splitSentences(cleaned)
-        let jobs = chunks.map { PlaybackJob(text: $0, voiceID: voiceID, source: source) }
+        // pageID：这一块属于哪一页（Claude 的 message_id）——Ctrl+2「读下一页」的靶心
+        let jobs = chunks.map { PlaybackJob(text: $0, voiceID: voiceID, source: source, pageID: page) }
         if let group {
             // 分组号 = Claude 的 `turn_id`（一次回复 = 一摞）；同一摞的每一页都带同一个号
-            Log.info("队列入队（摞）: source=\(source) voice=\(voiceID) turn=\(group) chars=\(clen) 分块=\(jobs.count)")
+            Log.info("队列入队（摞）: source=\(source) voice=\(voiceID) turn=\(group) page=\(page ?? "-") chars=\(clen) 分块=\(jobs.count)")
             Task { await queue.enqueueGrouped(jobs, group: group) }
         } else if isFinal {
             // 不带分组的结束信号 = Stop 钩子：一次回复真正说完了，收尾当前那一摞（不播任何东西）
@@ -376,29 +377,32 @@ actor ConnectionHandler {
         return dict
     }
 
-    nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, group: String?, isFinal: Bool) {
+    nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, group: String?, isFinal: Bool, page: String?) {
         guard text.hasPrefix("{"), let end = text.firstIndex(of: "}") else {
-            return ("default", config.defaultVoice, text, nil, false)
+            return ("default", config.defaultVoice, text, nil, false, nil)
         }
         let metaStr = String(text[text.index(after: text.startIndex)..<end])
         let pairs = metaStr.split(separator: ",").map { $0.split(separator: ":", maxSplits: 1).map(String.init) }
         var sourceID = "default"
         var explicitVoice: String?
         var group: String?
+        var page: String?
         var isFinal = false
         for pair in pairs where pair.count == 2 {
             switch pair[0] {
             case "source": sourceID = pair[1]
             case "voice":  explicitVoice = pair[1]
-            // 分组号（hook 传 message_id）：同一轮的多批并进同一桶，并让跳桶/掀桌能拦住后续批次
+            // 分组号 = 一**摞**（hook 传 turn_id）：同一摞的各页并进同一桶，让跳摞/掀桌能拦住后续页
             case "group":  group = pair[1].isEmpty ? nil : pair[1]
+            // 页号 = 一**页**（hook 传 message_id）：Ctrl+2「读下一页」按它翻页
+            case "page":   page = pair[1].isEmpty ? nil : pair[1]
             case "end":    isFinal = true
             default: break
             }
         }
         let voiceID = explicitVoice ?? config.sourceVoices[sourceID] ?? config.defaultVoice
         let content = String(text[text.index(after: end)...])
-        return (sourceID, voiceID, content, group, isFinal)
+        return (sourceID, voiceID, content, group, isFinal, page)
     }
 
     nonisolated private func oneLine(_ value: String) -> String {

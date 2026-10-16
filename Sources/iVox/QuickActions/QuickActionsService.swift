@@ -41,7 +41,7 @@ final class QuickActionsService {
             copySelectedPath()
         case .escInterrupt:
             break   // 不属于本域；Daemon 分派时已处理打断，这里只是穷举
-        case .skipBucket, .skipSentence:
+        case .skipBucket, .skipPage:
             break   // 不属于本域；Daemon 分派时已处理跳桶/跳句，这里只是穷举
         }
     }

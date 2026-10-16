@@ -32,7 +32,7 @@ final class GlobalKeyTap: @unchecked Sendable {
         case copyPath             // Opt+C
         case escInterrupt         // Ctrl+Esc 手动闭嘴（不录音）
         case skipBucket           // Ctrl+1 跳过当前桶（丢当前轮，播下一桶）
-        case skipSentence         // Ctrl+2 跳过当前句（只丢这句，同轮接着念）
+        case skipPage             // Ctrl+2 读下一页（丢掉当前页剩下的块，翻页）
     }
 
     /// 右⌘(0x36) / 右⌃(0x3E) 状态变化。在 tap 线程同步调用，**必须立刻返回**。
@@ -199,7 +199,7 @@ final class GlobalKeyTap: @unchecked Sendable {
         Binding(keyCode: 0x08, modifiers: .maskAlternate, hotKey: .copyPath),          // C
         Binding(keyCode: 0x35, modifiers: .maskControl, hotKey: .escInterrupt),        // Esc（Ctrl+Esc）
         Binding(keyCode: 0x12, modifiers: .maskControl, hotKey: .skipBucket),         // 1（Ctrl+1）
-        Binding(keyCode: 0x13, modifiers: .maskControl, hotKey: .skipSentence),       // 2（Ctrl+2）
+        Binding(keyCode: 0x13, modifiers: .maskControl, hotKey: .skipPage),           // 2（Ctrl+2 读下一页）
     ]
 
     // MARK: - 权限

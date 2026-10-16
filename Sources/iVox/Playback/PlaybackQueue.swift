@@ -10,6 +10,9 @@ struct PlaybackJob: Sendable {
     let source: String
     /// 所属流式轮次；nil = 传统整段播报（ivox speak / hook.sh）
     var turnID: String? = nil
+    /// 这一块属于哪**页**（Claude 的 `message_id`）。Ctrl+2「读下一页」靠它把当前页的剩余块一起丢掉；
+    /// nil = 非 Claude 路径（pi / hook / ivox speak），那时 Ctrl+2 退化成"只掐在播"。
+    var pageID: String? = nil
 }
 
 /// 管道里流的一小块音频：PCM +（**仅句首块**）这句的文本。
@@ -31,12 +34,12 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     /// Ctrl+Esc 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，
     /// 静音播报后由调用方恢复音乐（语义同停止帧，不走右⌘ 的录音暂停）
     case esc
-    /// Ctrl+1 跳过当前桶：丢正在播的这一轮（连同其后分块），从下一桶接着播。
+    /// Ctrl+1 跳过当前桶：丢正在播的这一**摞**（一次回复，连同后来的页），从下一桶接着播。
     /// 与 `.esc` 的分工——那个全场闭嘴，这个只跳当前、后面的照播。
     case skip
-    /// Ctrl+2 跳过当前这句：只丢正在播的这一句，**同一桶剩下的照常念**。
-    /// 手动打断三档里的「轻」（`.skip` = 中：丢整桶；`.esc`/`.speech` = 掀桌：全场清）。
-    case skipSentence
+    /// Ctrl+2 读下一页：丢掉当前这一**页**剩下的块，从下一页接着念。
+    /// 手动打断三档里的「轻」（`.skip` = 中：丢整摞；`.esc`/`.speech` = 掀桌：全场清）。
+    case skipPage
     /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
     case shutdown
 
@@ -46,7 +49,7 @@ enum InterruptSource: Sendable, CustomStringConvertible {
         case .dict: return "dict"
         case .esc: return "esc"
         case .skip: return "skip"
-        case .skipSentence: return "skip-sentence"
+        case .skipPage: return "skip-page"
         case .shutdown: return "shutdown"
         }
     }
@@ -78,6 +81,9 @@ actor PlaybackQueue {
     /// 最近一次打断的来源：底层取消日志（TTS 合成已取消）据此对上「是谁打断的」。
     /// 不用 actor 并发考虑——打断本身串行，写入与 processNext 读它都在本 actor 上。
     private var lastInterrupt: InterruptSource? = nil
+    /// 正在念的那一块属于哪一页（Ctrl+2「读下一页」的靶心）。claim 时记——那块早在合成前就被
+    /// `popFrontJob` 弹出桶了，光看桶认不出它属于哪页。
+    private var playingPageID: String?
     private var pipelineSeq: UInt = 0
     /// `currentTask` 的代号，用于身份校验：仅当代号仍指向自己时才允许清空/接管。
     private var currentTaskSeq: UInt = 0
@@ -281,18 +287,26 @@ actor PlaybackQueue {
         await pumpOrResume()   // 有下一桶则起管道接着播；没有则收尾并恢复音乐
     }
 
-    /// 跳过当前这句（Ctrl+2）：只丢正在播的这一句，**同一桶剩下的照常念**。
-    /// 形象说法：**把手里正念的那张纸扔掉**（一张 = 一句），同叠的下一张接着念。
-    /// 手动打断三档里的「轻」——`skipCurrentBucket`（中，丢整桶）、`cancelAll`（掀桌，全场清）。
-    /// 被掐的那句在合成前就已从桶里弹出（claim），所以「掐在播」天然就是「丢这句」；
-    /// 管道重启后 `processNext` 接着取同桶的下一块，无需额外记账。
-    func skipCurrentSentence(_ origin: InterruptSource) async {
-        Log.info("跳过当前句（来源=\(origin)）：只丢正在播的这句，同轮剩下的接着念")
+    /// 读下一页（Ctrl+2）：掐掉正在念的这一块，并丢掉桶里**属于当前页**的剩余块，从下一页接着念。
+    /// 形象说法：**这一页撕到一半，剩下的不念了，翻页**（一页 = 一个 MessageDisplay）。
+    /// 「跳播放块」没有意义——用户听不出块边界在哪，他感知的单位是页。
+    /// 手动打断三档里的「轻」——`skipCurrentBucket`（中，丢整摞）、`cancelAll`（掀桌，全场清）。
+    ///
+    /// 需要一笔记账：正在念的那块早在合成前就被 `popFrontJob` 弹出桶了，光看桶认不出它属于哪页，
+    /// 所以 claim 时把页号记进 `playingPageID`。页号为 nil（非 Claude 路径：pi / hook / 手动 speak）
+    /// 时退化成"只掐在播"。
+    func skipCurrentPage(_ origin: InterruptSource) async {
+        let page = playingPageID
+        Log.info("读下一页（来源=\(origin)）：丢掉当前页（\(page ?? "-")）的剩余块，从下一页接着念")
         await preemptCurrent(origin)
-        onCaption?(nil)   // 被跳掉的这句立刻从字幕撤下；同轮下一句开始响时会重新报
+        onCaption?(nil)   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
+        if let page {
+            // 只删"属于这一页"的块，同桶里后面几页的块原样留着——这才是"翻页"不是"跳桶"
+            for i in buckets.indices { buckets[i].jobs.removeAll { $0.pageID == page } }
+        }
         signalJobs()
-        await pumpOrResume()   // 同桶还有剩块则接着播；若这轮正等下一批字则原地等
+        await pumpOrResume()   // 还有块则接着播；若这摞正等下一批字则原地等
     }
 
     /// 掐掉「正在播的这一句/这一轮」：作废管道代号 + 取消在播 + 取消已排队合成与音频。
@@ -534,6 +548,7 @@ actor PlaybackQueue {
                     // 只在队首仍是我读到的那个 job 时才弹出（popFrontJob 已处理空桶前移）。
                     guard let taken = popFrontJob(), taken.text == job.text else { continue }
                     claimed = true
+                    playingPageID = taken.pageID   // 记下这一块属于哪页：Ctrl+2 要拿它当靶心
                     let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
 
                     // 句首块捎上这句的文本：播放器在它被设备读出时报字幕（跟随声音，而非合成）

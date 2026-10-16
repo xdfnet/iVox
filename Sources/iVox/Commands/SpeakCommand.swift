@@ -19,6 +19,9 @@ struct SpeakCommand: AsyncParsableCommand {
     @Option(name: .long, help: "分组 ID：同一条回复的多批增量并进同一桶（hook 传 message_id）")
     var group: String?
 
+    @Option(name: .long, help: "页号：这一块属于哪一页（hook 传 message_id），Ctrl+2「读下一页」按它翻页")
+    var page: String?
+
     @Flag(name: .customLong("final"), help: "这批是该回复的最后一批（收尾该分组）")
     var isFinal: Bool = false
 
@@ -31,6 +34,7 @@ struct SpeakCommand: AsyncParsableCommand {
         if let source, !source.isEmpty { parts.append("source:\(source)") }
         if let voice, !voice.isEmpty { parts.append("voice:\(voice)") }
         if let group, !group.isEmpty { parts.append("group:\(group)") }
+        if let page, !page.isEmpty { parts.append("page:\(page)") }
         if isFinal { parts.append("end:1") }
         let prefix = parts.isEmpty ? "" : "{\(parts.joined(separator: ","))}"
         try SocketClient.send(prefix + text, to: socketPath)

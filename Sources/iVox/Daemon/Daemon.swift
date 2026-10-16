@@ -287,9 +287,9 @@ actor Daemon {
                 case .skipBucket:
                     // 手动打断三档之「中」：丢正在播的这一轮（连同其后分块），从下一桶接着播。
                     await self.queue.skipCurrentBucket(.skip)
-                case .skipSentence:
+                case .skipPage:
                     // 手动打断三档之「轻」：只丢正在播的这一句，同一轮剩下的照常念。
-                    await self.queue.skipCurrentSentence(.skipSentence)
+                    await self.queue.skipCurrentPage(.skipPage)
                 }
             }
         }

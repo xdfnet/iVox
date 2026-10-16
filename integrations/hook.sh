@@ -17,7 +17,7 @@ if [[ "$1" == "msgdisplay" ]]; then
   # 这就是「过程内容逐句进桶」的载体——Claude 分步/工具多段回复，各段写出来时各播一次，
   # 不再只等 Stop 终了一次。**必须极快返回**：交互模式下 Claude Code 等本钩子返回才渲染该批。
   # python 只做「delta 提取 + 审计写 hook.log」两件事且要快；播报用后台 & 不阻塞。
-  # python 依次吐两行：分组号、delta。delta 放最后是因为它可能含换行。
+  # python 依次吐三行：分组号（摞）、页号、delta。delta 放最后是因为它可能含换行。
   payload="$(cat)"
   meta=$(printf '%s' "$payload" | python3 -c "
 import json, sys, re
@@ -28,11 +28,12 @@ delta = d.get('delta', '') or ''
 if isinstance(delta, str):
     if len(delta) <= 5 and not re.search(r'[一-鿿]', delta):
         delta = ''
-# 分组号用 turn_id（一次回复 = 一摞），**不是** message_id（一条 message = 一页）：
-# 一次回复里夹了工具调用就有好几页，按页分桶的话「跳一摞」得按好几次、还跳不干净。
-# turn_id 缺失时回落 message_id；都缺就不分组（退回普通播报）。
-grp = str(d.get('turn_id','') or d.get('message_id','') or '')
-grp = re.sub(r'[^A-Za-z0-9_.-]', '', grp)   # header 按 , 和 : 切分，脏字符会切坏 meta
+# 分组号用 turn_id（一次回复 = 一**摞**）；页号用 message_id（一**页**）。
+# 两者都要：摞给「跳整摞」用，页给 Ctrl+2「读下一页」用。
+# turn_id 缺失时回落 message_id（至少能分组）；都缺就不带这两个字段（退回普通播报）。
+san = lambda v: re.sub(r'[^A-Za-z0-9_.-]', '', str(v or ''))   # header 按 , 和 : 切分，脏字符会切坏 meta
+grp = san(d.get('turn_id','') or d.get('message_id',''))
+pg  = san(d.get('message_id',''))
 from pathlib import Path
 from datetime import datetime
 Path.home().joinpath('.config/ivox/hook.log').open('a').write(
@@ -40,13 +41,16 @@ Path.home().joinpath('.config/ivox/hook.log').open('a').write(
     datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], '$2',
     d.get('turn_id',''), d.get('message_id',''), d.get('index',''), d.get('final',''), delta[:40]))
 print(grp)
+print(pg)
 print(delta)
 " 2>/dev/null)
   grp="$(printf '%s' "$meta" | sed -n 1p)"
-  delta="$(printf '%s' "$meta" | tail -n +2)"
+  pg="$(printf '%s' "$meta" | sed -n 2p)"
+  delta="$(printf '%s' "$meta" | tail -n +3)"
   if [[ -n "${delta// }" ]]; then
     args=(speak --source "$2")
     [[ -n "$grp" ]] && args+=(--group "$grp")
+    [[ -n "$pg" ]] && args+=(--page "$pg")
     # 后台 &：走 socket 短连 O(ms)，不阻塞本批渲染
     ivox "${args[@]}" -- "$delta" 2>/dev/null &
   fi
