@@ -104,7 +104,9 @@ final class SpeechInputService: @unchecked Sendable {
 
             stopLevelMetering()
             Log.debug("语音输入: right ⌘/⌃ 松开 → 结束录音")
-            playCue("Pop")   // 「收工」：录音已停，接下来是识别（浮窗会转"识别中…"）
+            // 松开**不响**提示音：这一端的不确定性为零（手松没松，你自己知道），
+            // 紧接着浮窗会转"识别中…"、识别出的文字会落到光标处——已经是双重确认。
+            // 只有"按下"那一声在回答你不知道的事：系统什么时候准备好录音。
             Task {
                 await queue.resumeIfIdle()
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
@@ -209,8 +211,9 @@ final class SpeechInputService: @unchecked Sendable {
         Task { @MainActor in overlay.dismiss() }
     }
 
-    /// 开始 / 结束录音的提示音（"可以说了" / "收工"）——用系统音效，不自带资源。
+    /// 录音开始的提示音（"可以说了"）——用系统音效，不自带资源。
     /// 为什么不能只靠浮窗：按快捷键时眼睛往往不在屏幕下方，**声音才是即时的反馈**。
+    /// **只按下一声**（松开不响，理由见松开分支的注释）：双音在一天几十次的频率下噪音翻倍。
     /// NSSound 在主线程播放更稳（本服务不是 MainActor），故 hop 过去。
     private func playCue(_ name: String) {
         Task { @MainActor in NSSound(named: NSSound.Name(name))?.play() }
