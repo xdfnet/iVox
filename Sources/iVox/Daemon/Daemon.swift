@@ -276,22 +276,24 @@ actor Daemon {
                      .openTerminalCodex, .openTerminalPi, .copyPath:
                     await quickActionsService.handle(hotKey, at: location)
                 case .escInterrupt:
-                    // Ctrl+Esc 手动闭嘴：用户不想说话，只静音播报 + 恢复音乐。
+                    // 手动打断三档之「掀桌」：Ctrl+Esc 用户不想说话，只静音播报 + 恢复音乐。
                     // 语义同停止帧（不录音），不做右⌘ 那套「打断 + 暂停音乐」——
                     // 打断后立即 resume，否则用户安静聆听的背景音乐会一直卡在暂停态。
                     await self.queue.cancelAll(origin: .esc)
                     await self.queue.resumeIfIdle()
                 case .skipBucket:
-                    // Ctrl+1 跳过当前桶：丢正在播的这一轮（连同其后分块），从下一桶接着播。
-                    // 与 Ctrl+Esc 的分工——那个是「全场闭嘴」，这个只跳当前、后面的照播。
+                    // 手动打断三档之「中」：丢正在播的这一轮（连同其后分块），从下一桶接着播。
                     await self.queue.skipCurrentBucket(.skip)
+                case .skipSentence:
+                    // 手动打断三档之「轻」：只丢正在播的这一句，同一轮剩下的照常念。
+                    await self.queue.skipCurrentSentence(.skipSentence)
                 }
             }
         }
         // 处理器都装好了，这时才开 tap（顺序反了会让启动瞬间的按键落到 nil handler 上）
         keyTap.start()
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
-        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/X/C QuickActions；Ctrl+Esc 手动闭嘴；Ctrl+1 跳过当前桶）")
+        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/X/C QuickActions；手动打断三档：Ctrl+2 跳这句 / Ctrl+1 跳整轮 / Ctrl+Esc 掀桌）")
     }
 
     private func startMediaHTTPServer() {

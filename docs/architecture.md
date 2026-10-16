@@ -133,7 +133,7 @@ Daemon (actor)
 - `enqueue` **按轮分桶**追加到队列尾部，同 `turnID` 分块并入同桶顺序 append；新 turn 在队尾追加新桶**不打断**在播旧轮；**无 turn 的普通播报（hook.sh / `ivox speak`）同排队**。`processNext` 播完队首桶才前移 = 「按轮排队、播全播完」
 - **过期轮次静默丢弃**：`turnID` 已被作废（`deadTurns` 墓碑）的迟到帧/`endTurn` 一律 no-op，不再开口，避免残音反杀
 - 还有未结束的流式轮（`anyTurnInFlight`，由各桶 `ended` 推导）时队列瞬时排空就挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐；全部轮 `ended` 且排空才收尾
-- **打断权只归用户快捷键**：right⌘ 说话、Ctrl+Esc 闭嘴（`cancelAll` 全场清）、Ctrl+1 跳当前桶（`skipCurrentBucket`：只丢当前轮，后面的照播）；Cmd+D 译文走 `speakUserInitiated` **插队**（只掐在播、译文桶插到队首，其余桶全保留）。**`{type:stop}` 停止帧与流式新轮不再打断**。agent 回复到达的普通播报只排队。Ctrl+1 是唯一的「跳过」入口（旧的 ↓ 跳段已删）
+- **打断权只归用户快捷键**，手动打断三档：**轻** Ctrl+2 跳当前句（`skipCurrentSentence`：只丢正在播这句，同轮剩下的照念）、**中** Ctrl+1 跳整轮（`skipCurrentBucket`：丢当前桶，下一桶接着播）、**掀桌** Ctrl+Esc 清楚（`cancelAll` 全场清）+ right⌘ 说话；Cmd+D 译文走 `speakUserInitiated` **插队**（只掐在播、译文桶插到队首，其余桶全保留）。**`{type:stop}` 停止帧与流式新轮不再打断**。agent 回复到达的普通播报只排队。旧的 ↓ 跳段已删，「跳」统一走 Ctrl+1 / Ctrl+2
 - `cancelAll()` 清空队列 + 取消全部播放（bargeIn + 清 turn 状态）
 - 等待 TTS 模型就绪后再开始合成
 - 播报前通过 `MediaController` 暂停音乐，播完恢复
@@ -162,7 +162,7 @@ Daemon (actor)
 - 键盘监听由 `HotKey/GlobalKeyTap` **独占**（一个 tap 服务多个消费者，见下节），本服务只订阅**修饰键**：右⌘(0x36) / 右⌃(0x3E) 的状态变化由它回调进来
 - **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」——用户快捷键打断之一）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 用户快捷键四个：right⌘ 说话、Cmd+D 插队念译文、Ctrl+Esc 闭嘴（只静音播报 + 恢复音乐，不录音）、Ctrl+1 跳过当前桶（丢当前轮，后面的照播）。**pi 新轮与停止帧不再打断**，一律排队
+- 用户快捷键五个：right⌘ 说话、Cmd+D 插队念译文、Ctrl+Esc 掀桌（只静音播报 + 恢复音乐，不录音）、Ctrl+1 跳整轮、Ctrl+2 跳当前句。**pi 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 
@@ -171,7 +171,7 @@ Daemon (actor)
 `Sources/iVox/HotKey/GlobalKeyTap.swift`
 
 - 独占一个 CGEvent tap 与**专用线程的 run loop**，只按事件类型 / keyCode **路由**，不含任何业务判断
-- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/Q/X/C` → `QuickActionsService`；`Ctrl+Esc` / `Ctrl+1` → `PlaybackQueue`（全场闭嘴 / 跳当前桶）
+- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/Q/X/C` → `QuickActionsService`；`Ctrl+Esc` / `Ctrl+1` / `Ctrl+2` → `PlaybackQueue`（手动打断三档：掀桌 / 跳整轮 / 跳这句）
 - 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
 - ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
 - 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Cmd+D` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
@@ -339,7 +339,7 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-**打断权只归 ivox 快捷键**（right⌘ 说话 / Cmd+D 插队译文 / Ctrl+Esc 闭嘴 / Ctrl+1 跳当前桶）；`hook.sh` **不再有 interrupt 分支**（`ivox quiet` 手动能力保留在 ivox CLI），`UserPromptSubmit` 亦不挂。
+**打断权只归 ivox 快捷键**（right⌘ 说话 / Cmd+D 插队译文 / 手动三档：Ctrl+2 跳这句 · Ctrl+1 跳整轮 · Ctrl+Esc 掀桌）；`hook.sh` **不再有 interrupt 分支**（`ivox quiet` 手动能力保留在 ivox CLI），`UserPromptSubmit` 亦不挂。
 
 | 工具 | 配置/挂载 | 回复播报 |
 |------|----------|----------|

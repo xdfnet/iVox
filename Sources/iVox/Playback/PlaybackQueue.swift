@@ -26,6 +26,9 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     /// Ctrl+1 跳过当前桶：丢正在播的这一轮（连同其后分块），从下一桶接着播。
     /// 与 `.esc` 的分工——那个全场闭嘴，这个只跳当前、后面的照播。
     case skip
+    /// Ctrl+2 跳过当前这句：只丢正在播的这一句，**同一桶剩下的照常念**。
+    /// 手动打断三档里的「轻」（`.skip` = 中：丢整桶；`.esc`/`.speech` = 掀桌：全场清）。
+    case skipSentence
     /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
     case shutdown
 
@@ -35,6 +38,7 @@ enum InterruptSource: Sendable, CustomStringConvertible {
         case .dict: return "dict"
         case .esc: return "esc"
         case .skip: return "skip"
+        case .skipSentence: return "skip-sentence"
         case .shutdown: return "shutdown"
         }
     }
@@ -225,6 +229,18 @@ actor PlaybackQueue {
         if !buckets.isEmpty { buckets.removeFirst() }   // 挂起期间可能已被别的路径清掉，别越界
         signalJobs()
         await pumpOrResume()   // 有下一桶则起管道接着播；没有则收尾并恢复音乐
+    }
+
+    /// 跳过当前这句（Ctrl+2）：只丢正在播的这一句，**同一桶剩下的照常念**。
+    /// 手动打断三档里的「轻」——`skipCurrentBucket`（中，丢整桶）、`cancelAll`（掀桌，全场清）。
+    /// 被掐的那句在合成前就已从桶里弹出（claim），所以「掐在播」天然就是「丢这句」；
+    /// 管道重启后 `processNext` 接着取同桶的下一块，无需额外记账。
+    func skipCurrentSentence(_ origin: InterruptSource) async {
+        Log.info("跳过当前句（来源=\(origin)）：只丢正在播的这句，同轮剩下的接着念")
+        await preemptCurrent(origin)
+        await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
+        signalJobs()
+        await pumpOrResume()   // 同桶还有剩块则接着播；若这轮正等下一批字则原地等
     }
 
     /// 掐掉「正在播的这一句/这一轮」：作废管道代号 + 取消在播 + 取消已排队合成与音频。
