@@ -35,6 +35,7 @@ write_hook() {
   case "$event" in
     UserPromptSubmit) cmd="bash $HOOK_SH interrupt $tool_name" ;;
     MessageDisplay)   cmd="bash $HOOK_SH msgdisplay $tool_name" ;;
+    End)              cmd="bash $HOOK_SH end $tool_name" ;;
     *)                cmd="bash $HOOK_SH speak $tool_name" ;;
   esac
 
@@ -72,17 +73,30 @@ write_prompt_hook() {
 
 # ── Claude ──
 # 播报走 MessageDisplay：assistant 行批增量，**按 `turn_id` 装进同一摞**（一摞 = 一次回复）。
-# **不挂 Stop**——收尾判据是「新的 turn 来了就把上一个盖上」（服务端 `enqueueGrouped` 里做），
-# 不需要回合结束事件。历史坑：去重那次（57179ae）commit 说「摘 Stop」，实际只把
-# UserPromptSubmit 置了 no-op、这里仍默认 event=Stop，每次 make update 又把它补回来；
-# **本脚本只写不删**，遗留的 Stop 请人工摘除（settings.json 的 hooks.Stop）。
-# 注：Codex 无 MessageDisplay 事件，仍走 Stop（见下），别跟着一起改。
+# 收尾判据是「新的 turn 来了就把上一个盖上」（服务端 `enqueueGrouped` 里做）；**另挂 Stop 只作收尾信号**
+# （`hook.sh end`，不出声）——用户说完一轮后不会有下一条 turn，光靠"盖上"只能等空闲宽限，Stop 一到就能
+# 立刻收尾（音乐与字幕立刻回来）。历史坑：去重那次（57179ae）摘的是**指向 `hook.sh speak` 的**那条 Stop
+# （连正文一起送 → 与 MessageDisplay 重复播两遍），不是"不许挂 Stop"；现在这条不发正文，不重复。
+# **本脚本只写不删**：遗留的旧 Stop（命令里是 `hook.sh speak claude`）请人工摘除，否则重复播报。
+# 注：Codex 无 MessageDisplay 事件，仍走 Stop 整段播报（见下），别跟着一起改。
 CLAUDE_JSON="$HOME/.claude/settings.json"
 if [[ -f "$CLAUDE_JSON" ]]; then
   if grep -q 'hook.sh msgdisplay claude' "$CLAUDE_JSON" 2>/dev/null; then
     echo "[i] Claude MessageDisplay hook 已存在"
   elif write_hook "$CLAUDE_JSON" "claude" 10 MessageDisplay; then
     echo "✓  Claude MessageDisplay hook"
+  else
+    echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"
+  fi
+  # 收尾信号：Stop 事件 → `hook.sh end`，**只发"说完了"这个暗号、不带正文**。
+  # 有了它，回复一结束队列立刻收尾（音乐与字幕立刻回来），空闲宽限退化成纯兜底；
+  # 没有它也不会错——只是最后那 2 秒要等满（用户不按任何键时）。
+  # 与「历史坑」的区别：当年挂的是 `hook.sh speak`（连正文一起送 → 与 MessageDisplay 重复播两遍），
+  # 现在这条不出声，不构成重复。
+  if grep -q 'hook.sh end claude' "$CLAUDE_JSON" 2>/dev/null; then
+    echo "[i] Claude Stop hook（收尾信号）已存在"
+  elif write_hook "$CLAUDE_JSON" "claude" 10 End; then
+    echo "✓  Claude Stop hook（收尾信号，不出声）"
   else
     echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"
   fi

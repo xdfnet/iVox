@@ -57,6 +57,17 @@ print(delta)
   echo '{"continue": true}'
   exit 0
 fi
+if [[ "$1" == "end" ]]; then
+  # 回复真正结束（Claude 的 Stop 钩子）：只发一个**收尾信号**——不带一个字、不出声。
+  # 作用：让队列立刻判「这一摞说完了」→ 收尾（恢复音乐 + 收字幕），不必再等空闲宽限那 2 秒。
+  # 与 msgdisplay 的分工：那条送**内容**，这条只说**完了**。
+  # 当年摘 Stop（57179ae）是因为它连正文一起送、与 MessageDisplay 重复播两遍；现在只送暗号，不重复。
+  cat >/dev/null                     # 丢弃 payload：这里只要"结束了"这个事实，不要正文
+  ivox speak --source "$2" --final -- "" 2>/dev/null &
+  echo '{"continue": true}'
+  exit 0
+fi
+
 [[ "$1" == "speak" ]] || exit 0   # 未知动作：不处理
 source="$2"
 

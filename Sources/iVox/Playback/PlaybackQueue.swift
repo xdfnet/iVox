@@ -494,12 +494,14 @@ actor PlaybackQueue {
         if currentTask == nil, hasPendingBuckets { startPipeline() }
     }
 
-    /// 手动收尾当前那一摞（`ivox speak --final` 的空信号）。
-    /// 日常**不靠它**——日常的收尾判据是「新的 turn 来了就把上一个盖上」（见 `enqueueGrouped`）。
-    /// 留着是给手动/排障一个口子。
+    /// 收尾当前那一摞（`hook.sh end` 送来的 Stop 信号；手动 `ivox speak --final` 是同一个口子）。
+    /// **日常收尾的主力就是它**——Claude 一说"这轮完了"，音乐与字幕立刻归还，不必等空闲宽限。
+    /// 与「新 turn 盖上」的分工：这里**只标 ended、不立墓碑**——Stop 只说"我说完了"，在途的页
+    /// 可能还在路上（钩子异步 + socket 短连并发），立墓碑会把正常内容一起丢掉；
+    /// 「新 turn 来了」才是无可争议的"旧轮作废"，那一刻才敢立墓碑清场。
     func closeOpenGroup() {
         guard let group = openGroup else { return }
-        Log.info("收尾当前摞（手动信号）: turn=\(group)")
+        Log.info("收尾信号（这一摞说完了）: turn=\(group)")
         closeGroup(group)
         openGroup = nil
         signalJobs()
