@@ -131,6 +131,7 @@ git smart 协议（POST `git-upload-pack`）在国内偶发 HTTP/2 截断，Hugg
 
 ```bash
 make update       # 编译 → 签名 → 复制到 ~/.local/bin/ivox → 重启守护进程
+                  # 任何一步失败/被中断都会自动回滚到上一版并把服务拉回来
 ```
 
 The binary at `~/.local/bin/ivox` is what hook scripts and `ivox on/off` invoke. Project dir can be deleted after deploy.

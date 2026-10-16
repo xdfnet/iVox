@@ -27,12 +27,21 @@ install:
 # update 就是字面的「off → 干活 → on」。先停干净再覆盖再起：在进程活着时 cp 覆盖
 # 二进制会让 macOS 判签名失配（OS_REASON_CODESIGNING）把进程杀掉，极端情况 launchd
 # 还可能拉起到写了一半的文件。停/起交给 CLI 的 `ivox off` / `ivox on`，不在这里各写一套。
+#
+# **失败要回滚**（含被 Ctrl-C/中断打断）：先 snapshot 留一份当前部署态，任何一步没过
+# （编译失败、部署失败、或新二进制起不来）都走 trap 还原上一版并把服务拉回来——否则
+# `stop` 已经把服务停了，人一走神就是「服务不见了 + 自启也关了」。全部成功才丢掉备份。
 update:
-	@$(RUNTIME) stop
-	@$(MAKE) build voices
-	@$(RUNTIME) deploy-bin
-	@$(RUNTIME) start
-	@echo "✓  iVox 已更新"
+	@ok=0; \
+	trap 'if [ "$$ok" != "1" ]; then $(RUNTIME) rollback; fi' EXIT INT TERM; \
+	$(RUNTIME) snapshot && \
+	$(RUNTIME) stop && \
+	$(MAKE) build voices && \
+	$(RUNTIME) deploy-bin && \
+	$(RUNTIME) start && \
+	$(RUNTIME) discard-snapshot && \
+	ok=1; \
+	[ "$$ok" = "1" ] && echo "✓  iVox 已更新"
 
 check:
 	@$(RUNTIME) check-env
@@ -99,7 +108,7 @@ help:
 	@echo "iVox 构建系统"
 	@echo ""
 	@echo "  make / make install = 首次安装"
-	@echo "  make update         = 停服 + 编译 + 部署 + 启动"
+	@echo "  make update         = 停服 + 编译 + 部署 + 启动（失败/中断自动回滚）"
 	@echo "  make run            = 编译 + 前台调试"
 	@echo "  make test           = 运行测试"
 	@echo "  make check-tts      = 播报黑盒自检（真实 daemon，发版前手动跑）"

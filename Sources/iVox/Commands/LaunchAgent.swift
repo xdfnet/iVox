@@ -110,7 +110,10 @@ struct OnCommand: ParsableCommand {
             }
             Thread.sleep(forTimeInterval: 0.25)
         }
+        // 起不来**算失败**（退出码非 0），不只是打印一句警告：`make update` 靠这个退出码
+        // 判断「新二进制是不是坏的」，吞掉它就没有回滚的触发点——update 会报成功而服务是死的。
         print("⚠️  daemon 30s 内未就绪（launchctl exit \(status)），请查看 \(log)")
+        throw ExitCode.failure
     }
 }
 

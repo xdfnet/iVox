@@ -353,6 +353,9 @@ actor PlaybackQueue {
         // 弱分组（Claude 多批）也要立墓碑——它们刻意不进 turnStack（见 enqueueGrouped），
         // 不从桶里捞一遍，掀桌后这条回复的后续批次就会照响，「掀不干净」。
         buckets.compactMap(\.turnID).forEach { bury($0) }
+        // openGroup 指向的那一组此刻通常还在桶里（上面已捞到），但多补一刀不吃亏：
+        // 它的桶若已被别的路径弹掉，光靠捞桶就漏了，这条回复的后续批次会照响。
+        if let g = openGroup { bury(g) }
         openGroup = nil
     }
 
@@ -441,8 +444,11 @@ actor PlaybackQueue {
         }
         signalJobs()
         Log.debug("队列状态: pending=\(pendingCount) processing=\(currentTask != nil) group=\(group) final=\(isFinal)")
-        // 有管道则 while 自动消费新 job；无则新起
-        if currentTask == nil { startPipeline() }
+        // 有管道则 while 自动消费新 job；无则新起。**必须查 `hasPendingBuckets`**：本方法不像
+        // `enqueue` 那样在最前面挡掉空入队（空 `final` 批要放行），所以可能一次都没加 job——
+        // 光看 `currentTask == nil` 会起一条空管道，它入口就 `media.pause()`，随即发现无事可做
+        // 收尾再 resume：音乐平白顿一下。
+        if currentTask == nil, hasPendingBuckets { startPipeline() }
     }
 
     /// 给一个弱分组的全部桶标记 ended（这条回复说完了）。pi 那种强轮走 `endTurn`，不走这里。

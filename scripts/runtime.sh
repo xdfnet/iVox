@@ -119,9 +119,67 @@ stop_daemon() {
 
 # 启动守护进程：交给 CLI 的 `ivox on`（enable + 写 plist + bootstrap + 等 socket 就绪）。
 # 就绪窗口在 CLI 里（30s：模型加载 + 键盘层权限轮询实测要十几秒）。
-# 于是 update 就是字面的 off → 干活 → on，与 `ivox off` / `ivox on` 完全同一套语义。
+# **不吞退出码**：`ivox on` 起不来时返回非 0，必须让它冒泡——`make update` 靠它判断
+# 「新二进制是不是坏的」，吞了就没有回滚的触发点（update 会报成功而服务是死的）。
 start_daemon() {
-  "${LAUNCHER}" on || true
+  "${LAUNCHER}" on
+}
+
+# ── 更新的备份/回滚 ──
+# 备份范围**等于部署范围**：`deploy-bin` 覆盖什么就备什么，多一分不备、少一分不漏。
+#   · 二进制 + 两个资源包（约 59M，SSD 上毫秒级）
+#   · 集成资产 hook.sh / integrations/（约 30K）
+# 刻意**不**碰 settings.json 之类：install-hooks 对别人的配置是「只写不删」，
+# 回滚去改它就越界了（那份归各 agent 自己管）。
+ROLLBACK_DIR="${HOME}/.config/ivox/rollback"
+BIN_ITEMS=(ivox mlx-swift_Cmlx.bundle iVox_iVox.bundle)
+CONFIG_ITEMS=(hook.sh integrations)
+
+# 更新前：留一份当前部署态
+snapshot_bin() {
+  rm -rf "${ROLLBACK_DIR}"
+  mkdir -p "${ROLLBACK_DIR}/bin" "${ROLLBACK_DIR}/config"
+  # 用 if 不用 `[[ ]] && cp`：后者在文件不存在时整条返回 1，set -e 会直接把脚本带走
+  for item in "${BIN_ITEMS[@]}"; do
+    if [[ -e "${HOME}/.local/bin/${item}" ]]; then
+      cp -R "${HOME}/.local/bin/${item}" "${ROLLBACK_DIR}/bin/"
+    fi
+  done
+  for item in "${CONFIG_ITEMS[@]}"; do
+    if [[ -e "${HOME}/.config/ivox/${item}" ]]; then
+      cp -R "${HOME}/.config/ivox/${item}" "${ROLLBACK_DIR}/config/"
+    fi
+  done
+  echo "✓  已备份当前版本（回滚用）"
+}
+
+# 更新成功：备份没用了
+discard_snapshot() {
+  rm -rf "${ROLLBACK_DIR}"
+}
+
+# 更新失败（含被中断）：还原上一版并把它拉起来。
+# 编译失败时二进制其实没被动过，但这里一律"还原 + 起"——统一一条路径，
+# 且还原的是同一份内容，等价于把状态复原。
+rollback_bin() {
+  if [[ -d "${ROLLBACK_DIR}/bin" ]]; then
+    echo "⚠️  更新失败，回滚到上一版…"
+    for item in "${BIN_ITEMS[@]}"; do
+      [[ -e "${ROLLBACK_DIR}/bin/${item}" ]] || continue
+      rm -rf "${HOME}/.local/bin/${item}"
+      cp -R "${ROLLBACK_DIR}/bin/${item}" "${HOME}/.local/bin/"
+    done
+    chmod 755 "${LAUNCHER}"
+    sign_bin
+    for item in "${CONFIG_ITEMS[@]}"; do
+      [[ -e "${ROLLBACK_DIR}/config/${item}" ]] || continue
+      rm -rf "${HOME}/.config/ivox/${item}"
+      cp -R "${ROLLBACK_DIR}/config/${item}" "${HOME}/.config/ivox/"
+    done
+  else
+    echo "⚠️  更新失败，但没有备份可回滚（首次部署？），仅把服务拉回来"
+  fi
+  "${LAUNCHER}" on || echo "⚠️  回滚后服务仍未能启动，请查看 ${HOME}/.config/ivox/daemon.log"
 }
 
 # 卸载要彻底：`ivox off` 只卸 job、保留 plist（那是留给「下次登录自动回来」的），
@@ -141,10 +199,13 @@ case "${1:-help}" in
   deploy-bin) deploy_bin ;;
   stop) stop_daemon ;;
   start) start_daemon ;;
+  snapshot) snapshot_bin ;;
+  discard-snapshot) discard_snapshot ;;
+  rollback) rollback_bin ;;
   sign) sign_bin ;;
   uninstall) uninstall_runtime ;;
   *)
-    echo "用法: scripts/runtime.sh {check-env|init|voices|deploy-bin|stop|start|sign|uninstall}"
+    echo "用法: scripts/runtime.sh {check-env|init|voices|deploy-bin|stop|start|snapshot|discard-snapshot|rollback|sign|uninstall}"
     exit 1
     ;;
 esac
