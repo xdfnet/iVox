@@ -105,11 +105,10 @@ actor PlaybackQueue {
     /// 已作废轮次墓碑（容量有上限）：`{cancel}`、语音打断、普通 speak 之后，该轮不再开口
     /// （含客户端关闭连接后 EOF 兜底补出的残尾）。
     private var deadTurns: [String] = []
-    /// **当前正开着的那一摞**（Claude 的 MessageDisplay：一次回复 = 一摞，分组号 = `turn_id`）。
-    /// 收尾判据是「新的 turn 来了就把上一个盖上」——不需要 `Stop` 钩子，也不用定时器。
-    /// 代价：多个来源交错时会互相盖（实测：我的回复与另一组交错，两边互相收尾），那一摞可能被
-    /// 拆成几个桶、Ctrl+1 跳不干净；单个来源（日常）不触发。
-    private var openGroup: String?
+    /// 曾经这里有一个 `openGroup`（"当前正开着的那一摞"）与「新的 turn 来了就把上一个盖上」的收尾判据。
+    /// 它已随 Stop 钩子的复活而**删除**——那判据用的是一个**全局单值**，两个会话并行时 A 的新轮会关上
+    /// B 正在念的那一摞（实测："多个来源交错时互相盖"），而"盖上"要等用户发下一条消息才发生（太晚）。
+    /// 现在每摞由自己的收尾信号精确收掉：`finishTurn`（Stop）→ 兜底 `sealIdleTurns`（空闲宽限）。
     /// 空闲宽限期（秒）：**声音停下之后**再等这么久没新内容，就判「这一摞说完了」。
     /// 取值理由：一轮里页与页之间夹工具调用，间隔是秒级——太长会让「说完音乐不回来」的体感变差，
     /// 太短会在页间来回切音乐（恢复→掐掉→再恢复）。2 秒是飞哥定的手感。
@@ -458,8 +457,8 @@ actor PlaybackQueue {
     /// 与 `enqueue(_:turnID:)` 的分工：那条走 `turnStack`（pi 双流认证），这条**绝不碰它**，
     /// 只做两件事——同一摞的各页并进同桶，以及被跳掉/掀桌后拦住该摞的**后续批次**（查 `deadTurns`）。
     ///
-    /// 桶初始 `ended: false`：要等 `closeOpenGroup()`（`Stop` 钩子的收尾信号）。中途播空也**不弹**：
-    /// 页级的 `final` 只说明"这页说完"，拿它收尾会让桶在第一页就"结束"、又掉回页的粒度。
+    /// 桶初始 `ended: false`：要等 `finishTurn()`（`Stop` 钩子的收尾信号）或 `sealIdleTurns()`（空闲宽限）。
+    /// 中途播空也**不弹**：页级的 `final` 只说明"这页说完"，拿它收尾会让桶在第一页就"结束"、又掉回页的粒度。
     func enqueueGrouped(_ newJobs: [PlaybackJob], group: String) async {
         // ① **先看自己死没死**：老桶（已被盖上 / 被 Ctrl+1 跳掉 / 被掀桌）的后续页直接丢掉。
         //    这一步**必须在"盖上一个"之前**——实测踩过：一个已死 turn 的迟到页会先盖掉当前活跃的
@@ -468,15 +467,9 @@ actor PlaybackQueue {
             Log.debug("丢弃：turn=\(group) 那一摞已被盖上")
             return
         }
-        // ② **新的 turn 来了：把上一个盖上、并立墓碑**——这是「一摞 = 一次回复」的收尾判据，
-        //    不需要 Stop 钩子。立墓碑是必须的：光把桶标 ended 的话，只要那个桶还在，
-        //    下面的 `firstIndex` 照样能把后续页追加进去、照样播出来（飞哥：老桶里再来新的就丢掉）。
-        if let prev = openGroup, prev != group {
-            Log.info("盖上上一摞（新 turn 到来）: turn=\(prev)")
-            closeGroup(prev)
-            bury(prev)
-        }
-        openGroup = group
+        // ② 这里原本是「新的 turn 来了：把上一个盖上并立墓碑」。**已删除**：它靠一个全局单值认"上一个"，
+        //    两个会话并行时 A 的新轮会关掉 B 正在念的那一摞；而且"盖上"要等你发下一条消息才发生。
+        //    现在每摞自己收尾（Stop 的 `finishTurn` / 宽限的 `sealIdleTurns`），互不干扰。
         if !newJobs.isEmpty {
             if let idx = buckets.firstIndex(where: { $0.turnID == group }) {
                 buckets[idx].jobs.append(contentsOf: newJobs)
@@ -494,16 +487,13 @@ actor PlaybackQueue {
         if currentTask == nil, hasPendingBuckets { startPipeline() }
     }
 
-    /// 收尾当前那一摞（`hook.sh end` 送来的 Stop 信号；手动 `ivox speak --final` 是同一个口子）。
+    /// 收尾指定的那一摞（Stop 钩子按 `session_id` 反查出的 `turn_id`；手动 `ivox speak --group X --final` 同此）。
     /// **日常收尾的主力就是它**——Claude 一说"这轮完了"，音乐与字幕立刻归还，不必等空闲宽限。
-    /// 与「新 turn 盖上」的分工：这里**只标 ended、不立墓碑**——Stop 只说"我说完了"，在途的页
-    /// 可能还在路上（钩子异步 + socket 短连并发），立墓碑会把正常内容一起丢掉；
-    /// 「新 turn 来了」才是无可争议的"旧轮作废"，那一刻才敢立墓碑清场。
-    func closeOpenGroup() {
-        guard let group = openGroup else { return }
-        Log.info("收尾信号（这一摞说完了）: turn=\(group)")
-        closeGroup(group)
-        openGroup = nil
+    /// 只标 ended、**不立墓碑**：Stop 说"我说完了"，但同一摞的页可能还在路上（钩子异步 + socket 短连并发），
+    /// 立墓碑会把正常内容一起丢掉；`deadTurns` 只由**用户显式作废**的动作来立（跳整摞 / 掀桌 / 取消轮次）。
+    func finishTurn(_ id: String) {
+        Log.info("收尾信号（这一摞说完了）: turn=\(id)")
+        closeGroup(id)
         signalJobs()
     }
 
@@ -674,11 +664,16 @@ actor PlaybackQueue {
     /// 收尾条件（恢复音乐 + 收字幕）永不成立。实测两条路径都卡死：自然播完、跳页后队列见底。
     /// 宽限期就是这个判据的兜底：等够了就当作说完了。
     private func waitForJobs() async -> Bool {
-        if hasPendingBuckets { return true }   // 还没挂起又来了货
+        // **这里必须无条件挂起**，绝不能因为"看着还有货"就提前返回：两个调用点里有一个是
+        // 「队首是个空桶（正等下一批块）、它后面还排着别的桶」——此时 `hasPendingBuckets` 为真、
+        // 而 `frontBucket` 取不到 job，早返回就会让调用方 `continue` 重问，变成**没有挂起点的紧循环**：
+        // 独占 actor、烧满一核、连快捷键打断都进不来（2026-10-16 实测：daemon 整个卡死，`/health`
+        // 也不响应，SIGTERM 都被死循环吞掉只能 kill -9）。有货时挂起也只是一瞬——入队路径末尾的
+        // `signalJobs()` 会立刻把它唤醒。
+        //
         // 宽限从**声音停下**起算：最后一块被取走去合成时它还在响，此刻就开始数的话，
         // 音乐会在这一句还没念完时就回来、把尾音盖掉（体感是"没念完就切走了"）。
         await waitUntilSilent()
-        if hasPendingBuckets { return true }   // 等播空的这几秒里来了新货
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let waiter = JobWaiter(continuation)
             jobWaiters.append(waiter)

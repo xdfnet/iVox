@@ -282,13 +282,19 @@ actor ConnectionHandler {
         // pageID：这一块属于哪一页（Claude 的 message_id）——Ctrl+2「读下一页」的靶心
         let jobs = chunks.map { PlaybackJob(text: $0, voiceID: voiceID, source: source, pageID: page) }
         if let group {
-            // 分组号 = Claude 的 `turn_id`（一次回复 = 一摞）；同一摞的每一页都带同一个号
-            Log.info("队列入队（摞）: source=\(source) voice=\(voiceID) turn=\(group) page=\(page ?? "-") chars=\(clen) 分块=\(jobs.count)")
-            Task { await queue.enqueueGrouped(jobs, group: group) }
+            if isFinal {
+                // 带分组的收尾信号（Stop 钩子按 session 反查到本会话的 turn_id）：精确收这一摞，不播东西
+                Log.info("收尾信号（Stop）: source=\(source) turn=\(group) chars=\(clen)")
+                Task { await queue.finishTurn(group) }
+            } else {
+                // 分组号 = Claude 的 `turn_id`（一次回复 = 一摞）；同一摞的每一页都带同一个号
+                Log.info("队列入队（摞）: source=\(source) voice=\(voiceID) turn=\(group) page=\(page ?? "-") chars=\(clen) 分块=\(jobs.count)")
+                Task { await queue.enqueueGrouped(jobs, group: group) }
+            }
         } else if isFinal {
-            // 不带分组的结束信号 = Stop 钩子：一次回复真正说完了，收尾当前那一摞（不播任何东西）
-            Log.info("收尾当前摞（Stop 信号）: source=\(source) chars=\(clen)")
-            Task { await queue.closeOpenGroup() }
+            // 不带分组的收尾信号：查不到 session 对应的那一摞（msgdisplay 还没触发过 / 手动发）——
+            // 不猜是哪一摞（全局"最后打开的那摞"那种判据已经删掉了），交给 2 秒空闲宽限收尾。
+            Log.info("收尾信号（无分组，交空闲宽限兜底）: source=\(source) chars=\(clen)")
         } else {
             Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(clen) 分块=\(jobs.count)")
             Task { await queue.enqueue(jobs) }

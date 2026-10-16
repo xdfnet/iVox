@@ -40,6 +40,14 @@ Path.home().joinpath('.config/ivox/hook.log').open('a').write(
     '%s hook.sh msgdisplay source=%s turn=%s mid=%s index=%s final=%s delta=%s\n' % (
     datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], '$2',
     d.get('turn_id',''), d.get('message_id',''), d.get('index',''), d.get('final',''), delta[:40]))
+# 按 session_id 记下「这条会话最后一次是哪一摞」——Stop 的 payload 里**没有 turn_id**
+# （只有 session_id + last_assistant_message），收尾信号要靠这一笔反查才能精确指认。
+# 分文件存是为了两个会话并行时互不覆盖（一个文件按 session 一键）。
+sid = san(d.get('session_id',''))
+if sid and grp:
+    _d = Path.home()/'.config/ivox/lastturn'
+    _d.mkdir(parents=True, exist_ok=True)
+    (_d/sid).write_text(grp)
 print(grp)
 print(pg)
 print(delta)
@@ -62,8 +70,22 @@ if [[ "$1" == "end" ]]; then
   # 作用：让队列立刻判「这一摞说完了」→ 收尾（恢复音乐 + 收字幕），不必再等空闲宽限那 2 秒。
   # 与 msgdisplay 的分工：那条送**内容**，这条只说**完了**。
   # 当年摘 Stop（57179ae）是因为它连正文一起送、与 MessageDisplay 重复播两遍；现在只送暗号，不重复。
-  cat >/dev/null                     # 丢弃 payload：这里只要"结束了"这个事实，不要正文
-  ivox speak --source "$2" --final -- "" 2>/dev/null &
+  # Stop 的 payload 里**没有 turn_id**（只有 session_id），所以按 session_id 反查 msgdisplay 记下的那一笔，
+  # 把收尾精确指到本会话的最后一摞——查不到就不带 group（服务端退化成"收最后打开的那摞"）。
+  # 另注：按 Esc 中断与 API 报错（走 StopFailure）时本钩子**不会触发**，那两种情形交给 2 秒空闲宽限兜底。
+  payload="$(cat)"
+  grp=$(printf '%s' "$payload" | python3 -c "
+import json, sys, re
+from pathlib import Path
+try:
+    sid = re.sub(r'[^A-Za-z0-9_.-]', '', str(json.load(sys.stdin).get('session_id','')))
+    print((Path.home()/'.config/ivox/lastturn'/sid).read_text().strip() if sid else '')
+except Exception:
+    print('')
+" 2>/dev/null)
+  args=(speak --source "$2")
+  [[ -n "$grp" ]] && args+=(--group "$grp")
+  ivox "${args[@]}" --final -- "" 2>/dev/null &
   echo '{"continue": true}'
   exit 0
 fi
