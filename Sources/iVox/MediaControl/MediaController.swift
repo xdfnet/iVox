@@ -23,6 +23,11 @@ private enum MediaRemoteBridge {
         return unsafeBitCast(sym, to: Func.self)(command.rawValue, nil)
     }
 
+    // 曾在这里加过 `MRMediaRemoteGetNowPlayingApplicationIsPlaying`（"现在是否有媒体在播"）——
+    // 它是**回调式**私有 API，在 Swift 6 并发下连踩两坑：`@convention(block)` 参数被视作
+    // sending（区域隔离报错），绕开后又是闭包逃逸（运行期 `@noescape ... has escaped`，
+    // daemon 崩循环）。已整体撤掉。
+
     enum Command: UInt32 {
         case play = 0, pause = 1, toggle = 2, stop = 3, nextTrack = 4, previousTrack = 5
         case skipForward = 19, skipBackward = 20
@@ -60,8 +65,14 @@ private enum MediaKey: Int32 {
 
 /// 媒体控制器：通过 MediaRemote / CGEvent 直接控制系统媒体。
 /// （早期还有一套「远程模式」——`baseURL` 非空时改走 HTTP 调外部服务；从未被调用，已删除。）
-struct MediaController {
+///
+/// **借路要有借有还**：播报 / 采集需要安静，就"借路"（暂停）一下，完事"还路"（恢复）。
+/// 关键是**只还自己借的账**——你本来就手动暂停着音乐，iVox 播报完不该把它放起来。
+/// `struct` 是值类型、存不住这个状态，故为 `actor`。
+actor MediaController {
     private let config: MediaControlConfig
+    /// 这条路当前是不是**我**暂停的（= 暂停之前它确实在播）。还路后复位。
+    private var suspendedByUs = false
 
     init(config: MediaControlConfig) {
         self.config = config
@@ -69,16 +80,28 @@ struct MediaController {
 
     // MARK: - 调度
 
-    /// 暂停音乐 (TTS 播报前调用)
+    /// 借路：暂停音乐（TTS 播报前 / 开始录音时调用）。
+    ///
+    /// ⚠️ **已知局限**：这里**无条件记账**（= 播完就还路），因为当前**无法区分**"这条路本来就没人"
+    /// 与"是我让它停的"——你若手动暂停着音乐，iVox 播报完会把它放起来。要精确判断得查系统播放
+    /// 状态，而 MediaRemote 那套是回调式私有 API、在 Swift 6 下已连踩两坑（见 `MediaRemoteBridge`
+    /// 里的注释）；更靠谱的替代是 CoreAudio 的「进程是否在输出音频」（macOS 14.2+，公开 API）。
     func pause() async {
         Log.info("媒体控制: 暂停")
         if case .failure(let err) = await Self.pause() {
             Log.warn("媒体控制: 暂停失败 \(err.localizedDescription)")
+            return
         }
+        suspendedByUs = true   // 无条件记账；等有了可靠的"原本在不在播"，再收紧成"原本在播才记"
     }
 
-    /// 恢复音乐 (TTS 播报完成后调用)
+    /// 还路：恢复音乐（TTS 播报完成后调用）。**只还自己借的账**。
     func resume() async {
+        guard suspendedByUs else {
+            Log.debug("媒体控制: 无需恢复（这次暂停不是我们借的）")
+            return
+        }
+        suspendedByUs = false
         Log.info("媒体控制: 恢复")
         if case .failure(let err) = await Self.play() {
             Log.warn("媒体控制: 恢复失败 \(err.localizedDescription)")

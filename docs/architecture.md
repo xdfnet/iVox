@@ -158,6 +158,8 @@ Daemon (actor)
 
 - `MRMediaRemoteSendCommand` 系统框架直接控制媒体播放
 - 播放 / 暂停 / 切歌走 `MRMediaRemoteSendCommand`（免权限）；音量 / 静音 / 方向键 / 锁屏走 `CGEvent`，要「设备控制与数据访问」
+- **借路要有借有还**：播报 / 采集需要安静就暂停、完事恢复。本质是「给音频采集和播报让路」，不是控制你的播放器 —— 所以它只认抖音 / 汽水音乐两个 App（`AudioAppRegistry`），其它播放器一概不碰。`MediaController` 为此是 `actor`：要记住"这条路是不是我借的"
+- ⚠️ **已知局限（评估后决定暂不修）**：判据还是"无条件记账"，**分不清"路上本来没人"与"是我让它停的"** —— 你手动暂停着的音乐，iVox 播报完会把它放起来。精确判据要查系统播放状态：MediaRemote 那套是**回调式私有 API**，在 Swift 6 下连踩两坑（`@convention(block)` 被判 sending → 区域隔离编译错；绕开后闭包逃逸 → 运行期崩、daemon 崩循环），已撤。替代方案是 CoreAudio 的「进程是否在输出音频」（macOS 14.2+，公开 API、无回调），成本中等且需真机验证，暂缓
 
 ### SpeechInput — 语音输入
 
