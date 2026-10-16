@@ -9,7 +9,8 @@ struct iVox: AsyncParsableCommand {
         commandName: "ivox",
         abstract: "本地语音播报守护进程，朗读 AI 编程工具的回复",
         subcommands: [
-            AutostartCommand.self,
+            OnCommand.self,
+            OffCommand.self,
             StatusCommand.self,
             SpeakCommand.self,
             QuietCommand.self,

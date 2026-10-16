@@ -28,7 +28,7 @@
 
 ---
 
-播报前暂停音乐，播完自动恢复。一条命令安装，用 `ivox autostart on/off` 控制启停（LaunchAgent 托管：登录自启 + 崩溃自动重启）。
+播报前暂停音乐，播完自动恢复。一条命令安装，用 `ivox on/off` 控制启停（LaunchAgent 托管：登录自启 + 崩溃自动重启）。
 
 ## 安装
 
@@ -48,7 +48,8 @@ ivox translate "hello"      # 划词翻译（--selection 取当前选中文本�
 ivox voice list             # 列出音色
 ivox status                 # 版本、各功能健康状态、权限、模型/音色文件体检
 ivox listen -f 录音.wav     # 语音识别
-ivox autostart on/off       # 启动 / 停止（LaunchAgent 托管，含登录自启）
+ivox on                     # 启动（并配置登录自启 + 崩溃自动重启）
+ivox off                    # 停止并关闭自启（卸下 job + disable；plist 保留，ivox on 恢复）
 ivox upgrade                # 检查 GitHub 最新版并自动升级（备份旧版、重签、重启）
 ```
 
@@ -88,7 +89,7 @@ make check-tts # 播报黑盒自检（压真实 daemon，发版前手动跑）
 make clean     # 清除 .build
 ```
 
-> `make check-tts` 需先 `ivox autostart on` 且模型就绪（缺 node 会提示 `brew install node`）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 12 个用例，**静音运行、不进设备**，无音频设备的环境自动 skip 相关用例。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
+> `make check-tts` 需先 `ivox on` 且模型就绪（缺 node 会提示 `brew install node`）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 12 个用例，**静音运行、不进设备**，无音频设备的环境自动 skip 相关用例。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
 
 > 需要 Swift 6.4 开发快照（`swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`）。早期快照的编译器崩溃已在该版本修复，详见 [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)。
 

@@ -199,6 +199,6 @@ struct WeChatSetupCommand: AsyncParsableCommand {
 
     private func restartDaemon() {
         // 幂等：未加载则起、已加载则 kickstart 重启（On 内部会先停掉非托管的旧 daemon）
-        try? AutostartCommand.On().run()
+        try? OnCommand().run()
     }
 }

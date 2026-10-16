@@ -69,7 +69,7 @@ scripts/               — runtime.sh, download-models.sh, install-*.sh（构建
 
 ## 架构
 
-基于守护进程的 actor 架构（LaunchAgent 托管，`ivox autostart on/off` 控制启停）：
+基于守护进程的 actor 架构（LaunchAgent 托管，`ivox on/off` 控制启停）：
 
 ```
 Claude Code/Codex → hook.sh               ┐
@@ -133,9 +133,9 @@ git smart 协议（POST `git-upload-pack`）在国内偶发 HTTP/2 截断，Hugg
 make update       # 编译 → 签名 → 复制到 ~/.local/bin/ivox → 重启守护进程
 ```
 
-The binary at `~/.local/bin/ivox` is what hook scripts and `ivox autostart on/off` invoke. Project dir can be deleted after deploy.
+The binary at `~/.local/bin/ivox` is what hook scripts and `ivox on/off` invoke. Project dir can be deleted after deploy.
 
-`~/.local/bin/ivox` 是 hook 脚本调用的二进制，由 `ivox autostart on/off` 控制启停（LaunchAgent 托管）。部署后项目目录可删除。
+`~/.local/bin/ivox` 是 hook 脚本调用的二进制，由 `ivox on/off` 控制启停（LaunchAgent 托管）。部署后项目目录可删除。
 
 ## 测试
 
@@ -149,7 +149,7 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLea
 测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
 
 ```bash
-make check-tts                      # 播报黑盒自检：压真实 daemon，13 个用例（需先 ivox autostart on，模型就绪）
+make check-tts                      # 播报黑盒自检：压真实 daemon，13 个用例（需先 ivox on，模型就绪）
 make check-tts ARGS="-f tail"       # 只跑匹配用例；--strict 让 advisory 计入失败；--managed 自行重启守护进程
 ```
 

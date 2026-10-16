@@ -77,7 +77,7 @@ sign:
 test:
 	$(SWIFT) test
 
-# 播报黑盒自检（压真实 daemon，需先 ivox autostart on 且模型就绪）。用法: make check-tts / ARGS="-f protocol"
+# 播报黑盒自检（压真实 daemon，需先 ivox on 且模型就绪）。用法: make check-tts / ARGS="-f protocol"
 check-tts:
 	@scripts/tts-check.sh $(ARGS)
 

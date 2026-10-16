@@ -5,7 +5,7 @@
 // 用法:
 //   node scripts/tts-check.mjs                # 跑全部用例（附加到已在跑的 daemon）
 //   node scripts/tts-check.mjs -f protocol    # 只跑名字匹配正则的用例
-//   node scripts/tts-check.mjs --managed      # 自己 ivox autostart on 重启 daemon（退出时保持运行）
+//   node scripts/tts-check.mjs --managed      # 自己 ivox on 重启 daemon（退出时保持运行）
 //   node scripts/tts-check.mjs --strict       # advisory 用例也计入失败
 //
 // 退出码: 0 全过(允许 skip) / 1 有失败或 run 级致命关键字 / 2 预检或用法错误
@@ -518,7 +518,7 @@ const cases = [
       // ① 活性：actor 被紧循环独占时 /health 直接超时（health() 返回 null）
       let alive = 0;
       for (let i = 0; i < 3; i++) { if (await ctx.health()) alive += 1; await sleep(600); }
-      ctx.check(alive === 3, `紧循环僵死：${3 - alive}/3 次 /health 无响应（需 ivox autostart off && on 重启）`);
+      ctx.check(alive === 3, `紧循环僵死：${3 - alive}/3 次 /health 无响应（需 ivox off && ivox on 重启）`);
       // ② 队尾那条最终必须被合成（旧实现永不播）
       const tailStart = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${tail.source}-`),
         { sinceTs: ctx.t0, timeout: 30000 });
@@ -676,12 +676,12 @@ async function probeAudio(log) {
 async function main() {
   // 预检
   if (!existsSync(SOCKET)) {
-    console.error(`✗ 找不到 socket ${SOCKET}，daemon 未运行？先 \`ivox autostart on\``);
+    console.error(`✗ 找不到 socket ${SOCKET}，daemon 未运行？先 \`ivox on\``);
     process.exit(2);
   }
   if (MANAGED) {
     console.log("# --managed: 重启 daemon ...");
-    execFileSync(IVOX, ["autostart", "on"], { stdio: "inherit" });
+    execFileSync(IVOX, ["on"], { stdio: "inherit" });
   }
   runnerLog = new LogTail();
   await runnerLog.baseline();

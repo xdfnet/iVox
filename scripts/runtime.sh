@@ -117,8 +117,8 @@ daemon_alive() {
 }
 
 # 停止守护进程：bootout 卸载 job。KeepAlive 下只有它能真正停住——直接发停止信号会被
-# 立刻拉回（旧版 `ivox off` 因此总误报「守护进程未退出」）。只卸 job、**不删 plist**：
-# 中途出错也不会把登录自启配置弄丢，bootstrap 即恢复。
+# 立刻拉回（旧版 `ivox off` 因此总误报「守护进程未退出」）。只卸 job、**不删 plist、
+# 也不 disable**：这是升级中途的临时停，不该动用户的自启开关（那是 `ivox off` 的活）。
 stop_daemon() {
   launchctl bootout "gui/$(id -u)/com.ivox.daemon" 2>/dev/null || true
   for _ in $(seq 1 40); do
@@ -137,10 +137,12 @@ stop_daemon() {
 # 就绪窗口 30s——模型加载 + 键盘层权限轮询实测要十几秒，10s 会误报失败。
 start_daemon() {
   if [[ -f "${AUTOSTART_PLIST}" ]]; then
+    # 先 enable：`ivox off` 会 disable 本服务，被 disable 的 job 是 bootstrap 不进去的
+    launchctl enable "gui/$(id -u)/com.ivox.daemon" 2>/dev/null || true
     launchctl bootstrap "gui/$(id -u)" "${AUTOSTART_PLIST}" 2>/dev/null \
       || launchctl kickstart -k "gui/$(id -u)/com.ivox.daemon" 2>/dev/null || true
   else
-    "${LAUNCHER}" autostart on
+    "${LAUNCHER}" on
     return 0
   fi
   for _ in $(seq 1 120); do
@@ -154,8 +156,11 @@ start_daemon() {
   return 0
 }
 
+# 卸载要彻底：`ivox off` 只卸 job、保留 plist（那是留给「下次登录自动回来」的），
+# 这里 plist 必须一起删——否则 launchd 下次登录仍会去拉一个已被删掉的二进制。
 uninstall_runtime() {
-  "${LAUNCHER}" stop 2>/dev/null || true
+  launchctl bootout "gui/$(id -u)/com.ivox.daemon" 2>/dev/null || true
+  rm -f "${AUTOSTART_PLIST}"
   rm -f "${LAUNCHER}"
   rm -rf "${HOME}/.local/share/ivox/runtime"
   echo "✓  已卸载（保留 ~/.config/ivox/）"
