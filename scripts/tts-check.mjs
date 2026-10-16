@@ -133,6 +133,14 @@ function health() {
   });
 }
 
+// daemon 进程 CPU%：紧循环空转的直接表征（macOS 的 %cpu 是近期占用，空闲≈0、合成峰值≈60-90、空转≈100）
+function daemonCpu() {
+  try {
+    const pid = execFileSync("pgrep", ["-f", "bin/ivox serve"]).toString().trim().split("\n")[0];
+    return parseFloat(execFileSync("ps", ["-o", "%cpu=", "-p", pid]).toString().trim());
+  } catch { return null; }
+}
+
 // ───────────────────────── 日志增量采集 ─────────────────────────
 
 class LogTail {
@@ -482,6 +490,47 @@ const cases = [
       ctx.check(late.length === 0, `哨兵后该轮不该再有合成开始，实得 ${late.length} 条`);
       const h = await ctx.health();
       ctx.check(h && h.queued === 0 && h.playing === false, `未收敛空闲: ${JSON.stringify(h)}`);
+      ctx.noBad();
+    },
+  },
+
+  // ───────── E8：队首轮播空等下一批块时不得紧循环（曾独占总 actor → 播报永久瘫痪）─────────
+  // 回归：`guard let job = frontBucket?.jobs.first else { continue }` 没有挂起点——队首桶已播空
+  //（它那句 job 已被 claim 走）、该轮尚未 endTurn（还在等下一批块），而其后已排了别的桶时，
+  // 上面 `!hasPendingBuckets` 分支进不去，于是无 await 地空转：独占 PlaybackQueue actor 且永不
+  // 释放，enqueue/endTurn/cancelAll 一律被饿死（连快捷键打断都进不来）→ 队尾内容永不播、
+  // CPU 烧满一核、/health 无响应，连 10s 读超时的 EOF 兜底也救不回（endTurn 进不了僵死的 actor）。
+  // 场景用「流式轮已播空未收尾 + 队尾排一条普通播报」精确压出来（多 agent 交错即此形态）。
+  {
+    name: "E8-head-bucket-wait-no-spin",
+    needsAudio: true,
+    async run(ctx) {
+      const tail = ctx.ids();          // 队尾那条：普通播报（无 turn）
+      const A = await ctx.openStream();
+      A.sendText("这是一段用来触发复现的测试文本，长度足够越过最小切句门槛。");
+      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${ctx.source}-`),
+        { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "首块未开始合成");
+      // 队尾排一条别的播报：此刻本轮 job 已被 claim（桶空、轮未收尾）→ 正是触发条件
+      await speak(tail.source, "这条排在队尾，应该等前一轮收尾之后才播出来。");
+      await sleep(3500);               // 越过首块合成（≈2.5s），让 producer 回到循环顶部
+      A.endFrame();
+      // ① 活性：actor 被紧循环独占时 /health 直接超时（health() 返回 null）
+      let alive = 0;
+      for (let i = 0; i < 3; i++) { if (await ctx.health()) alive += 1; await sleep(600); }
+      ctx.check(alive === 3, `紧循环僵死：${3 - alive}/3 次 /health 无响应（需 ivox autostart off && on 重启）`);
+      // ② 队尾那条最终必须被合成（旧实现永不播）
+      const tailStart = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${tail.source}-`),
+        { sinceTs: ctx.t0, timeout: 30000 });
+      ctx.check(!!tailStart, "队首轮收尾后，队尾播报仍未被合成（管道被卡死）");
+      const settled = await ctx.settled(45000);
+      ctx.check(!!settled, "未收尾");
+      // ③ 空转的直接表征：收尾后应完全空闲，紧循环则把一个核烧满
+      const cpus = [];
+      for (let i = 0; i < 8; i++) { cpus.push(daemonCpu()); await sleep(150); }
+      const nums = cpus.filter((x) => x != null).sort((a, b) => a - b);
+      const median = nums.length ? nums[Math.floor(nums.length / 2)] : 0;
+      ctx.check(median < 50, `收尾后 daemon CPU 仍居高位 median=${median}%（紧循环空转）`);
       ctx.noBad();
     },
   },
