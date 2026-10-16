@@ -161,7 +161,7 @@ actor PlaybackQueue {
     /// 形象说法：**把桌上所有稿纸全扫到地上**——一声不响，音乐回来（右⌘ 说话同理：你要开口，全场让路）。
     /// 「打断权只归用户快捷键」：右⌘ 说话（speech）、Ctrl+Esc 闭嘴（esc）。
     /// Cmd+D 念译文不走这里——它是 `speakUserInitiated` 的「插队」（只掐在播、不清场）。
-    /// 停止帧 `{type:stop}` 已失效（hook.sh interrupt / ivox quiet 不再打断播报）。
+    /// 停止帧 `{type:stop}` 已失效且无发送方（hook.sh interrupt 摘除、ivox quiet 已删）。
     /// 当场静音 + 清空全部桶（一个喇叭，你快捷键开口全场停）。
     func cancelAll(origin: InterruptSource) async {
         Log.info("打断（来源=\(origin)）：作废全部流式轮次")
@@ -228,7 +228,7 @@ actor PlaybackQueue {
     /// 否则视为已排空、恢复音乐。保证任何路径结束后不留「有活没人干」的挂起。
     /// 管道仍在退出中时多半直接返回（正常收尾的管道自己会恢复音乐）；但**已被取消且无待播**
     /// 的管道按设计不恢复（收尾里的 `!Task.isCancelled`），恢复只能由调用方补——此时若也直接
-    /// 返回，恢复就永远丢了：外部停止哨兵（`hook.sh stop`/`ivox quiet`/pi 发言）恰落在旧管道
+    /// 返回，恢复就永远丢了：当时的外部停止信号（`hook.sh stop`/`ivox quiet`/pi 发言）恰落在旧管道
     /// 退出窗口时必现「音乐卡在暂停」。所以这种情形等它退净（已取消，退出很快）再补恢复。
     private func pumpOrResume() async {
         if let task = currentTask, task.isCancelled, !hasPendingBuckets {

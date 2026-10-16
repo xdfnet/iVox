@@ -9,8 +9,8 @@
 [[ "${CLAUDE_SMART_INTERNAL:-}" == "1" ]] && exit 0
 
 # 必须两个参数：动作（speak|msgdisplay）+ 来源。来源与动作一个都不能猜，宁缺毋滥。
-# 注：interrupt 分支已移除——打断权只归快捷键（右⌘/Cmd+D/Ctrl+Esc）与手动 ivox quiet，
-# 不再经 hook.sh 自动打断。ivox quiet 能力保留在 ivox CLI 侧。
+# 注：interrupt 分支已移除——打断权只归快捷键（右⌘/Cmd+D/Ctrl+Esc）与命令行 `ivox skip`，
+# 不再经 hook.sh 自动打断。（`ivox quiet` 已随停止帧一起删除。）
 if [[ "$#" -lt 2 ]]; then exit 0; fi
 if [[ "$1" == "msgdisplay" ]]; then
   # MessageDisplay：assistant 消息流式显示时按行批触发，delta = 自上一批以来新完成的整行文本。

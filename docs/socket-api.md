@@ -221,18 +221,21 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 
 权限状态由 daemon 进程自查，反映 daemon 自身授权（非调用方终端）。`ivox status` 即此接口的中文渲染。
 
-### 5. 跳过 — 读下一页 / 跳整摞
+### 5. 跳过 — 手动打断三档
 
 请求头，无 body：
 
 ```
 {type:skip,mode:page}    # 读下一页（同 Ctrl+2）：丢掉正在播的那一页剩下的块
 {type:skip,mode:stack}   # 跳整摞（同 Ctrl+1）：丢掉正在播的那一摞（含其后各页）
+{type:skip,mode:all}     # 全场闭嘴（同 Ctrl+Esc）：停当前 + 清空排队 + 恢复音乐
 ```
 
 无回复。`mode` 缺省按 `page`。**头的尾随 `\n` 是必需的路由依据**——没有它，服务端会把整条请求当传统整段播报体交给 `handleTTS`（`{type:stop}` 正踩在这条边界上：它现在发无换行裸串，走的就是 handleTTS 分支）。
 
-给热键一个命令行对应物（`ivox skip` / `ivox skip --stack`），供自检脚本、压测、远程排查使用；热键路径本身不经过这里。两个 mode 落到的是 `PlaybackQueue.skipCurrentPage` / `skipCurrentBucket`，与热键完全同一条代码路径。
+给热键一个命令行对应物（`ivox skip --page` / `--stack` / `--all`），供自检脚本、压测、远程排查使用；热键路径本身不经过这里。三个 mode 落到的是 `PlaybackQueue.skipCurrentPage` / `skipCurrentBucket` / `cancelAll + resumeIfIdle`，与热键完全同一条代码路径——`all` 那档是两行不是一行（Ctrl+Esc 打断后要立刻恢复音乐），少了 `resumeIfIdle` 行为就与热键不一致。
+
+> `{type:stop}` 停止帧（旧的 `ivox quiet`）已删除，服务端收到只记日志忽略——那一支保留作护栏，防止旧脚本发来的停止帧落进正文分支被念出来。
 
 翻页的靶心是块上的 `pageID`（Claude 的 `message_id`）；非 Claude 路径没有页号，`mode:page` 会退化成"只掐在播"。
 
@@ -248,9 +251,10 @@ ivox listen < 录音.wav                     # stdin
 ivox listen -f 录音.wav                    # 文件
 ivox listen -l en < english.wav           # 英文
 
-# 跳过（对应热键）
-ivox skip                                  # 读下一页（Ctrl+2）
+# 打断三档（三个参数对应三个快捷键，缺省 --page）
+ivox skip --page                           # 读下一页（Ctrl+2）
 ivox skip --stack                          # 跳过整摞（Ctrl+1）
+ivox skip --all                            # 全场闭嘴（Ctrl+Esc）
 ```
 
 ## 错误处理

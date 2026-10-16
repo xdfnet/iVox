@@ -67,9 +67,11 @@ async function speak(source, text) {
   s.end();
 }
 
-async function quiet() {
+// 全场打断：停当前 + 清空排队（同 Ctrl+Esc），命令是 `ivox skip --all`。
+// 历史的 `ivox quiet`（发 `{type:stop}`）已随该帧一起退役，改用 `{type:skip,mode:all}`。
+async function skipAll() {
   const s = await conn();
-  s.end("{type:stop}");
+  s.end("{type:skip,mode:all}\n");
 }
 
 // 流式连接句柄。登记到 openSocks，用例结束统一清理，避免连接泄漏压垮 daemon。
@@ -249,7 +251,7 @@ async function runCase(c) {
     source, turn, log, t0,
     sleep,
     speak: (text) => speak(source, text),
-    quiet,
+    skipAll,
     openStream: (t = turn) => openStream(t, source),
     ttsPcm,
     health,
@@ -284,9 +286,11 @@ async function runCase(c) {
   // 打出证据——只降级失败，通过的不动；不掩盖，也别把它当产品缺陷。
   //（普通播报已不再 bargeIn，因此不再作废用例的流式轮次；保留此项是因为它仍会插播。）
   const foreign = log.grep(new RegExp(`队列入队: source=(?!c\\d\\d${runId})`), t0);
-  // 外部停止哨兵（别的会话的 `hook.sh interrupt` / `ivox quiet`）会在用例播到一半时
+  // 外部全场打断（别的终端跑 `ivox skip --all` / 手动按 Ctrl+Esc）会在用例播到一半时
   // 掐掉本轮，尾音/收尾/恢复类断言必然失真——同样降级为 skip 并给出证据。
-  const sentinel = log.grep(/收到停止播放指令/, t0);
+  // 判据是「跳过请求」而非旧的「收到停止播放指令」：那句文案早在停止帧退役时就没了，
+  // 旧正则从此永不命中（一条沉默的假绿检测，本次一并修掉）。
+  const sentinel = log.grep(/跳过请求: mode=/, t0);
   const hit = foreign[0] ?? sentinel[0];
   return { name: c.name, advisory: !!c.advisory, needsAudio: !!c.needsAudio, failures: ctx.failures,
            interfered: hit ? hit.msg : "", ms: nowMs() - t0,
@@ -443,8 +447,8 @@ const cases = [
   // ───────── E6：并行流的 {cancel} 不拖垮真正在跑的轮（pi 会开两条流，其中一条刚开就被 {cancel}）─────────
   // 回归：曾把「见过」当「被顶掉」——并行那条空流一取消，就把真正在跑的这条判成过期旧轮，
   // 后续正文全部静默丢弃（整轮没声音，日志里连「队列状态」都没有）。
-  // 注：客户端不再在同一步发停止哨兵（pi 开新轮前的清场改由首帧 beginTurn 的 bargeIn 承担）——
-  // 哨兵如今是「你开口 = 全场作废」，会连在跑的轮一起作废，故不适用于本用例（见 E7）。
+  // 注：客户端不再在同一步发全场打断（pi 开新轮前的清场改由首帧 beginTurn 的 bargeIn 承担）——
+  // 全场打断如今是「你开口 = 全场作废」，会连在跑的轮一起作废，故不适用于本用例（见 E7）。
   {
     name: "E6-parallel-cancel-keeps-live-turn",
     async run(ctx) {
@@ -469,25 +473,25 @@ const cases = [
     },
   },
 
-  // ───────── E7：停止哨兵作废全部流式轮（你开口 = 全场闭嘴）─────────
-  // 语义：哨兵（hook.sh stop / ivox quiet）不只停当场，还作废此前所有流式轮。
+  // ───────── E7：全场打断作废全部流式轮（你开口 = 全场闭嘴）─────────
+  // 语义：全场打断（`ivox skip --all`，同 Ctrl+Esc）不只停当场，还作废此前所有流式轮。
   // 场景：在 Claude 里提交 prompt 时，pi 手里正在生成的那一轮后续增量不该再开口
   //（否则「我说话电脑就不说了」不成立——当场静音了，下一句生成出来照样念）。
   {
     name: "E7-stop-sentinel-buries-live-turn",
     async run(ctx) {
       const st = await ctx.openStream(ctx.turn);
-      st.sendText("哨兵之前这句照常开始合成，用作对照。");
-      await sleep(1200);                 // 让对照句确实已进模型（其「合成开始」落在哨兵之前）
-      await ctx.quiet();                 // 你开口
+      st.sendText("全场打断之前这句照常开始合成，用作对照。");
+      await sleep(1200);                 // 让对照句确实已进模型（其「合成开始」落在打断之前）
+      await ctx.skipAll();                 // 你开口
       await sleep(200);
       const tAfter = nowMs();
-      st.sendText("哨兵之后这整句都不该被念出来：它属于已被作废的那一轮。");
+      st.sendText("全场打断之后这整句都不该被念出来：它属于已被作废的那一轮。");
       st.endFrame();                     // 正常收尾（{end} 对已作废轮是空操作）
       const settled = await ctx.settled(40000);
       ctx.check(!!settled, "未收尾");
       const late = ctx.log.grep(new RegExp(`TTS 合成开始 \\[${ctx.source}-`), tAfter);
-      ctx.check(late.length === 0, `哨兵后该轮不该再有合成开始，实得 ${late.length} 条`);
+      ctx.check(late.length === 0, `全场打断后该轮不该再有合成开始，实得 ${late.length} 条`);
       const h = await ctx.health();
       ctx.check(h && h.queued === 0 && h.playing === false, `未收敛空闲: ${JSON.stringify(h)}`);
       ctx.noBad();
@@ -546,7 +550,7 @@ const cases = [
         st.sendText(longText.replace("第N轮", `第${i}轮`));
         await sleep(i === 4 ? 0 : 250);
         if (i === 4) {
-          await ctx.quiet();       // 中间插一次全局停止
+          await ctx.skipAll();       // 中间插一次全局停止
           await sleep(250);
         }
         // 真实客户端开新轮前会关掉旧连接；最后一轮发 {end}，其余直接销毁
@@ -576,7 +580,7 @@ const cases = [
         await sleep(180);
         st.destroy();
       }
-      await ctx.quiet();
+      await ctx.skipAll();
       await sleep(500);
       const tSpeak = nowMs();
       await ctx.speak("打断已结束，现在验证队列还能正常播报这一整句话。");

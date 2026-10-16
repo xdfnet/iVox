@@ -352,7 +352,7 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-**打断权只归 ivox 快捷键**（right⌘ 说话 / Cmd+D 插队译文 / 手动三档：Ctrl+2 读下一页 · Ctrl+1 跳整摞 · Ctrl+Esc 掀桌）；`hook.sh` **不再有 interrupt 分支**（`ivox quiet` 手动能力保留在 ivox CLI），`UserPromptSubmit` 亦不挂。
+**打断权只归 ivox 快捷键**（right⌘ 说话 / Cmd+D 插队译文 / 手动三档：Ctrl+2 读下一页 · Ctrl+1 跳整摞 · Ctrl+Esc 掀桌）；`hook.sh` **不再有 interrupt 分支**（手动打断在 `ivox skip` 三档：`--page` 读下一页 / `--stack` 跳整摞 / `--all` 全场闭嘴），`UserPromptSubmit` 亦不挂。
 
 | 工具 | 配置/挂载 | 回复播报 |
 |------|----------|----------|

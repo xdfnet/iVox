@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 
 ```bash
 ivox speak "你好"           # 手动播报
-ivox skip                   # 读下一页（同 Ctrl+2）；--stack = 跳过整摞（同 Ctrl+1）
+ivox skip --page            # 读下一页（Ctrl+2，可省）；--stack 跳整摞（Ctrl+1）；--all 全场闭嘴（Ctrl+Esc）
 ivox translate "hello"      # 划词翻译（--selection 取当前选中文本，--json 结构化输出）
 ivox voice list             # 列出音色
 ivox status                 # 版本、各功能健康状态、权限、模型/音色文件体检

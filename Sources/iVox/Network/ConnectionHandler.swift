@@ -240,14 +240,16 @@ actor ConnectionHandler {
         defer { Darwin.close(fd) }
         guard let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
               !text.isEmpty else { return }
-        // 停止帧 `{type:stop,source:claude}`：识别是哪个来源（Claude/Codex 的提交、
-        // 或手动 ivox quiet --source）打断的播报。无 source 记成「来源未知」。
+        // 停止帧 `{type:stop,source:x}`：**已无发送方**（hook.sh interrupt 摘除、ivox quiet
+        // 已删除），留这一支是护栏不是死代码——它无换行、走的就是 handleTTS 的正文分支，
+        // 少了它，旧脚本或存量 hook 发来的停止帧会被 cleanText 洗一遍**当正文念出来**
+        //（"type:stop source claude"），比静默失效更难查。
         if text.hasPrefix("{type:stop"), let end = text.firstIndex(of: "}") {
             let inner = String(text[text.index(text.startIndex, offsetBy: 1)..<end])
             let source = inner.split(separator: ",")
                 .first { $0.hasPrefix("source:") }
                 .map { String($0.dropFirst("source:".count)) }
-            Log.info("收到停止帧，忽略：打断权已收紧为快捷键（右⌘ 说话 / Ctrl+Esc 闭嘴 / Cmd+D 译文）(source=\(source ?? "未知") fd=\(fd) bytes=\(data.count))")
+            Log.info("收到停止帧，忽略：打断权只归快捷键与 ivox skip（右⌘ 说话 / Ctrl+Esc 闭嘴 / Cmd+D 译文）(source=\(source ?? "未知") fd=\(fd) bytes=\(data.count))")
             return
         }
 
@@ -293,16 +295,21 @@ actor ConnectionHandler {
         }
     }
 
-    /// 跳过请求 `{type:skip,mode:page|stack}`：`ivox skip` 与 `ivox skip --stack`，
-    /// 走的是和 Ctrl+2 / Ctrl+1 完全相同的那两个方法（热键只多一层按键识别）。
+    /// 跳过请求 `{type:skip,mode:page|stack|all}`：手动打断三档的命令行入口（`ivox skip`
+    /// 及其 `--stack` / `--all`），落到的就是 Ctrl+2 / Ctrl+1 / Ctrl+Esc 分派的那几个方法。
+    /// `all` 是两行不是一行——Ctrl+Esc 那档打断后要立刻恢复音乐，命令行版少一行就与热键行为不一致。
     private nonisolated func handleSkip(fd: Int32, header: String) {
         defer { Darwin.close(fd) }
         let mode = parseMetaKV(header)["mode"] ?? "page"
         Log.info("跳过请求: mode=\(mode)")
         Task {
-            if mode == "stack" {
+            switch mode {
+            case "all":
+                await queue.cancelAll(origin: .esc)
+                await queue.resumeIfIdle()
+            case "stack":
                 await queue.skipCurrentBucket(.skip)
-            } else {
+            default:
                 await queue.skipCurrentPage(.skipPage)
             }
         }
