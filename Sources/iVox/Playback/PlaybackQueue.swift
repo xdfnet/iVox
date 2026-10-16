@@ -345,8 +345,16 @@ actor PlaybackQueue {
                     _ = takeFrontBucket()
                     continue
                 }
-                // 空但 ended=false：轮还在流式生成、块还没到，不能当空壳弹掉——anyTurnInFlight 仍 true，等待
-                guard let job = frontBucket?.jobs.first else { continue }
+                // 空但 ended=false：轮还在流式生成、块还没到，不能当空壳弹掉。
+                // 这里必须**挂起**等，不能 `continue` 重问：后面若已排了别的桶，上面的
+                // `!hasPendingBuckets` 分支就进不去，重问就成了没有挂起点的紧循环——producer
+                // 独占本 actor 且永不释放，enqueue/endTurn/cancelAll 一律被饿死（连快捷键打断都
+                // 进不来），播报就此永久瘫痪，外加烧满一核。凑齐条件：队首轮已播空正等下一批块
+                //（常态）+ 其后已排了别人的话（多 agent 交错）。
+                guard let job = frontBucket?.jobs.first else {
+                    await waitForJobs()
+                    continue
+                }
                 // 队首桶空则前移到下一桶：这就是「播全播完」——旧桶播完才进新轮。
                 // 无需再按 currentTurn 门控跳块（旧实现是单数组 + 单值轮导致新旧残块互删的根源）。
                 let batchID = String(UUID().uuidString.prefix(6))
