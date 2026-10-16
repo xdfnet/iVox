@@ -26,7 +26,7 @@ private enum MediaRemoteBridge {
     // 曾在这里加过 `MRMediaRemoteGetNowPlayingApplicationIsPlaying`（"现在是否有媒体在播"）——
     // 它是**回调式**私有 API，在 Swift 6 并发下连踩两坑：`@convention(block)` 参数被视作
     // sending（区域隔离报错），绕开后又是闭包逃逸（运行期 `@noescape ... has escaped`，
-    // daemon 崩循环）。已整体撤掉。
+    // daemon 崩循环）。已整体撤掉 —— **别再往这条路走**。
 
     enum Command: UInt32 {
         case play = 0, pause = 1, toggle = 2, stop = 3, nextTrack = 4, previousTrack = 5
@@ -66,12 +66,12 @@ private enum MediaKey: Int32 {
 /// 媒体控制器：通过 MediaRemote / CGEvent 直接控制系统媒体。
 /// （早期还有一套「远程模式」——`baseURL` 非空时改走 HTTP 调外部服务；从未被调用，已删除。）
 ///
-/// **借路要有借有还**：播报 / 采集需要安静，就"借路"（暂停）一下，完事"还路"（恢复）。
-/// 关键是**只还自己借的账**——你本来就手动暂停着音乐，iVox 播报完不该把它放起来。
-/// `struct` 是值类型、存不住这个状态，故为 `actor`。
+/// **本质是「让路」**：播报 / 采集要出声，音乐就让开；说完则继续 —— 不是"控制你的播放器"。
+/// 语义是**「说完继续」而非「恢复原状」**——你若本来就把音乐暂停着，播报结束会把它放起来。
+/// 类需要记住"这次暂停是不是我们发的"，值类型存不住，故为 `actor`。
 actor MediaController {
     private let config: MediaControlConfig
-    /// 这条路当前是不是**我**暂停的（= 暂停之前它确实在播）。还路后复位。
+    /// 是否处于「我们发起的暂停」状态（恢复后复位）。
     private var suspendedByUs = false
 
     init(config: MediaControlConfig) {
@@ -80,12 +80,10 @@ actor MediaController {
 
     // MARK: - 调度
 
-    /// 借路：暂停音乐（TTS 播报前 / 开始录音时调用）。
-    ///
-    /// ⚠️ **已知局限**：这里**无条件记账**（= 播完就还路），因为当前**无法区分**"这条路本来就没人"
-    /// 与"是我让它停的"——你若手动暂停着音乐，iVox 播报完会把它放起来。要精确判断得查系统播放
-    /// 状态，而 MediaRemote 那套是回调式私有 API、在 Swift 6 下已连踩两坑（见 `MediaRemoteBridge`
-    /// 里的注释）；更靠谱的替代是 CoreAudio 的「进程是否在输出音频」（macOS 14.2+，公开 API）。
+    /// 让路：暂停音乐（TTS 播报前 / 开始录音时调用）；播报完由 `resume()` 让它继续。
+    /// 语义是**「说完继续」而非「恢复原状」**：本来暂停着的音乐也会被放起来——让路预设了"对方在走"。
+    /// （试过更"精确"的判据——暂停前先查是否真有媒体在播：MediaRemote 那条私有 API 在 Swift 6 下
+    /// 会崩，已撤，见 `MediaRemoteBridge` 的注释。）
     func pause() async {
         Log.info("媒体控制: 暂停")
         if case .failure(let err) = await Self.pause() {
@@ -95,7 +93,7 @@ actor MediaController {
         suspendedByUs = true   // 无条件记账；等有了可靠的"原本在不在播"，再收紧成"原本在播才记"
     }
 
-    /// 还路：恢复音乐（TTS 播报完成后调用）。**只还自己借的账**。
+    /// 继续：恢复音乐（TTS 播报完成后调用）。只对「我们发过的暂停」生效。
     func resume() async {
         guard suspendedByUs else {
             Log.debug("媒体控制: 无需恢复（这次暂停不是我们借的）")
