@@ -1,7 +1,9 @@
 import Foundation
 import iVoxKit
 
-// 播报队列：单队列 + 连续播放管道，管轮次、打断与音乐保活。串行调度见 docs/playback-queue.md。
+// 播报队列：单队列 + 连续播放管道，管轮次、分页、打断与字幕。
+// **不碰背景音乐**——暂停/恢复只归语音输入（录音时音乐会串进麦克风、干扰识别）。
+// 播报借还音乐那套逻辑已整条删除：不借就不会乱。串行调度见 docs/playback-queue.md。
 
 /// 一条待播报的文本。
 struct PlaybackJob: Sendable {
@@ -31,8 +33,8 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     case speech
     /// Cmd+D 划词翻译（用户主动朗读，speakUserInitiated）
     case dict
-    /// Ctrl+Esc 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，
-    /// 静音播报后由调用方恢复音乐（语义同停止帧，不走右⌘ 的录音暂停）
+    /// Ctrl+Esc 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，静音播报即可。
+    /// **不碰背景音乐**——借还音乐是右⌘ 录音那条的事（见文件头）
     case esc
     /// Ctrl+1 跳过当前桶：丢正在播的这一**摞**（一次回复，连同后来的页），从下一桶接着播。
     /// 与 `.esc` 的分工——那个全场闭嘴，这个只跳当前、后面的照播。
@@ -110,8 +112,9 @@ actor PlaybackQueue {
     /// B 正在念的那一摞（实测："多个来源交错时互相盖"），而"盖上"要等用户发下一条消息才发生（太晚）。
     /// 现在每摞由自己的收尾信号精确收掉：`finishTurn`（Stop）→ 兜底 `sealIdleTurns`（空闲宽限）。
     /// 空闲宽限期（秒）：**声音停下之后**再等这么久没新内容，就判「这一摞说完了」。
-    /// 取值理由：一轮里页与页之间夹工具调用，间隔是秒级——太长会让「说完音乐不回来」的体感变差，
-    /// 太短会在页间来回切音乐（恢复→掐掉→再恢复）。2 秒是飞哥定的手感。
+    /// 它只管**盖章**（桶能否前移、字幕收不收）——**不再管音乐**：播报已完全不碰背景音乐
+    /// （暂停/恢复只归语音输入），所以这里等多久都不会造成"音乐闪烁"。
+    /// 取值理由：一轮里页与页之间夹工具调用，间隔是秒级；太长会让字幕迟迟不收。2 秒是飞哥定的手感。
     private static let idleGraceSeconds: Double = 2
     /// 等「声音播完」的上限：设备卡死时别把宽限的起点也一起带死
     ///（宁可早一点恢复音乐，也不能再出现"永远不还"）。
@@ -150,7 +153,9 @@ actor PlaybackQueue {
         buckets.removeAll()
         player.cancelPendingPlayback()
         player.stop()
-        Task { await media.resume() }   // 退出时确保 music 恢复，避免 daemon 重启后卡暂停
+        // 退出时的**安全网**，与"谁借的"无关：播报已不碰音乐（暂停/恢复只归语音输入），
+        // 这里只为兜住"任何原因留下的暂停"——例如正在录音时 daemon 重启，不还就再也出不来。
+        Task { await media.resume() }
     }
 
     /// 注入播报字幕接收端（`nil` = 关闭字幕）。
@@ -171,7 +176,7 @@ actor PlaybackQueue {
     var isProcessing: Bool { currentTask != nil }
 
     /// 取消所有播放（正在播的和队列中等待的），并作废全部流式轮次。
-    /// 形象说法：**把桌上所有稿纸全扫到地上**——一声不响，音乐回来（右⌘ 说话同理：你要开口，全场让路）。
+    /// 形象说法：**把桌上所有稿纸全扫到地上**——一声不响（背景音乐不归它管）。
     /// 「打断权只归用户快捷键」：右⌘ 说话（speech）、Ctrl+Esc 闭嘴（esc）。
     /// Cmd+D 念译文不走这里——它是 `speakUserInitiated` 的「插队」（只掐在播、不清场）。
     /// 停止帧 `{type:stop}` 已失效且无发送方（hook.sh interrupt 摘除、ivox quiet 已删）。
@@ -181,8 +186,7 @@ actor PlaybackQueue {
         lastInterrupt = origin
         buryAllTurns()
         await bargeIn(origin)
-        // 不在这里恢复/暂停音乐——那是调用方的职责（语音输入要暂停、停止帧打断要恢复），
-        // cancelAll 只管打断清场。要恢复的调用方在自己侧调 resumeIfIdle()。
+        // **不碰背景音乐**：cancelAll 只管打断清场，全项目只有语音输入借还音乐（见文件头）。
     }
 
     /// 用户主动要求开口（Cmd+D 念译文）：**插队**——掐掉正在播的那一句让译文立刻响，
@@ -203,17 +207,9 @@ actor PlaybackQueue {
         if currentTask == nil { startPipeline() }
     }
 
-    /// 空闲时恢复音乐（由外部调用：停止帧打断后、语音输入结束后）。
-    /// cancelAll 不再碰音乐，恢复责任归调用它的这一侧；被取消的管道还没退净时
-    /// 先等它退净再恢复，否则打断在播的一句后音乐会卡在暂停（历史修过两次）。
-    func resumeIfIdle() async {
-        guard !hasPendingBuckets else { return }
-        if let task = currentTask, task.isCancelled {
-            await awaitCurrentPipelineFinished()   // 被打断的管道退净（很快），currentTask 才归 nil
-        }
-        guard currentTask == nil else { return }
-        await media.resume()
-    }
+    // 这里原本有 `resumeIfIdle()`（"队列空了就恢复音乐"）。**已删**：播报不再借音乐，也就不需要"还"。
+    // 它的三个调用点同步收敛——Ctrl+Esc 与 `ivox skip --all` 不再碰音乐；语音输入松手那条
+    // 改为直接 `media.resume()`（音乐是它自己借的，自己还，不必再等播报队列空）。
 
     /// 流式轮次开始（首帧）：登记轮次并标记仍在生成（句间不恢复音乐）。
     /// **不再打断旧轮**——打断权只归用户快捷键（right⌘/Cmd+D/Ctrl+Esc）；新轮在队尾排队。
@@ -234,16 +230,15 @@ actor PlaybackQueue {
             buckets[idx].ended = true
         }
         signalJobs()
-        await pumpOrResume()
+        await pumpOrSettle()
     }
 
     /// 收敛兜底：还有待播 job 却没有管道在跑（顶替时序可能留下这种孤儿态）就补起管道，
-    /// 否则视为已排空、恢复音乐。保证任何路径结束后不留「有活没人干」的挂起。
-    /// 管道仍在退出中时多半直接返回（正常收尾的管道自己会恢复音乐）；但**已被取消且无待播**
-    /// 的管道按设计不恢复（收尾里的 `!Task.isCancelled`），恢复只能由调用方补——此时若也直接
-    /// 返回，恢复就永远丢了：当时的外部停止信号（`hook.sh stop`/`ivox quiet`/pi 发言）恰落在旧管道
-    /// 退出窗口时必现「音乐卡在暂停」。所以这种情形等它退净（已取消，退出很快）再补恢复。
-    private func pumpOrResume() async {
+    /// 否则等旧管道退净、按需收字幕。保证任何路径结束后不留「有活没人干」的挂起。
+    /// （原名 `pumpOrResume`——那一步"恢复音乐"随播报不再借音乐而删除，故名同步改掉。）
+    /// 已被取消且无待播的管道要**等它退净**（已取消，退出很快）再往下走：否则 `currentTask`
+    /// 还非 nil，下面那一支进不去，字幕就永远收不掉。
+    private func pumpOrSettle() async {
         if let task = currentTask, task.isCancelled, !hasPendingBuckets {
             await awaitCurrentPipelineFinished()
         }
@@ -253,8 +248,10 @@ actor PlaybackQueue {
             // 队列真的空了：字幕收起。**跳句/跳桶把队列跳空时也走这里**——那条路径没有"下一句
             // 广播"来顶替，不在这里收就会永久挂在屏幕上（跟着播放改时漏过）。还有流动中的轮
             // （未收尾）则留着，它后面还会念。
-            if !anyTurnInFlight { onCaption?(nil) }
-            await media.resume()
+            if !anyTurnInFlight {
+                onCaption?(nil)
+                Log.info("播报收尾: 队列已空，字幕收起")
+            }
         }
     }
 
@@ -270,7 +267,7 @@ actor PlaybackQueue {
         bury(id)
         if turnStack.last == id { turnStack.removeLast() }
         signalJobs()
-        await pumpOrResume()   // 还有待播则补起管道，否则恢复音乐（统一收敛点）
+        await pumpOrSettle()   // 还有待播则补起管道，否则恢复音乐（统一收敛点）
     }
 
     /// 跳过当前桶（Ctrl+1）：丢掉正在播的**这一轮**（连同其后分块），从下一桶接着播。
@@ -297,7 +294,7 @@ actor PlaybackQueue {
             buckets.removeFirst()   // 无轮次号的普通播报：只丢队首这一桶
         }
         signalJobs()
-        await pumpOrResume()   // 有下一桶则起管道接着播；没有则收尾并恢复音乐
+        await pumpOrSettle()   // 有下一桶则起管道接着播；没有则收尾并恢复音乐
     }
 
     /// 读下一页（Ctrl+2）：掐掉正在念的这一块，并丢掉桶里**属于当前页**的剩余块，从下一页接着念。
@@ -326,7 +323,7 @@ actor PlaybackQueue {
         // 只有这一行能区分"靶心没对上（page 空 / 页号不匹配）"和"确实翻过去了"
         Log.info("本页剩余块已丢: page=\(page ?? "-") 块=\(dropped)")
         signalJobs()
-        await pumpOrResume()   // 还有块则接着播；若这摞正等下一批字则原地等
+        await pumpOrSettle()   // 还有块则接着播；若这摞正等下一批字则原地等
     }
 
     /// 掐掉「正在播的这一句/这一轮」：作废管道代号 + 取消在播 + 取消已排队合成与音频。
@@ -483,7 +480,7 @@ actor PlaybackQueue {
         Log.debug("队列状态: pending=\(pendingCount) processing=\(currentTask != nil) group=\(group)")
         // 有管道则 while 自动消费新 job；无则新起。**必须查 `hasPendingBuckets`**：本方法不像
         // `enqueue` 那样在最前面挡掉空入队，所以可能一次都没加 job——光看 `currentTask == nil`
-        // 会起一条空管道，它入口就 `media.pause()`，随即发现无事可做收尾再 resume：音乐平白顿一下。
+        // 会起一条空管道，它照样要跑一遍引擎就绪与收尾，纯属空转。
         if currentTask == nil, hasPendingBuckets { startPipeline() }
     }
 
@@ -510,7 +507,9 @@ actor PlaybackQueue {
     private func processNext(seq: UInt) async {
         generation &+= 1
         let gen = generation
-        await media.pause()
+        // 这里原本是 `await media.pause()`（播报"让路"、借走背景音乐）。**已删**：借还背景音乐
+        // 只留给语音输入——录音才真的需要安静（音乐会串进麦克风、干扰识别），播报不碰它。
+        // 全项目现在只有 `SpeechInputService` 调 pause/resume。
 
         // PCM 管道：unbounded 只承接「预取门控允许的提前量」（领先一两句），
         // 真正的容量上移到句间 awaitPrefetchCapacity 判定，不会无限堆积。
@@ -637,8 +636,10 @@ actor PlaybackQueue {
         }
         // 还有流动中的轮（未 endTurn）时不恢复音乐——该轮分块可能马上到
         if !hasPendingBuckets, gen == generation, !anyTurnInFlight, !Task.isCancelled {
-            onCaption?(nil)   // 整队播完：字幕收起
-            await media.resume()
+            onCaption?(nil)
+            // 收尾标记：字幕收起即队列真收尾。**这条日志是自检脚本判定"收尾了"的锚点**——
+            // 原先它借 `媒体控制: 恢复` 当锚点，播报不再碰音乐后那条就不存在了。
+            Log.info("播报收尾: 队列已空，字幕收起")
         }
     }
 
@@ -672,7 +673,7 @@ actor PlaybackQueue {
         // `signalJobs()` 会立刻把它唤醒。
         //
         // 宽限从**声音停下**起算：最后一块被取走去合成时它还在响，此刻就开始数的话，
-        // 音乐会在这一句还没念完时就回来、把尾音盖掉（体感是"没念完就切走了"）。
+        // 会在这一句还没念完时就判"说完"、把字幕收掉（体感是"没念完就切走了"）。
         await waitUntilSilent()
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let waiter = JobWaiter(continuation)
@@ -708,7 +709,7 @@ actor PlaybackQueue {
     /// 空闲宽限到点：把还挂着的桶一并盖上（= 视为「这一摞说完了」）。
     /// 与「新 turn 盖上」的分工：同样标 `ended`，但**不立墓碑**——这只是猜"说完了"、不是判定该轮已死；
     /// 它之后若又来页，`enqueue*` 会把 `ended` 揭回 false 继续播。标完 `anyTurnInFlight` 自然归 false，
-    /// 收尾条件成立 → 恢复音乐 + 收字幕。
+    /// 收尾条件成立 → 收字幕（**不还音乐**：播报已完全不碰背景音乐）。
     private func sealIdleTurns() {
         let ids = buckets.filter { $0.turnID != nil && !$0.ended }.compactMap(\.turnID)
         guard !ids.isEmpty else { return }

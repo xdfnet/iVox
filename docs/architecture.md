@@ -33,7 +33,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
               │   └─ AudioPlayer   │  AVAudioEngine 播放
               │         │          │
               │  MediaController   │  MRMediaRemoteSendCommand
-              │  (暂停/恢复音乐)    │
+              │  (只给麦克风让路)   │
               └─────────────────────┘
 ```
 
@@ -51,7 +51,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
 | 媒体控制 | `Sources/iVox/MediaControl/` | MediaHTTPServer、MediaController |
 | （基础设施） | `HotKey/` `Network/` `Daemon/` `Commands/` `Utilities/` | GlobalKeyTap、SocketServer、Daemon |
 
-六个能力域**彼此平级**——运行时互相协作（播报会暂停音乐、语音输入会打断播报、划词翻译借播报念译文），但代码上无主从，各占一个目录。基础设施跨域共用，不归任何能力域。
+六个能力域**彼此平级**——运行时互相协作（语音输入会打断播报并给麦克风让出背景音乐、划词翻译借播报念译文），但代码上无主从，各占一个目录。基础设施跨域共用，不归任何能力域。
 
 下面按子系统逐个说明。
 
@@ -132,7 +132,7 @@ Daemon (actor)
 - **连续播放管道**：`processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，句间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
 - `enqueue` **按轮分桶**追加到队列尾部，同 `turnID` 分块并入同桶顺序 append；新 turn 在队尾追加新桶**不打断**在播旧轮；**无 turn 的普通播报（hook.sh / `ivox speak`）同排队**。`processNext` 播完队首桶才前移 = 「按轮排队、播全播完」
 - **过期轮次静默丢弃**：`turnID` 已被作废（`deadTurns` 墓碑）的迟到帧/`endTurn` 一律 no-op，不再开口，避免残音反杀
-- 还有未结束的流式轮（`anyTurnInFlight`，由各桶 `ended` 推导）时队列瞬时排空就挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐（先等播放器播空、再挂最多 2 秒空闲宽限，超时由 `sealIdleTurns()` 判说完）；全部轮 `ended` 且排空才收尾
+- 还有未结束的流式轮（`anyTurnInFlight`，由各桶 `ended` 推导）时队列瞬时排空就挂起 `waitForJobs()` 等下一批，不退出、不盖章（先等播放器播空、再挂最多 2 秒空闲宽限，超时由 `sealIdleTurns()` 判说完）；全部轮 `ended` 且排空才收尾
 （播报的术语只有四个——**摞** = 一次回复、**页** = 一个 MessageDisplay、**块** = 内部合成单位、**桶** = 排队单位；完整术语表与「读法」见 `docs/playback-queue.md` 的「概念」一节。）
 
 - **打断权只归用户快捷键**，手动打断三档：**轻** Ctrl+2 读下一页（`skipCurrentPage`：丢掉当前页剩下的块，翻页）、**中** Ctrl+1 跳整摞（`skipCurrentBucket`：丢这一摞的全部桶，下一摞接着播）、**掀桌** Ctrl+Esc 清楚（`cancelAll` 全场清）+ right⌘ 说话；Cmd+D 译文走 `speakUserInitiated` **插队**（只掐在播、译文桶插到队首，其余桶全保留）。**`{type:stop}` 停止帧与流式新轮不再打断**。agent 回复到达的普通播报只排队。旧的 ↓ 跳段已删，「跳」统一走 Ctrl+1 / Ctrl+2
@@ -141,7 +141,7 @@ Daemon (actor)
 - ⚠️ **循环里每个 `continue` 都必须有挂起点**：producer 曾在「队首桶已播空、该轮尚未收尾」时落进一个无 `await` 的 `continue` —— 空转**独占整个 actor**（`enqueue`/`endTurn`/`cancelAll` 全被饿死，连快捷键打断都进不来），播报永久瘫痪外加烧满一核，且 **10 秒读超时的 EOF 兜底也救不回**（`endTurn` 进不了僵死的 actor）。黑盒自检 `E8` 钉住了这个现场
 - `cancelAll()` 清空队列 + 取消全部播放（bargeIn + 清 turn 状态）
 - 等待 TTS 模型就绪后再开始合成
-- 播报前通过 `MediaController` 暂停音乐，播完恢复
+- **不碰背景音乐**：暂停/恢复只归语音输入（录音才真需要安静）。播报曾整套借还音乐，是"音乐反复借还"抖动的根源，已整条删除
 
 ### AudioPlayer — 音频播放
 
@@ -160,8 +160,8 @@ Daemon (actor)
 
 - `MRMediaRemoteSendCommand` 系统框架直接控制媒体播放
 - 播放 / 暂停 / 切歌走 `MRMediaRemoteSendCommand`（免权限）；音量 / 静音 / 方向键 / 锁屏走 `CGEvent`，要「设备控制与数据访问」
-- **本质是「让路」**：播报 / 采集要出声，音乐就让开；说完则继续 —— 它不是"控制你的播放器"。所以只认抖音 / 汽水音乐两个 App（`AudioAppRegistry`），其它播放器一概不碰；`MediaController` 是 `actor`，记着"这次暂停是我们发的"，恢复只对自己发过的暂停生效
-- 语义是**「说完继续」，不是「恢复原状」**：你若本来就把音乐暂停着，播报结束会**把它放起来** —— 这是设计意图（"让路"预设了"对方本来在走"），不是缺陷
+- **只给麦克风让路**（外加 Web 控制台的手动控制）：录音要干净、背景音乐会串进麦克风干扰识别，所以录的时候让它停；说完则继续 —— 它不是"控制你的播放器"。**播报不再经由它**（播报不碰背景音乐）。只认抖音 / 汽水音乐两个 App（`AudioAppRegistry`），其它播放器一概不碰；`MediaController` 是 `actor`，记着"这次暂停是我们发的"，恢复只对自己发过的暂停生效
+- 语义是**「说完继续」，不是「恢复原状」**：你若本来就把音乐暂停着，录音结束会**把它放起来** —— 这是设计意图（"让路"预设了"对方本来在走"），不是缺陷
 - 曾想把判据做得更"精确"（暂停前先查"是否真有媒体在播"）：MediaRemote 那条是**回调式私有 API**，在 Swift 6 下连踩两坑（`@convention(block)` 被判 sending → 区域隔离编译错；绕开后闭包逃逸 → 运行期崩、daemon 崩循环），已撤。也考虑过用"**静音**代替暂停"—— 不成立：系统音量是全局的，会把 iVox 自己的播报一起静掉（macOS 没有按 App 调音量的公开接口）
 
 ### SpeechInput — 语音输入
@@ -171,7 +171,7 @@ Daemon (actor)
 - 键盘监听由 `HotKey/GlobalKeyTap` **独占**（一个 tap 服务多个消费者，见下节），本服务只订阅**修饰键**：右⌘(0x36) / 右⌃(0x3E) 的状态变化由它回调进来
 - **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」——用户快捷键打断之一）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 用户快捷键五个：right⌘ 说话、Cmd+D 插队念译文、Ctrl+Esc 掀桌（只静音播报 + 恢复音乐，不录音）、Ctrl+1 跳整轮、Ctrl+2 读下一页。**pi 新轮与停止帧不再打断**，一律排队
+- 用户快捷键五个：right⌘ 说话、Cmd+D 插队念译文、Ctrl+Esc 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+1 跳整轮、Ctrl+2 读下一页。**pi 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 

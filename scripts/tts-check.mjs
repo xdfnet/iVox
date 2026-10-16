@@ -223,20 +223,22 @@ async function waitReady(log) {
   throw new Error("等待 engine=ready 超时");
 }
 
-// 等播放管道收尾：health 空闲 且 窗口内出现「媒体控制: 恢复」（双条件）
+// 等播放管道收尾：health 空闲 且 窗口内出现「播报收尾」（双条件）
+// 锚点原先是 `媒体控制: 恢复`——播报不再借还背景音乐后那条日志不再出现，
+// 改用 PlaybackQueue 显式打的收尾标记（语义更准：它只在"队列真收尾"时打）。
 async function waitSettled(log, sinceTs, { timeout = 60000 } = {}) {
   const deadline = nowMs() + timeout;
-  let resumedAt = 0;
+  let settledAt = 0;
   while (nowMs() < deadline) {
     await log.poll(sinceTs);
-    if (!resumedAt) {
-      const r = log.grep(/媒体控制: (?:恢复|无需恢复)/, sinceTs).at(-1);
-      if (r) resumedAt = r.ts;
+    if (!settledAt) {
+      const r = log.grep(/播报收尾: 队列已空/, sinceTs).at(-1);
+      if (r) settledAt = r.ts;
     }
     const h = await health();
-    if (resumedAt && h && h.queued === 0 && h.playing === false) {
+    if (settledAt && h && h.queued === 0 && h.playing === false) {
       await sleep(300); // 日志落盘宽限
-      return { resumedAt, h: await health() };
+      return { settledAt, h: await health() };
     }
     await sleep(150);
   }
@@ -586,12 +588,12 @@ const cases = [
       await ctx.speak("打断已结束，现在验证队列还能正常播报这一整句话。");
       const settled = await ctx.settled(60000);
       ctx.check(!!settled, "普通 speak 未收尾");
-      // 完整生命周期有序：暂停 → 该 source 合成开始/完成 → 恢复
-      const pause = ctx.log.grep(/媒体控制: 暂停/, tSpeak)[0];
+      // 播报生命周期仍在：该 source 有新的合成开始 → 之后队列收尾。
+      // （原先还断言「媒体控制: 暂停 → 恢复」这对音乐动作；播报不再借还背景音乐，那对已不存在。）
       const synthStart = ctx.log.grep(new RegExp(`TTS 合成开始 \\[${ctx.source}`), tSpeak)[0];
-      const resume = ctx.log.grep(/媒体控制: 恢复/, tSpeak).at(-1);
-      ctx.check(pause && synthStart, "缺暂停或合成开始");
-      ctx.check(resume && (!synthStart || resume.ts >= synthStart.ts), "恢复早于合成开始（生命周期错乱）");
+      const settle = ctx.log.grep(/播报收尾: 队列已空/, tSpeak).at(-1);
+      ctx.check(!!synthStart, "打断后没有新的合成开始（队列死了）");
+      ctx.check(!!settle && (!synthStart || settle.ts >= synthStart.ts), "收尾早于合成开始（生命周期错乱）");
       // 模型通道也活着
       const r = await ctx.ttsPcm("模型通道活性确认，应该能正常合成出声音。");
       ctx.check(r.pcmBytes > 0 && !r.badLen, "打断后 type:tts 无响应");
@@ -625,10 +627,10 @@ const cases = [
         `合成开始(${starts.length}) 应等于入队块数(${accepted})`);
       ctx.check(dones.length === starts.length, `合成完成(${dones.length}) 应与开始(${starts.length}) 一致`);
       const tDone = dones.at(-1)?.ts ?? 0;
-      const tResume = settled?.resumedAt ?? 0;
-      const gap = (tResume - tDone) / 1000;
+      const tSettled = settled?.settledAt ?? 0;
+      const gap = (tSettled - tDone) / 1000;
       ctx.check(gap >= Math.max(0.8, tail.seconds * 0.5),
-        `恢复过早，尾音可能被掐：合成完→恢复仅 ${gap.toFixed(2)}s，尾句音频 ${tail.seconds.toFixed(2)}s`);
+        `收尾过早，尾音可能被掐：合成完→收尾仅 ${gap.toFixed(2)}s，尾句音频 ${tail.seconds.toFixed(2)}s`);
       const finish = ctx.log.grep(/播放收尾完成/, ctx.t0).at(-1);
       ctx.check(!!finish, "缺「播放收尾完成」日志");
       ctx.noBad();
@@ -665,16 +667,17 @@ async function probeAudio(log) {
   const t0 = nowMs();
   await speak("probe", "设备探测短句。");
   const deadline = nowMs() + 20000;
-  let resumed = false, bad = false;
+  let settled = false, bad = false;
   while (nowMs() < deadline) {
     await log.poll(t0);
     if (log.grep(/AudioEngine 启动失败/, t0).length || log.grep(/drain 超时强制返回/, t0).length) { bad = true; break; }
-    if (log.grep(/媒体控制: 恢复/, t0).length) { resumed = true; break; }
+    // 「播报收尾」出现 = 这条探测短句真的走完了设备（原先借「媒体控制: 恢复」判断，同因失效）
+    if (log.grep(/播报收尾: 队列已空/, t0).length) { settled = true; break; }
     await sleep(200);
   }
   // 等收尾，避免污染后续窗口
   await waitSettled(log, t0, { timeout: 15000 });
-  return resumed && !bad;
+  return settled && !bad;
 }
 
 async function main() {

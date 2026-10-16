@@ -83,8 +83,10 @@ final class SpeechInputService: @unchecked Sendable {
 
             Log.debug("语音输入: right ⌘/⌃ 按下 → 暂停音乐 → 取消 TTS → 开始录音")
             // cancelAll 只管打断、不碰音乐；这里串行 cancelAll → pause，确保先打断、后暂停，
-            // 音乐稳稳停在暂停态（松开后 resumeIfIdle 才恢复）。不写成两个独立 Task 并发，
+            // 音乐稳稳停在暂停态（松开时 `media.resume()` 恢复）。不写成两个独立 Task 并发，
             // 免得音乐暂停与打断谁先谁后不定。
+            // **全项目借还背景音乐只此一家**——录音需要安静（音乐会串进麦克风、干扰识别），
+            // 播报那条链路已完全不碰音乐。
             Task {
                 await queue.cancelAll(origin: .speech)
                 await media.pause()
@@ -108,7 +110,7 @@ final class SpeechInputService: @unchecked Sendable {
             // 紧接着浮窗会转"识别中…"、识别出的文字会落到光标处——已经是双重确认。
             // 只有"按下"那一声在回答你不知道的事：系统什么时候准备好录音。
             Task {
-                await queue.resumeIfIdle()
+                await media.resume()   // 音乐是这条链路自己借的（按下时 pause），自己还
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
             }
         }

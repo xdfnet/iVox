@@ -279,11 +279,9 @@ actor Daemon {
                      .openTerminalCodex, .openTerminalPi, .copyPath:
                     await quickActionsService.handle(hotKey, at: location)
                 case .escInterrupt:
-                    // 手动打断三档之「掀桌」：Ctrl+Esc 用户不想说话，只静音播报 + 恢复音乐。
-                    // 语义同停止帧（不录音），不做右⌘ 那套「打断 + 暂停音乐」——
-                    // 打断后立即 resume，否则用户安静聆听的背景音乐会一直卡在暂停态。
+                    // 手动打断三档之「掀桌」：Ctrl+Esc 用户不想说话，只静音播报。
+                    // **不碰背景音乐**——播报不再借音乐，这里也就没有"还"要补（见 PlaybackQueue 文件头）。
                     await self.queue.cancelAll(origin: .esc)
-                    await self.queue.resumeIfIdle()
                 case .skipBucket:
                     // 手动打断三档之「中」：丢正在播的这一轮（连同其后分块），从下一桶接着播。
                     await self.queue.skipCurrentBucket(.skip)

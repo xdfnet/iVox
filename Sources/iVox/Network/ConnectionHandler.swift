@@ -303,7 +303,7 @@ actor ConnectionHandler {
 
     /// 跳过请求 `{type:skip,mode:page|stack|all}`：手动打断三档的命令行入口（`ivox skip`
     /// 及其 `--stack` / `--all`），落到的就是 Ctrl+2 / Ctrl+1 / Ctrl+Esc 分派的那几个方法。
-    /// `all` 是两行不是一行——Ctrl+Esc 那档打断后要立刻恢复音乐，命令行版少一行就与热键行为不一致。
+    /// 三档都**只碰播报、不碰背景音乐**（音乐只归语音输入），故与热键逐字同路径。
     private nonisolated func handleSkip(fd: Int32, header: String) {
         defer { Darwin.close(fd) }
         let kv = parseMetaKV(header)
@@ -316,7 +316,6 @@ actor ConnectionHandler {
             switch mode {
             case "all":
                 await queue.cancelAll(origin: .esc)
-                await queue.resumeIfIdle()
             case "stack":
                 await queue.skipCurrentBucket(.skip)
             default:
