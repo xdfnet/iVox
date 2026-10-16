@@ -91,7 +91,9 @@ struct OnCommand: ParsableCommand {
         try? FileManager.default.removeItem(atPath: LaunchAgent.plistPath)
         try plist.write(toFile: LaunchAgent.plistPath, atomically: true, encoding: .utf8)
         //    先 enable：`ivox off` 会 disable 本服务，而被 disable 的 job 是 bootstrap 不进去的
-        //    （plist 还在、但 launchd 拒绝加载）。顺序不可调换。
+        //    （plist 还在、但 launchd 拒绝加载）。顺序不可调换——实测被 disable 时报的是
+        //    "Bootstrap failed: 5: Input/output error"，与「job 已加载」**同一个错**，
+        //    没法从报错区分，只能把 enable 放在前面兜住。
         LaunchAgent.launchctl(["enable", LaunchAgent.guiTarget + "/" + LaunchAgent.label])
         // 3) 起或重启：未加载则 bootstrap（首次），已加载则 kickstart -k 重载新二进制。
         //    做成幂等是必须的——`ivox upgrade` 与微信授权后都靠本命令重启，
