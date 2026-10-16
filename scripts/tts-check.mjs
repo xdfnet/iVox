@@ -422,7 +422,7 @@ const cases = [
       await sleep(800);
       const after = ctx.log.grep(new RegExp(`流式入队: .*turn=${ctx.turn}`), cancel ? cancel.ts : ctx.t0);
       ctx.check(after.length === 0, "取消后仍有入队");
-      // 取消轮会恢复音乐，等其收尾避免污染后续用例窗口
+      // 取消轮也要走收尾流程，等它收尾避免污染后续用例窗口
       await ctx.settled(20000);
       ctx.noBad([/drain 超时强制返回/]);
     },

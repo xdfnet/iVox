@@ -36,10 +36,6 @@
                     │   └───────┬───────┘ │
                     │           ▼         │
                     │   ┌───────────────┐ │
-                    │   │ MediaController│ │  ← 暂停音乐
-                    │   └───────┬───────┘ │
-                    │           ▼         │
-                    │   ┌───────────────┐ │
                     │   │  TTSEngine    │ │  ← MLX GPU 推理
                     │   │ synthesize()  │ │     Qwen3-TTS
                     │   └───────┬───────┘ │
@@ -47,10 +43,6 @@
                     │   ┌───────────────┐ │
                     │   │  AudioPlayer  │ │  ← 扬声器输出
                     │   │  scheduleBuffer│ │
-                    │   └───────┬───────┘ │
-                    │           ▼         │
-                    │   ┌───────────────┐ │
-                    │   │ MediaController│ │  ← 恢复音乐
                     │   └───────────────┘ │
                     └─────────────────────┘
 ```
@@ -158,7 +150,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - `actor` 保证线程安全
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
 - **轮次（turn）语义**：队列**按轮分桶排队，播全播完**——同一 `turnID` 的分块并入同桶顺序 append；新 turn 在队尾追加新桶（`enqueue` 的新 turn / `beginTurn`），**不再 bargeIn**；**无 turn 的普通播报（`ivox speak` / hook.sh）也独立桶排队**。`processNext` 播完队首桶才前移。
-- 某桶 `ended`（endTurn 标记）才允许空桶前移；流动中（未 ended）空桶挂起等下一批，不恢复音乐；全部桶都 ended 且空才收尾恢复音乐。**空闲宽限**：先等设备把已排队音频播完，再最多等 2 秒；等不到新块就判「这一摞说完了」——没有下一条 turn 时这是唯一的收尾触发点。
+- 某桶 `ended`（`endTurn` / `Stop` 的 `finishTurn` / 宽限的 `sealIdleTurns` 标记）才允许空桶前移；流动中（未 ended）空桶挂起等下一批，不盖章；全部桶都 ended 且空才收尾（收字幕，打「播报收尾」）。**收尾主力是 `Stop` 钩子**（按 `session_id` 反查出 turn_id 精确收）；**空闲宽限**兜底：先等设备把已排队音频播完，再最多等 2 秒，等不到新块就判「这一摞说完了」。
 - 用户快捷键共 **5 个入口**（手动打断三档 + 插队 + 说话），每个带**来源**标识：
   | 用户动作 | 入口 | 来源 |
   |---------|------|------|
@@ -174,7 +166,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 `Sources/iVox/MediaControl/MediaController.swift`
 
 - **本地直接控制**：`MRMediaRemoteSendCommand`（播放 / 暂停 / 切歌）与 `CGEvent`（音量 / 静音 / 方向键 / 锁屏）
-- 播报前 `pause()` 暂停音乐，播完 `resume()` 恢复
+- **只给麦克风让路**：语音输入按下 `pause()`、松手 `resume()`（录音要干净，音乐会串进麦克风）。**播报不再经由它**——播报不碰背景音乐
 - 不需要媒体控制时可设置 `mediaControl.enabled = false`
 - 只有 play/pause/next/prev 免权限；音量 / 静音 / 方向键 / 锁屏要「设备控制与数据访问」（`MediaHTTPServer` 对这几个动作会做权限校验）
 
@@ -250,7 +242,7 @@ codesign -dv ~/.local/share/ivox/runtime/iVox 2>&1 | grep -E 'flags|Signature|Te
 | 日志空 | daemon 是否在运行？`pgrep -fl "ivox serve"` |
 | 日志有收到但没播放 | 代码签名失效？`codesign -dv ~/.local/share/ivox/runtime/iVox` |
 | 日志有播放但没声音 | AudioPlayer 引擎异常？音量设置？扬声器？ |
-| 播放完音乐没恢复 | 日志里有没有「媒体控制: 恢复」；Web 服务在不在 `curl http://127.0.0.1:8888/health` |
+| 播完字幕不收 / 队列不判收尾 | 日志里有没有「播报收尾: 队列已空，字幕收起」；Web 服务在不在 `curl http://127.0.0.1:8888/health` |
 | Hook 不触发 | settings.json / hooks.json 配置是否正确？Shell 权限？ |
 
 ## 参考

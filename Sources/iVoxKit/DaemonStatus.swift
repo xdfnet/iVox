@@ -8,7 +8,7 @@ public struct DaemonStatus: Codable, Sendable {
     public var version: String
 
     /// 每项功能的健康结论：ok(正常) | off(未启用) | 以 "error:" 开头的异常原因
-    /// 六个能力域，彼此平级——它们之间有协作（播报会暂停音乐、语音输入会打断播报、
+    /// 六个能力域，彼此平级——它们之间有协作（语音输入会打断播报并独占麦克风、
     /// 划词翻译借播报念译文…），但没有主从，所以这里也是六项并列。
     public struct Features: Codable, Sendable {
         public var playback: String

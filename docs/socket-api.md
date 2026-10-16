@@ -81,7 +81,7 @@ L<UTF-8 字节数 N>\n   ← 帧头：大写 L + 纯 ASCII 十进制字节数 + 
 
 ```
 {type:stream,source:pi,turn:<唯一id>}   首帧：开流（声明来源/音色/轮次）
-{end}                                    结束帧：flush 残尾并放开音乐保活
+{end}                                    结束帧：flush 残尾并结束该轮保活（允许空桶前移）
 {cancel} / {cancel:<turn>}               取消帧（用户中断）
 ```
 
@@ -94,7 +94,7 @@ L<UTF-8 字节数 N>\n   ← 帧头：大写 L + 纯 ASCII 十进制字节数 + 
 - 客户端**只转发原文增量，不要自己切句/清洗**。切句（`splitSentences`）与降噪（`cleanText`）真源只在服务端：按句末/段落边界（`。！？!?…；;` 及换行；不含英文 `.`，以免切碎小数/缩写）、且保证吐出前缀的代码围栏（```` ``` ````）自身配平后才抽出整段清洗，避免念出 Markdown/代码残片。
 - 过短句块（「好的。」「明白。」）不立即开播：服务端 `StreamBuffer` 有最小 flush 颗粒（`minFlushChars`=24 字），边界只标记、攒够长度才在最近边界一次吐出（常含多句）；残尾由 `{end}`/EOF 兜底全播。客户端无需关心，照常逐 delta 转发即可。
 - `turn` 必填且一轮内不变。**新 turn 不打断旧 turn**——按到达序排入独立桶，播完前桶才接；同一 turn 的帧顺序追加。
-- turn 未收到 `{end}` 前，句间队列瞬时排空也不恢复音乐，避免反复 pause/resume。
+- turn 未收到 `{end}` 前，句间队列瞬时排空也不判收尾（不盖章）、不退管道，继续等下一批块。
 - 服务端**保证同一连接内按帧序执行**（首帧 → 各正文帧 → `{end}`/`{cancel}`，内部用 `StreamOpChain` 串成一链）。顺序是协议语义的一部分：`{end}` 之后该 turn 不再有帧可关，若内部执行乱序（关闭先落地、迟到的同轮分块后落地并把轮次重新打开），整条管道会在分块播完后永久挂起（`/health` 恒 `playing=true`）。
 - **优雅半关**：发 `{end}`/`{cancel}` 用 `sock.end(...)`（等内核发完再 FIN），不要 `destroy()` 强杀——后者随 RST 可能丢掉最后一两个字。
 
@@ -228,12 +228,12 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 ```
 {type:skip,mode:page}    # 读下一页（同 Ctrl+2）：丢掉正在播的那一页剩下的块
 {type:skip,mode:stack}   # 跳整摞（同 Ctrl+1）：丢掉正在播的那一摞（含其后各页）
-{type:skip,mode:all}     # 全场闭嘴（同 Ctrl+Esc）：停当前 + 清空排队 + 恢复音乐
+{type:skip,mode:all}     # 全场闭嘴（同 Ctrl+Esc）：停当前 + 清空排队
 ```
 
 无回复。`mode` 缺省按 `page`。**头的尾随 `\n` 是必需的路由依据**——没有它，服务端会把整条请求当传统整段播报体交给 `handleTTS`（`{type:stop}` 正踩在这条边界上：它现在发无换行裸串，走的就是 handleTTS 分支）。
 
-给热键一个命令行对应物（`ivox skip --page` / `--stack` / `--all`），供自检脚本、压测、远程排查使用；热键路径本身不经过这里。三个 mode 落到的是 `PlaybackQueue.skipCurrentPage` / `skipCurrentBucket` / `cancelAll + resumeIfIdle`，与热键完全同一条代码路径——`all` 那档是两行不是一行（Ctrl+Esc 打断后要立刻恢复音乐），少了 `resumeIfIdle` 行为就与热键不一致。
+给热键一个命令行对应物（`ivox skip --page` / `--stack` / `--all`），供自检脚本、压测、远程排查使用；热键路径本身不经过这里。三个 mode 落到的是 `PlaybackQueue.skipCurrentPage` / `skipCurrentBucket` / `cancelAll`，与热键完全同一条代码路径。三档都**只碰播报、不碰背景音乐**（音乐只归语音输入）。
 
 > `{type:stop}` 停止帧（旧的 `ivox quiet`）已删除，服务端收到只记日志忽略——那一支保留作护栏，防止旧脚本发来的停止帧落进正文分支被念出来。
 

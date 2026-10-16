@@ -99,7 +99,7 @@ actor PlaybackQueue {
     private var currentTurn: String? { frontBucket?.turnID }
     /// 是否仍有未结束的流式轮（turnID 非空且未 endTurn 的桶）。由每桶 ended 状态推导——
     /// 取代旧全局 turnOpen 单布尔（多轮按序排队时单布尔会在旧轮收盘 set false 而新轮仍在生成、
-    /// 或反之，导致「最后一个桶播完音乐不恢复」的误判）。processNext 在还有流动中轮时排空仍等待。
+    /// 或反之，导致「最后一个桶播完却迟迟不判收尾」的误判）。processNext 在还有流动中轮时排空仍等待。
     private var anyTurnInFlight: Bool { buckets.contains { $0.turnID != nil && !$0.ended } }
     /// 轮次认领栈（pi 双流的空流 `{cancel}` 认证用）：**不作「当前在播」判定**——那是 frontBucket 的
     /// 事。只回答「这个 turnID 是不是合法新轮/属主该不该交还」，与分桶消费正交。
@@ -117,7 +117,7 @@ actor PlaybackQueue {
     /// 取值理由：一轮里页与页之间夹工具调用，间隔是秒级；太长会让字幕迟迟不收。2 秒是飞哥定的手感。
     private static let idleGraceSeconds: Double = 2
     /// 等「声音播完」的上限：设备卡死时别把宽限的起点也一起带死
-    ///（宁可早一点恢复音乐，也不能再出现"永远不还"）。
+    ///（宁可早一点判"这摞说完"，也不能再出现"永远判不完"）。
     private static let maxSilenceWaitSeconds: Double = 10
     /// `waitForJobs` 的等待者。用引用类型让「入队唤醒」与「宽限超时」**互斥**：两边都在本 actor 上
     /// 串行地从 `jobWaiters` 摘除，先摘到的 resume、后到的发现已不在数组里即放弃——
@@ -211,7 +211,7 @@ actor PlaybackQueue {
     // 它的三个调用点同步收敛——Ctrl+Esc 与 `ivox skip --all` 不再碰音乐；语音输入松手那条
     // 改为直接 `media.resume()`（音乐是它自己借的，自己还，不必再等播报队列空）。
 
-    /// 流式轮次开始（首帧）：登记轮次并标记仍在生成（句间不恢复音乐）。
+    /// 流式轮次开始（首帧）：登记轮次并标记仍在生成（句间不盖章）。
     /// **不再打断旧轮**——打断权只归用户快捷键（right⌘/Cmd+D/Ctrl+Esc）；新轮在队尾排队。
     /// 轮次身份仍靠 `claimTurn`/`turnStack` 判定（pi 同消息双流的空流 `{cancel}` 靠栈顶识别，
     /// 与"按桶排队"正交，不可删）。
@@ -255,7 +255,7 @@ actor PlaybackQueue {
         }
     }
 
-    /// 流式轮次被取消（pi 空流 `{cancel}`）：丢弃**本轮的桶**并恢复音乐。
+    /// 流式轮次被取消（pi 空流 `{cancel}`）：丢弃**本轮的桶**并收尾。
     /// 分桶后只删自己这个 turn 的桶、不动其他 agent 排队的桶——空流 `{cancel}` 是 pi 双流里
     /// 那条空流的自扇血，不该把别的排队内容一起清掉（旧实现 bargeIn(nil) 全局清空是单数组下的
     /// 副作用，分桶后必须收敛）。
@@ -267,7 +267,7 @@ actor PlaybackQueue {
         bury(id)
         if turnStack.last == id { turnStack.removeLast() }
         signalJobs()
-        await pumpOrSettle()   // 还有待播则补起管道，否则恢复音乐（统一收敛点）
+        await pumpOrSettle()   // 还有待播则补起管道，否则收尾（统一收敛点）
     }
 
     /// 跳过当前桶（Ctrl+1）：丢掉正在播的**这一轮**（连同其后分块），从下一桶接着播。
@@ -294,7 +294,7 @@ actor PlaybackQueue {
             buckets.removeFirst()   // 无轮次号的普通播报：只丢队首这一桶
         }
         signalJobs()
-        await pumpOrSettle()   // 有下一桶则起管道接着播；没有则收尾并恢复音乐
+        await pumpOrSettle()   // 有下一桶则起管道接着播；没有则收尾
     }
 
     /// 读下一页（Ctrl+2）：掐掉正在念的这一块，并丢掉桶里**属于当前页**的剩余块，从下一页接着念。
@@ -409,7 +409,7 @@ actor PlaybackQueue {
         waiters.forEach { $0.continuation.resume(returning: true) }
     }
 
-    /// 批量入队（分桶）：一次 append 完再启动处理，消除逐条入队时队列瞬时为空的音乐跳动窗口。
+    /// 批量入队（分桶）：一次 append 完再启动处理，消除逐条入队时"队列瞬时为空 → 白收尾一次 → 又起管道"的窗口。
     /// - Parameter turnID: 流式轮次。分桶后**任何新轮都不打断旧轮**——按到达序 append 新桶，
     ///   由 processNext 播完前桶再前移。同 turn 的后续分块并入已存在的桶。
     func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async {
@@ -485,7 +485,7 @@ actor PlaybackQueue {
     }
 
     /// 收尾指定的那一摞（Stop 钩子按 `session_id` 反查出的 `turn_id`；手动 `ivox speak --group X --final` 同此）。
-    /// **日常收尾的主力就是它**——Claude 一说"这轮完了"，音乐与字幕立刻归还，不必等空闲宽限。
+    /// **日常收尾的主力就是它**——Claude 一说"这轮完了"，字幕立刻归还，不必等空闲宽限。
     /// 只标 ended、**不立墓碑**：Stop 说"我说完了"，但同一摞的页可能还在路上（钩子异步 + socket 短连并发），
     /// 立墓碑会把正常内容一起丢掉；`deadTurns` 只由**用户显式作废**的动作来立（跳整摞 / 掀桌 / 取消轮次）。
     func finishTurn(_ id: String) {
@@ -503,7 +503,7 @@ actor PlaybackQueue {
     /// - 合成 task 不停取下一句合成，句间经 `awaitPrefetchCapacity` 门控（排队音频超 4s 就先别
     ///   开下一句），因此始终领先播放一两句，设备不会在句间播空；
     /// - 播放 task 只负责 `player.write`，背压只阻塞播放、不再挡合成。
-    /// anyTurnInFlight 下队列瞬时排空，合成 task 挂起等下一批 job（保活音乐不恢复）；全部轮结束且排空才收尾。
+    /// anyTurnInFlight 下队列瞬时排空，合成 task 挂起等下一批 job（保活：不盖章、不退管道）；全部轮结束且排空才收尾。
     private func processNext(seq: UInt) async {
         generation &+= 1
         let gen = generation
@@ -544,7 +544,7 @@ actor PlaybackQueue {
                 //（常态）+ 其后已排了别人的话（多 agent 交错）。
                 guard let job = frontBucket?.jobs.first else {
                     // 队首桶播空、等下一批块：同样给宽限期，否则「这一摞的最后一块念完」
-                    // 就永远停在这个挂起点上（恢复音乐与收字幕都在收尾条件里，走不到）
+                    // 就永远停在这个挂起点上（收字幕在收尾条件里，走不到）
                     if !(await waitForJobs()) { sealIdleTurns() }
                     continue
                 }
@@ -614,7 +614,7 @@ actor PlaybackQueue {
         // producer 正常 finish → defer 里 finish 流，consumer 的 for-await 排空剩余 PCM 后
         // 自然结束。正常路径绝不能提前 consumer.cancel()：此刻 AsyncStream 里可能还缓冲着
         // 最后一句的多块 PCM，cancel 后循环在 isCancelled 处 break，会整块丢掉尾音、drain
-        // 只等到已 schedule 的部分，表现为「内容没念完就恢复音乐」。
+        // 只等到已 schedule 的部分，表现为「内容没念完就收尾、字幕提前收起」。
         // 仅当整条任务真被 bargeIn 取消时，才 cancel consumer 让它立刻弃掉残余。
         _ = try? await producer.value
         if Task.isCancelled { consumer.cancel() }
@@ -634,7 +634,7 @@ actor PlaybackQueue {
         if hasPendingBuckets, currentTask == nil {
             startPipelineIfPending()
         }
-        // 还有流动中的轮（未 endTurn）时不恢复音乐——该轮分块可能马上到
+        // 还有流动中的轮（未 endTurn）时不收尾——该轮分块可能马上到
         if !hasPendingBuckets, gen == generation, !anyTurnInFlight, !Task.isCancelled {
             onCaption?(nil)
             // 收尾标记：字幕收起即队列真收尾。**这条日志是自检脚本判定"收尾了"的锚点**——
@@ -662,7 +662,7 @@ actor PlaybackQueue {
     ///
     /// **为什么必须带超时**：收尾判据是「新的 turn 来了就把上一个盖上」，可用户说完一轮之后
     /// **不会有下一条 turn**——那一摞就永远挂着 `ended=false`，`anyTurnInFlight` 永真，
-    /// 收尾条件（恢复音乐 + 收字幕）永不成立。实测两条路径都卡死：自然播完、跳页后队列见底。
+    /// 收尾条件（收字幕）永不成立。实测两条路径都卡死：自然播完、跳页后队列见底。
     /// 宽限期就是这个判据的兜底：等够了就当作说完了。
     private func waitForJobs() async -> Bool {
         // **这里必须无条件挂起**，绝不能因为"看着还有货"就提前返回：两个调用点里有一个是
@@ -690,7 +690,7 @@ actor PlaybackQueue {
     ///
     /// 用轮询而不是"播空回调 + continuation"：① 这段只持续最后一块的播放时长、粒度是秒，200ms 一问足够；
     /// ② **回调式挂起在设备卡死时会永久卡住**，反而把宽限的起点也带死——轮询天然带超时，卡到上限就走，
-    /// 音乐照样能回来。代价是每 200ms 唤醒一次 actor，只发生在队列见底的这几秒。
+    /// 收尾照样能到。代价是每 200ms 唤醒一次 actor，只发生在队列见底的这几秒。
     private func waitUntilSilent() async {
         guard player.queuedFrames > 0 else { return }
         let deadline = Date().addingTimeInterval(Self.maxSilenceWaitSeconds)

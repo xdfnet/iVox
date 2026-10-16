@@ -22,7 +22,7 @@ struct SkipCommand: ParsableCommand {
     var stack = false
 
     /// 全场闭嘴，对应 Ctrl+Esc
-    @Flag(name: .long, help: "全场闭嘴：停当前 + 清空排队 + 恢复音乐（Ctrl+Esc）")
+    @Flag(name: .long, help: "全场闭嘴：停当前 + 清空排队（Ctrl+Esc）")
     var all = false
 
     func validate() throws {

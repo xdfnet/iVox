@@ -111,6 +111,12 @@
 - **`drain()` 超时定时器绑定自身序号 `drainSeq`**：超时兜底的 `asyncAfter` 闭包必须校验 `drainSeq == 自己`，否则**上一次 drain 遗留的定时器会提前放行下一次 drain**，表现为尾音被掐（曾实测 `drain 超时强制返回（pendingCount=28 尾音=1.12s）`）。
 - **`removeFirst` 前必须双重校验**：门控挂起期间 `bargeIn` 会 `jobs.removeAll()`，醒来后直接 `removeFirst()` 会 `EXC_BREAKPOINT`。先 `guard let job = jobs.first`，弹出前再确认 `jobs.first?.text == job.text`（队首仍是自己读到的那个 job）。
 
+> **⚠️ v4.0.0 起：播报不再碰背景音乐。** 下面「状态机」图里的 `media.resume()`、
+> 「场景矩阵」的 `media 命令` 一列、「关键时序」里的 pause/resume、「修复历史」里的
+> 媒体竞态条目，记录的都是 **4.0.0 之前**的设计——那时播报会借还音乐。如今播报队列
+> **一条媒体命令都不发**（借还只归语音输入，见上文「核心原则」）。**状态转换本身仍然
+> 有效**，读时把 media 相关行当历史即可。
+
 ## 状态机
 
 ```
@@ -263,7 +269,7 @@ test-B53180     26.2s
 
 修改 PlaybackQueue 时请遵守：
 
-1. **不要在 `catch` 分支发任何 media 命令**——所有 `media.pause/resume` 都通过两个固定出口
+1. **播报队列不发任何 media 命令**——借还背景音乐只归语音输入（`SpeechInputService`）。历史上这里有过两个固定出口（`processNext` 入口发 pause、退出点发 resume），v4.0.0 已整条删除
 2. **新增退出条件时只改 `processNext` 末尾的 `if jobs.isEmpty`**——决策点集中在一处
 3. **新增触发点（如新快捷键）只走 `cancelAll` 或 `bargeIn`**——不要直接 `currentTask?.cancel()`（`skipCurrent()` 已随「↓ 跳段」一并删除）
 4. **保持 `await oldTask?.value`**——这是串行化的线性化点，去掉会重新引入竞态
