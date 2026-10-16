@@ -24,18 +24,22 @@ if [[ -f "$SRC/hook.sh" ]]; then
 fi
 
 # ── 公共函数：用 jq 或 python3 安全写入 hook 配置 ──
-# 用法：write_hook <config> <source> <timeout> [event]
-#   event 默认 Stop（念回复）；MessageDisplay → hook.sh msgdisplay
+# 用法：write_hook <config> <source> <timeout> [event] [action]
+#   event  = settings.json 里的事件键。Claude 与 Codex **都用 Stop**——别自造 End 之类，
+#            Claude Code 不认的名字会把整条 hook 静默丢弃（2026-10-16 修的就是这个）。
+#   action = 命令选择：speak（念整段，缺省）| msgdisplay | end（收尾暗号）
+# 两个参数必须分开：同一个 Stop 键，Claude 要 end、Codex 要 speak，靠一个参数区分不开。
 write_hook() {
   local config_path="$1"
   local tool_name="$2"
   local timeout="$3"
   local event="${4:-Stop}"
+  local action="${5:-$event}"   # 缺省跟 event 走，保持省略后两个参数的调用点行为不变
   local cmd
-  case "$event" in
+  case "$action" in
     UserPromptSubmit) cmd="bash $HOOK_SH interrupt $tool_name" ;;
     MessageDisplay)   cmd="bash $HOOK_SH msgdisplay $tool_name" ;;
-    End)              cmd="bash $HOOK_SH end $tool_name" ;;
+    end)              cmd="bash $HOOK_SH end $tool_name" ;;
     *)                cmd="bash $HOOK_SH speak $tool_name" ;;
   esac
 
@@ -93,9 +97,12 @@ if [[ -f "$CLAUDE_JSON" ]]; then
   # 没有它也不会错——只是最后那 2 秒要等满（用户不按任何键时）。
   # 与「历史坑」的区别：当年挂的是 `hook.sh speak`（连正文一起送 → 与 MessageDisplay 重复播两遍），
   # 现在这条不出声，不构成重复。
+  # 坑点（2026-10-16）：此处原本传 `End`——那不是 Claude Code 认识的事件名，整条 hook 被静默
+  # 丢弃（只在启动告警里提一句），收尾信号从未生效，全靠 2 秒空闲宽限兜底。正解：键名 `Stop`
+  # + 第 5 参 `end`。改的时候别只改键名——`Stop` 同时是 Codex 的键，会连带把它写成 end 而哑掉。
   if grep -q 'hook.sh end claude' "$CLAUDE_JSON" 2>/dev/null; then
     echo "[i] Claude Stop hook（收尾信号）已存在"
-  elif write_hook "$CLAUDE_JSON" "claude" 10 End; then
+  elif write_hook "$CLAUDE_JSON" "claude" 10 Stop end; then
     echo "✓  Claude Stop hook（收尾信号，不出声）"
   else
     echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"
