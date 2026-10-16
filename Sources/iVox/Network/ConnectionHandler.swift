@@ -82,6 +82,8 @@ actor ConnectionHandler {
         } else if header.contains("type:status") {
             Log.debug("状态查询请求")
             handleStatus(fd: fd)
+        } else if header.contains("type:skip") {
+            handleSkip(fd: fd, header: header)
         } else {
             handleTTS(fd: fd, data: data)
         }
@@ -288,6 +290,21 @@ actor ConnectionHandler {
         } else {
             Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(clen) 分块=\(jobs.count)")
             Task { await queue.enqueue(jobs) }
+        }
+    }
+
+    /// 跳过请求 `{type:skip,mode:page|stack}`：`ivox skip` 与 `ivox skip --stack`，
+    /// 走的是和 Ctrl+2 / Ctrl+1 完全相同的那两个方法（热键只多一层按键识别）。
+    private nonisolated func handleSkip(fd: Int32, header: String) {
+        defer { Darwin.close(fd) }
+        let mode = parseMetaKV(header)["mode"] ?? "page"
+        Log.info("跳过请求: mode=\(mode)")
+        Task {
+            if mode == "stack" {
+                await queue.skipCurrentBucket(.skip)
+            } else {
+                await queue.skipCurrentPage(.skipPage)
+            }
         }
     }
 

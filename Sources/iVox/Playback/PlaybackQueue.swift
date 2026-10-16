@@ -301,10 +301,17 @@ actor PlaybackQueue {
         await preemptCurrent(origin)
         onCaption?(nil)   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
+        var dropped = 0
         if let page {
             // 只删"属于这一页"的块，同桶里后面几页的块原样留着——这才是"翻页"不是"跳桶"
-            for i in buckets.indices { buckets[i].jobs.removeAll { $0.pageID == page } }
+            for i in buckets.indices {
+                dropped += buckets[i].jobs.filter { $0.pageID == page }.count
+                buckets[i].jobs.removeAll { $0.pageID == page }
+            }
         }
+        // 丢了几块要落日志：翻页与"没翻动"在外部看起来一样（都是没声音），
+        // 只有这一行能区分"靶心没对上（page 空 / 页号不匹配）"和"确实翻过去了"
+        Log.info("本页剩余块已丢: page=\(page ?? "-") 块=\(dropped)")
         signalJobs()
         await pumpOrResume()   // 还有块则接着播；若这摞正等下一批字则原地等
     }
