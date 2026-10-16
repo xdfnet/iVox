@@ -104,6 +104,7 @@ final class SpeechInputService: @unchecked Sendable {
 
             stopLevelMetering()
             Log.debug("语音输入: right ⌘/⌃ 松开 → 结束录音")
+            playCue("Pop")   // 「收工」：录音已停，接下来是识别（浮窗会转"识别中…"）
             Task {
                 await queue.resumeIfIdle()
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
@@ -121,6 +122,10 @@ final class SpeechInputService: @unchecked Sendable {
         guard canStart, let (recorder, url) = startRecording() else { return }
         stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
         showOverlay(.listening)
+        // 「可以说了」——**录音确实起来之后**才响（此刻说才录得到）。
+        // 取舍：它会紧接着被麦克风拾到一点点，但 Tink 极短、ASR 不会把音效转成文字；
+        // 反过来"先等音效响完再开录"会丢掉你开头的字，不划算。
+        playCue("Tink")
         startLevelMetering()
     }
 
@@ -202,6 +207,13 @@ final class SpeechInputService: @unchecked Sendable {
 
     private func dismissOverlay() {
         Task { @MainActor in overlay.dismiss() }
+    }
+
+    /// 开始 / 结束录音的提示音（"可以说了" / "收工"）——用系统音效，不自带资源。
+    /// 为什么不能只靠浮窗：按快捷键时眼睛往往不在屏幕下方，**声音才是即时的反馈**。
+    /// NSSound 在主线程播放更稳（本服务不是 MainActor），故 hop 过去。
+    private func playCue(_ name: String) {
+        Task { @MainActor in NSSound(named: NSSound.Name(name))?.play() }
     }
 
     private func startLevelMetering() {

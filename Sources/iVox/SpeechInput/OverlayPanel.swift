@@ -240,7 +240,8 @@ private struct OverlayContentView: View {
     private var title: String {
         switch presentation.state {
         case .listening:
-            return "聆听中…"
+            // 描述"用户该做什么"，而不是"我在干什么"——按下去最想知道的是"能说了吗"
+            return "可以说了"
         case .transcribing:
             return "识别中…"
         case .done:
@@ -253,7 +254,7 @@ private struct OverlayContentView: View {
     private var accessibilityLabel: String {
         switch presentation.state {
         case .listening:
-            return "聆听中"
+            return "可以说了"
         case .transcribing:
             return "识别中"
         case .done:
