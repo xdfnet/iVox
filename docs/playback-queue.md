@@ -43,6 +43,7 @@
 - 队列瞬时排空时：`turnOpen == true`（流式轮次还在生成）→ 挂起在 `waitForJobs()`（continuation 存入 `jobWaiters`），**不退出、不恢复音乐**；`turnOpen == false` → 退出循环 → consumer 排空 → 末端 drain → 恢复音乐。
 - `signalJobs()` resume 并清空所有 `jobWaiters`，调用点只有：`enqueue`（新 job 到达）、`endTurn`（轮次结束）、`preemptCurrent`（打断/插队/跳桶的公共前置）。三者覆盖了挂起的全部唤醒路径，无 continuation 泄漏。
 - 轮次语义（分桶排队）：**打断权只归用户快捷键**，手动打断三档——**轻** Ctrl+2 跳当前句、**中** Ctrl+1 跳整轮、**掀桌** Ctrl+Esc（全场清）/ 右⌘ 说话；Cmd+D 译文走**插队**（`speakUserInitiated`：只掐在播、译文桶插到队首，其余桶全保留）。`stop` 停止帧与 pi 新轮**不再打断**播报。队列按到达序存桶（每桶一轮，nil-turn 桶=普通播报），`processNext` 播完队首桶才前移：**旧轮播全、播完才进下一轮**——这是「按轮排队」的载体。同 `turnID` 的分块并入同桶顺序 append；新 turn 在队尾追加新桶，不打断在播旧轮。
+  **两类轮次**：`turnID`（pi 流式，走 `turnStack` 认证 + `endTurn`）与**弱分组**（Claude 的 MessageDisplay，`enqueueGrouped`，**刻意不进 `turnStack`**——那是 pi 双流认证专用，混进来会把「属主交还」判错、pi 整轮没声音）。弱分组桶由 `final` 批收尾；`final` 丢包靠「换新分组即收尾上一组」兜底（不加定时器，实测 1357 条 0 丢）。`skipCurrentBucket` 按轮丢**该轮的全部桶**——弱分组下一轮可能散在几个桶里，只弹队首会留下残部继续念。
 - **播报字幕（可选）取「播放侧」而非合成侧**：每句的**首块音频**捎上该句文本（`AudioChunk.sentenceText`），`AudioPlayer` 在它被设备读出（`.dataConsumed`）时回调 → 队列转发给 `onCaption`。合成领先播放一两句，**从合成侧取会让字幕比声音早**（实测踩过，飞哥听出来了）；播放侧取则与声音对齐（误差约一个 IO 缓冲）。打断天然正确——被掐掉的句子的回调本就过不了世代校验；整队播完 / 掀桌（`bargeIn`）广播 `nil` 收起。
 - **三档打断的形象说法**（跟实现**同构**，动这段代码前先读它）：
   把播报想成一个**播音员 + 一叠叠稿纸**——**一叠 = 一桶 = 一轮话**（一次 AI 回复、一批普通播报、一条译文，各是一叠），**一张纸 = 一句**。
@@ -229,4 +230,5 @@ test-B53180     26.2s
 8. **不要在 job 之间重新引入 `await player.drain()`**——句间接力靠 AudioPlayer 连续 `scheduleBuffer` 排队，逐句 drain 会播空设备、重补 prime、重启调度，重新引入逐字卡顿。drain 只允许出现在 `processNext` 末端一次
 9. **新增 `waitForJobs()` 的唤醒出口时必须同步加到 `signalJobs()`**——turnOpen 下管道挂起在 `jobWaiters`，任何让它该醒来的事件（入队/结束/打断）都必须经过 `signalJobs`，否则 continuation 永久挂起
 10. **背压水位（4s/2s）调整只改 `AudioPlayer` 的 `highWaterFrames/lowWaterFrames`**——高水位是内存上限也是合成预取上限（约 48kHz Int16 单声道 ≈ 384KB/4s），低水位须低于高水位以形成滞后区间，避免在阈值边缘反复挂起/放行
-11. **流式连接的队列操作一律走 `ConnectionHandler` 的 `chain.hop {}`，不许直接 `Task { await queue.… }`**——顺序是协议语义的一部分（`{end}` 之后再无帧可关轮次）；裸 `Task {}` 落地乱序会让已关轮次被迟到分块重新打开，管道永久挂起（见上「按帧序落地」条）
+11. **弱分组只在 `enqueueGrouped` 里管，绝不要接进 `turnStack`/`claimTurn`**——`turnStack` 是 pi 双流「属主交还」的认证栈，混入别的 id 会让 pi 的正文流被判成过期旧轮（**整轮没声音**）。弱分组要的只有两件事：「同 group 并桶」和「墓碑拦住后续批次」，都不需要栈。跳桶时记得连墓碑一起立（`skipCurrentBucket` 已做），掀桌时记得把桶里的分组也立上（`buryAllTurns` 已做，它们不在 `turnStack` 里，不捞一遍就拦不住）
+12. **流式连接的队列操作一律走 `ConnectionHandler` 的 `chain.hop {}`，不许直接 `Task { await queue.… }`**——顺序是协议语义的一部分（`{end}` 之后再无帧可关轮次）；裸 `Task {}` 落地乱序会让已关轮次被迟到分块重新打开，管道永久挂起（见上「按帧序落地」条）

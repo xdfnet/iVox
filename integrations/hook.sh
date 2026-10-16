@@ -17,6 +17,8 @@ if [[ "$1" == "msgdisplay" ]]; then
   # 这就是「过程内容逐句进桶」的载体——Claude 分步/工具多段回复，各段写出来时各播一次，
   # 不再只等 Stop 终了一次。**必须极快返回**：交互模式下 Claude Code 等本钩子返回才渲染该批。
   # python 只做「delta 提取 + 审计写 hook.log」两件事且要快；播报用后台 & 不阻塞。
+  # python 依次吐三行：分组号、是否末批、delta。delta 放最后是因为它可能含换行，
+  # 前两行固定单行好切。
   payload="$(cat)"
   meta=$(printf '%s' "$payload" | python3 -c "
 import json, sys, re
@@ -27,17 +29,30 @@ delta = d.get('delta', '') or ''
 if isinstance(delta, str):
     if len(delta) <= 5 and not re.search(r'[一-鿿]', delta):
         delta = ''
+# message_id 当分组号：同一条回复的多批并进同一桶，跳桶/掀桌才能拦住它的后续批次。
+# 消毒成 header 安全字符——协议按 , 和 : 切分，脏字符会把 meta 切坏。
+grp = re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('message_id','') or ''))
+fin = '1' if d.get('final') else ''
 from pathlib import Path
 from datetime import datetime
 Path.home().joinpath('.config/ivox/hook.log').open('a').write(
     '%s hook.sh msgdisplay source=%s mid=%s final=%s delta=%s\n' % (
     datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], '$2',
     d.get('message_id',''), d.get('final',''), delta[:40]))
+print(grp)
+print(fin)
 print(delta)
 " 2>/dev/null)
-  if [[ -n "${meta// }" ]]; then
+  grp="$(printf '%s' "$meta" | sed -n 1p)"
+  fin="$(printf '%s' "$meta" | sed -n 2p)"
+  delta="$(printf '%s' "$meta" | tail -n +3)"
+  # 末批即使 delta 为空也要发：那是给这条回复收尾的信号，漏了它桶就一直开着、堵住后面的播报
+  if [[ -n "${delta// }" || -n "$fin" ]]; then
+    args=(speak --source "$2")
+    [[ -n "$grp" ]] && args+=(--group "$grp")
+    [[ -n "$fin" ]] && args+=(--final)
     # 后台 &：走 socket 短连 O(ms)，不阻塞本批渲染
-    ivox speak --source "$2" -- "$meta" 2>/dev/null &
+    ivox "${args[@]}" -- "$delta" 2>/dev/null &
   fi
   echo '{"continue": true}'
   exit 0

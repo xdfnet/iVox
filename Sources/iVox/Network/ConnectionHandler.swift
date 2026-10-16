@@ -240,11 +240,13 @@ actor ConnectionHandler {
             exit(0)
         }
         
-        let (source, voiceID, content) = extractVoicePrefix(text, config: config)
-        Log.info("请求解析: source=\(source) voice=\(voiceID) raw_chars=\(content.count)")
+        let (source, voiceID, content, group, isFinal) = extractVoicePrefix(text, config: config)
+        Log.info("请求解析: source=\(source) voice=\(voiceID) group=\(group ?? "-") final=\(isFinal) raw_chars=\(content.count)")
         Log.debug("请求原始内容: source=\(source) raw=\(logPreview(content))")
         let cleaned = cleanText(content)
-        if cleaned.isEmpty {
+        // 分组请求即使清洗后为空也不能直接 return：`final` 批常常没有新内容（delta 被 hook
+        // 过滤成空），漏掉它就没人给这条回复收尾，空桶会卡在队首把后面所有播报堵死。
+        if cleaned.isEmpty, group == nil {
             Log.info("清洗后为空，跳过")
             return
         }
@@ -256,10 +258,15 @@ actor ConnectionHandler {
         Log.debug("清洗后内容: source=\(source) cleaned=\(logPreview(cleaned))")
 
         // 分块入队：整条一次合成会长时间占住播放（且要等整段合成完才出声），逐句入队才能边合成边播
-        let chunks = splitSentences(cleaned)
+        let chunks = cleaned.isEmpty ? [] : splitSentences(cleaned)
         let jobs = chunks.map { PlaybackJob(text: $0, voiceID: voiceID, source: source) }
-        Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(cleaned.count) 分块=\(jobs.count)")
-        Task { await queue.enqueue(jobs) }
+        if let group {
+            Log.info("队列入队（分组）: source=\(source) voice=\(voiceID) group=\(group) final=\(isFinal) chars=\(clen) 分块=\(jobs.count)")
+            Task { await queue.enqueueGrouped(jobs, group: group, isFinal: isFinal) }
+        } else {
+            Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(clen) 分块=\(jobs.count)")
+            Task { await queue.enqueue(jobs) }
+        }
     }
 
     private nonisolated func handleASR(fd: Int32, header: String, body: Data) {
@@ -363,24 +370,29 @@ actor ConnectionHandler {
         return dict
     }
 
-    nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String) {
+    nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, group: String?, isFinal: Bool) {
         guard text.hasPrefix("{"), let end = text.firstIndex(of: "}") else {
-            return ("default", config.defaultVoice, text)
+            return ("default", config.defaultVoice, text, nil, false)
         }
         let metaStr = String(text[text.index(after: text.startIndex)..<end])
         let pairs = metaStr.split(separator: ",").map { $0.split(separator: ":", maxSplits: 1).map(String.init) }
         var sourceID = "default"
         var explicitVoice: String?
+        var group: String?
+        var isFinal = false
         for pair in pairs where pair.count == 2 {
             switch pair[0] {
             case "source": sourceID = pair[1]
             case "voice":  explicitVoice = pair[1]
+            // 分组号（hook 传 message_id）：同一轮的多批并进同一桶，并让跳桶/掀桌能拦住后续批次
+            case "group":  group = pair[1].isEmpty ? nil : pair[1]
+            case "end":    isFinal = true
             default: break
             }
         }
         let voiceID = explicitVoice ?? config.sourceVoices[sourceID] ?? config.defaultVoice
         let content = String(text[text.index(after: end)...])
-        return (sourceID, voiceID, content)
+        return (sourceID, voiceID, content, group, isFinal)
     }
 
     nonisolated private func oneLine(_ value: String) -> String {

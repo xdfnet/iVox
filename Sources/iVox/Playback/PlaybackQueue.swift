@@ -96,6 +96,10 @@ actor PlaybackQueue {
     /// 已作废轮次墓碑（容量有上限）：`{cancel}`、语音打断、普通 speak 之后，该轮不再开口
     /// （含客户端关闭连接后 EOF 兜底补出的残尾）。
     private var deadTurns: [String] = []
+    /// 弱分组（Claude 的 MessageDisplay 把一条回复按行批分多次短连接送来）里**当前开着**的那条。
+    /// 换新分组即收尾它——这是 `final` 丢包时的兜底（实测 1357 条 0 丢，但「会话被杀」那种
+    /// 日志里没有样本，不能赌）。
+    private var openGroup: String?
     /// processNext 在 anyTurnInFlight 下等待新 job 的挂起点；入队/结束/打断时恢复
     private var jobWaiters: [CheckedContinuation<Void, Never>] = []
     /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播该句文本，收起广播 nil。
@@ -253,15 +257,23 @@ actor PlaybackQueue {
     /// 这个只丢当前、后面的照播。
     func skipCurrentBucket(_ origin: InterruptSource) async {
         guard let head = frontBucket else { return }
-        Log.info("跳过当前桶（来源=\(origin)）：丢 turn=\(head.turnID ?? "-") 余 \(head.jobs.count) 块，从下一桶接着播")
+        let group = head.turnID
+        Log.info("跳过当前桶（来源=\(origin)）：丢 turn=\(group ?? "-") 余 \(head.jobs.count) 块，从下一桶接着播")
         // 整轮丢掉：立墓碑，该轮后续分块（含关连接后 EOF 兜底补出的残尾）也不再开口。
         // 不碰 turnStack——墓碑已在 claimTurn 里优先拦住；出栈会把它顶掉的旧轮重新认成属主，
-        // 那是另一个语义，这里不做。
-        if let turn = head.turnID { bury(turn) }
+        // 那是另一个语义，这里不做。弱分组（Claude）同样靠这块墓碑拦住它的后续批次。
+        if let group { bury(group) }
         await preemptCurrent(origin)
         onCaption?(nil)   // 被跳掉的那轮立刻从字幕撤下；下一桶开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移，避免两个 consumer 抢 player
-        if !buckets.isEmpty { buckets.removeFirst() }   // 挂起期间可能已被别的路径清掉，别越界
+        // 有轮次号就丢**该轮的全部桶**：弱分组下一轮可能散在几个桶里（Claude 中途停顿被拆开），
+        // 只弹队首会把这一轮的残部留在队里接着念，「跳整轮」就跳不干净。
+        if let group {
+            buckets.removeAll { $0.turnID == group }   // 挂起期间可能已被别的路径清掉，removeAll 天然不越界
+            if openGroup == group { openGroup = nil }
+        } else if !buckets.isEmpty {
+            buckets.removeFirst()   // 无轮次号的普通播报：只丢队首这一桶
+        }
         signalJobs()
         await pumpOrResume()   // 有下一桶则起管道接着播；没有则收尾并恢复音乐
     }
@@ -338,6 +350,10 @@ actor PlaybackQueue {
     private func buryAllTurns() {
         turnStack.forEach { bury($0) }
         turnStack.removeAll()
+        // 弱分组（Claude 多批）也要立墓碑——它们刻意不进 turnStack（见 enqueueGrouped），
+        // 不从桶里捞一遍，掀桌后这条回复的后续批次就会照响，「掀不干净」。
+        buckets.compactMap(\.turnID).forEach { bury($0) }
+        openGroup = nil
     }
 
     /// 起一条新管道（producer+consumer），并登记其身份序号。
@@ -394,6 +410,44 @@ actor PlaybackQueue {
 
     func enqueue(_ job: PlaybackJob) async {
         await enqueue([job], turnID: job.turnID)
+    }
+
+    /// 弱分组入队（Claude 的 MessageDisplay：一条回复按行批分多次短连接送来）。
+    /// 与 `enqueue(_:turnID:)` 的分工：那条走 `turnStack`（pi 双流认证），这条**绝不碰它**，
+    /// 只做两件事——同 group 的多批并进同桶（一轮一桶），以及被跳掉/掀桌后拦住该 group 的
+    /// **后续批次**（查 `deadTurns`，与 `bury` 配对）。
+    ///
+    /// 桶初始 `ended: false`：要等这条回复的 `final` 批才收尾。中途播空也**不弹**——否则
+    /// Claude 一停顿（去调工具、想几秒）这轮就被拆成好几个桶，「一轮一桶」名存实亡。
+    ///
+    /// - Parameter isFinal: 这批是该回复的最后一批（收尾该分组，放桶前移）。
+    func enqueueGrouped(_ newJobs: [PlaybackJob], group: String, isFinal: Bool) async {
+        // 兜底：换了新 group 说明上一条已经过去了（正常它自己会带 final 收尾）。把还开着的
+        // 关掉——否则 final 一丢，空桶就卡在队首把后面所有播报全堵死（生产管道挂起的经典形态）。
+        if let prev = openGroup, prev != group { closeGroup(prev) }
+        if !newJobs.isEmpty {
+            if let idx = buckets.firstIndex(where: { $0.turnID == group }) {
+                buckets[idx].jobs.append(contentsOf: newJobs)
+            } else if !deadTurns.contains(group) {
+                buckets.append(QueueBucket(turnID: group, jobs: newJobs, ended: isFinal))
+            }
+            // 已作废分组（被 Ctrl+1 跳掉 / 被掀桌）的迟到批次落进 else 的空档：静默丢弃
+        }
+        if isFinal {
+            closeGroup(group)
+            if openGroup == group { openGroup = nil }
+        } else {
+            openGroup = group
+        }
+        signalJobs()
+        Log.debug("队列状态: pending=\(pendingCount) processing=\(currentTask != nil) group=\(group) final=\(isFinal)")
+        // 有管道则 while 自动消费新 job；无则新起
+        if currentTask == nil { startPipeline() }
+    }
+
+    /// 给一个弱分组的全部桶标记 ended（这条回复说完了）。pi 那种强轮走 `endTurn`，不走这里。
+    private func closeGroup(_ group: String) {
+        for i in buckets.indices where buckets[i].turnID == group { buckets[i].ended = true }
     }
 
     /// 连续播放管道：合成 / 播放拆成两条并发 task，中间用有界流接 PCM。
