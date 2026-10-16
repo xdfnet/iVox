@@ -12,7 +12,7 @@
 |---|---|---|---|
 | **摞** | **一次回复**：你发一条信息 → AI 答一次 | **你按下回车**那一刀 | `turn_id`（Claude 的 MessageDisplay 每批都带） |
 | **页** | 一摞里"说了一段"的一次 | Claude 流式显示，按行批触发 | `message_id` |
-| **块** | 1～80 字的**合成单位**（**纯内部**）：页上的文字被切开、送去合成的最小粒度 | iVox 自己切（`cleanText → splitSentences`） | `PlaybackJob` |
+| **块** | 1～80 字的**合成单位**（**服务拿去播报用的，不是给用户看的**）：页上的文字被切开、送去合成的最小粒度 | iVox 自己切（`cleanText → splitSentences`） | `PlaybackJob` |
 | **桶** | 队列里的**排队单位** | PlaybackQueue | `QueueBucket` |
 
 **一摞 = 一桶。**（pi 的一轮 = 一桶；一次普通播报 `ivox speak`/hook = 一桶；只有 Claude 这条通路是"一摞 = 一桶"。）

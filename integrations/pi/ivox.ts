@@ -86,6 +86,13 @@ export default function (pi: ExtensionAPI) {
     }
   }
 
+  // 翻页信号：一条 assistant message 开始 = 翻一页（与 Claude 那边「一页 = 一个
+  // MessageDisplay」同构）。服务端按 `{page}` 帧自己数页号——它只承担"这一页说完了、
+  // 下面是新的一页"，页号本身由服务端生成。Ctrl+2「读下一页」按页翻。
+  function markPage() {
+    if (sock && !socketDead && !sock.destroyed) sock.write("{page}\n");
+  }
+
   // 数据帧用自描述长度帧 `L<字节数>\n<原文>`：正文可含 \n/{end} 等任意字符，
   // 服务端按字节精确切，杜绝正文恰好为 `{end}` 被误判成控制帧。
   function sendFrame(text: string) {
@@ -124,6 +131,11 @@ export default function (pi: ExtensionAPI) {
       // turn_start 各开一条流，两条轮次互相顶，正在合成的就被掐 =
       // 播报自己打断自己（曾实测日志出现成对的「流式开始」+ 紧跟 {cancel}）。
       if (turnId) cancelTurn();
+    } else if ((event as { message?: { role?: string } }).message?.role === "assistant") {
+      // assistant 的一条 message = 一页。**不在这里开流**（turnId 为空就跳过，交给
+      // message_update 的兜底去开）——开流必须在 turn_start / message_update 那一处，
+      // 两处都开会各开一条、两条轮次互相顶（本文件上方那段注释里踩过）。
+      if (turnId) markPage();
     }
   });
 

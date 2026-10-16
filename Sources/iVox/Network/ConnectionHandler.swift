@@ -121,6 +121,10 @@ actor ConnectionHandler {
         let sb = StreamBuffer()
         var acc = Data()
         var closed = false
+        // 页号：扩展在每条 assistant message 开始时发一帧 `{page}`（一条 message = 一页，
+        // 与 Claude 那边"一页 = 一个 MessageDisplay"同构）。服务端自己数就行——页号只要保证
+        // 「同一页的块相等、不同页不等」，不需要扩展给 id。Ctrl+2「读下一页」靠它当靶心。
+        var pageSeq = 0
         // 长度帧状态：读到 "<n>\n" 后，记录还差多少字节正文；非 nil 时不按行解析。
         var expectBytes: Int? = nil
 
@@ -141,7 +145,8 @@ actor ConnectionHandler {
                     expectBytes = nil
                     if let text = String(data: payload, encoding: .utf8), !text.isEmpty {
                         for block in sb.append(text) {
-                            emitStreamBlock(block, source: source, voiceID: voiceID, turn: turn, chain: chain)
+                            emitStreamBlock(block, source: source, voiceID: voiceID,
+                                            turn: turn, page: "\(turn)#\(pageSeq)", chain: chain)
                         }
                     }
                     continue
@@ -161,7 +166,8 @@ actor ConnectionHandler {
                 // 控制帧 / 旧裸文本（兼容老客户端）
                 guard let frame = String(data: line, encoding: .utf8) else { continue }
                 if frame == "{end}" {
-                    finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn, chain: chain)
+                    finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn,
+                                 page: "\(turn)#\(pageSeq)", chain: chain)
                     return false
                 }
                 if frame.hasPrefix("{cancel") {
@@ -169,8 +175,14 @@ actor ConnectionHandler {
                     chain.hop { await self.queue.cancelTurn(turn) }
                     return false
                 }
+                // 翻页：扩展在每条 assistant message 开始时发。此后 flush 出来的块都归这一页
+                if frame == "{page}" {
+                    pageSeq += 1
+                    continue
+                }
                 for block in sb.append(frame + "\n") {
-                    emitStreamBlock(block, source: source, voiceID: voiceID, turn: turn, chain: chain)
+                    emitStreamBlock(block, source: source, voiceID: voiceID,
+                                    turn: turn, page: "\(turn)#\(pageSeq)", chain: chain)
                 }
             }
         }
@@ -182,7 +194,8 @@ actor ConnectionHandler {
             if !feed(Data(buf[0..<n])) { closed = true; break }
         }
         if !closed {  // EOF 兜底：正常结束 flush 残尾
-            finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn, chain: chain)
+            finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn,
+                         page: "\(turn)#\(pageSeq)", chain: chain)
         }
     }
 
@@ -199,21 +212,23 @@ actor ConnectionHandler {
         return n <= Self.maxFrameBytes ? n : nil
     }
 
+    /// - Parameter page: 这一页的页号（`页序` 由 `{page}` 帧驱动），Ctrl+2「读下一页」的靶心
     private nonisolated func emitStreamBlock(_ raw: String, source: String,
-                                             voiceID: String, turn: String, chain: StreamOpChain) {
+                                             voiceID: String, turn: String, page: String,
+                                             chain: StreamOpChain) {
         let cleaned = cleanText(raw)
         guard !cleaned.isEmpty else { return }
         let jobs = splitSentences(cleaned).map {
-            PlaybackJob(text: $0, voiceID: voiceID, source: source, turnID: turn)
+            PlaybackJob(text: $0, voiceID: voiceID, source: source, turnID: turn, pageID: page)
         }
-        Log.info("流式入队: source=\(source) turn=\(turn) 分块=\(jobs.count) chars=\(cleaned.count)")
+        Log.info("流式入队: source=\(source) turn=\(turn) page=\(page) 分块=\(jobs.count) chars=\(cleaned.count)")
         chain.hop { await self.queue.enqueue(jobs, turnID: turn) }
     }
 
-    private nonisolated func finishStream(sb: StreamBuffer, source: String,
-                                          voiceID: String, turn: String, chain: StreamOpChain) {
+    private nonisolated func finishStream(sb: StreamBuffer, source: String, voiceID: String,
+                                          turn: String, page: String, chain: StreamOpChain) {
         if let tail = sb.finish() {
-            emitStreamBlock(tail, source: source, voiceID: voiceID, turn: turn, chain: chain)
+            emitStreamBlock(tail, source: source, voiceID: voiceID, turn: turn, page: page, chain: chain)
         }
         chain.hop { await self.queue.endTurn(turn) }
         Log.info("流式结束: turn=\(turn)")
