@@ -180,7 +180,7 @@ Daemon (actor)
 
 `Sources/iVox/Translation/`（AppKit/CG 侧）+ `Sources/iVoxKit/Translation/`（纯逻辑，可单测）
 
-- `Cmd+D` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 鼠标旁浮窗（`TranslationPanel`，NSPanel 非激活浮层）+ 可选朗读
+- `Cmd+D` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 屏幕下方居中的歌词式浮窗（`TranslationPanel`，NSPanel 非激活浮层）+ 可选朗读
 - 翻译走 `iVoxKit.TranslationService`（`actor`）：Google 主/备**双通道容灾**，或 OpenAI 兼容；**直连失败自动走兜底代理**（`translation.proxyURL`），直连用短超时探测（`directProbeTimeoutSeconds`），成功后记住「该走代理」
 - 朗读走 `PlaybackQueue.speakUserInitiated()`：**用户开口 → 抢麦**（与 hook 汇报的「只排队」语义相反）
 - 浮窗**刻意不做**拖拽 / 点击外部关闭 / 文本选择——这三样都要 key window，当前无 `NSApplication` 事件循环的形态给不了

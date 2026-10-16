@@ -56,7 +56,6 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   StreamFrame.swift    — 长度帧协议
   AudioPipeline.swift  — 重采样
   Translation/         — 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗
-  WindowPlacement.swift— 浮窗锚定几何（纯函数，含副屏坐标修正）
 
 Tests/iVoxTests/       — 测试（仅依赖 iVoxKit）
 
