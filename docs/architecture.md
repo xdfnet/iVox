@@ -134,6 +134,9 @@ Daemon (actor)
 - **过期轮次静默丢弃**：`turnID` 已被作废（`deadTurns` 墓碑）的迟到帧/`endTurn` 一律 no-op，不再开口，避免残音反杀
 - 还有未结束的流式轮（`anyTurnInFlight`，由各桶 `ended` 推导）时队列瞬时排空就挂起 `waitForJobs()` 等下一批，不退出、不恢复音乐；全部轮 `ended` 且排空才收尾
 - **打断权只归用户快捷键**，手动打断三档：**轻** Ctrl+2 跳当前句（`skipCurrentSentence`：只丢正在播这句，同轮剩下的照念）、**中** Ctrl+1 跳整轮（`skipCurrentBucket`：丢当前桶，下一桶接着播）、**掀桌** Ctrl+Esc 清楚（`cancelAll` 全场清）+ right⌘ 说话；Cmd+D 译文走 `speakUserInitiated` **插队**（只掐在播、译文桶插到队首，其余桶全保留）。**`{type:stop}` 停止帧与流式新轮不再打断**。agent 回复到达的普通播报只排队。旧的 ↓ 跳段已删，「跳」统一走 Ctrl+1 / Ctrl+2
+- **「掐在播」与「清场」是两层**：`preemptCurrent` 只作废管道代号 + 取消在播合成与已排队音频，**不动 `buckets`**；`bargeIn` 是「先清空队列、再调它」（掀桌）。三档里只有**掀桌**用 `bargeIn`；**跳句 / 跳桶 / 译文插队都只 `preemptCurrent`** —— 所以「不掀桌」不是各自实现的巧合，而是同一条路径上的自然结果
+- **播报字幕（可选，`playback.captions`）从播放侧取**：每句首块音频捎上该句文本（`AudioChunk.sentenceText`），`AudioPlayer` 在它被设备读出时回调 → 队列转发给 `onCaption`。从**合成**侧取会让字幕早一两句（合成领先播放，实测踩过）；跳句 / 跳桶 / 掀桌前先撤字幕，队列真空闲时由 `pumpOrResume` 收
+- ⚠️ **循环里每个 `continue` 都必须有挂起点**：producer 曾在「队首桶已播空、该轮尚未收尾」时落进一个无 `await` 的 `continue` —— 空转**独占整个 actor**（`enqueue`/`endTurn`/`cancelAll` 全被饿死，连快捷键打断都进不来），播报永久瘫痪外加烧满一核，且 **10 秒读超时的 EOF 兜底也救不回**（`endTurn` 进不了僵死的 actor）。黑盒自检 `E8` 钉住了这个现场
 - `cancelAll()` 清空队列 + 取消全部播放（bargeIn + 清 turn 状态）
 - 等待 TTS 模型就绪后再开始合成
 - 播报前通过 `MediaController` 暂停音乐，播完恢复
@@ -147,6 +150,7 @@ Daemon (actor)
 - prime 静音（200ms，唤醒电源管理休眠的 node）只在设备真正播空 / 取消后补一次
 - `drain()` 仅在整条管道末端调用一次，等待跨 job 的尾音播完；带超时兜底防回调丢失
 - `cancelPendingPlayback()` 递增 `generation` 作废旧缓冲回调，并恢复背压挂起点
+- 句首块可捎带该句文本（`write(_:startsSentence:)`）：该块被设备读出（`.dataConsumed`）时回调 `onSentenceStarted`，供播报字幕与声音对齐；**被掐掉的句子因世代校验不会误报**，打断路径无需特殊处理
 
 ### MediaController — 系统媒体控制
 
@@ -183,7 +187,7 @@ Daemon (actor)
 - `Cmd+D` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 屏幕下方居中的歌词式浮窗（`TranslationPanel`，NSPanel 非激活浮层）+ 可选朗读
 - **三个浮窗各自独立、刻意不抽公共件**（消失策略与生命周期各不同，硬抽要开一堆口子）：语音波形（`OverlayPanel`，跟鼠标收）、翻译结果（`TranslationPanel`，屏幕下方 96pt）、播报字幕（`CaptionPanel`，贴底 24pt，`playback.captions` 开关，**跟播放不跟合成**）。三者同源的是那套 `NSPanel` 组合：非激活、悬于所有窗口、跨 Space
 - 翻译走 `iVoxKit.TranslationService`（`actor`）：Google 主/备**双通道容灾**，或 OpenAI 兼容；**直连失败自动走兜底代理**（`translation.proxyURL`），直连用短超时探测（`directProbeTimeoutSeconds`），成功后记住「该走代理」
-- 朗读走 `PlaybackQueue.speakUserInitiated()`：**用户开口 → 抢麦**（与 hook 汇报的「只排队」语义相反）
+- 朗读走 `PlaybackQueue.speakUserInitiated()`：**插队**——掐掉在播的那一句让译文立刻响，但**不掀桌**（其余桶全保留、流式轮不作废）。与 hook 汇报的「只排队」语义相反
 - 浮窗**刻意不做**拖拽 / 点击外部关闭 / 文本选择——这三样都要 key window，当前无 `NSApplication` 事件循环的形态给不了
 - CLI 侧 `ivox translate <text> [--selection] [--json]`**不依赖 daemon**，是整条链路的可验证接缝
 
@@ -212,7 +216,7 @@ Daemon (actor)
 
 | 文件 | 职责 |
 |------|------|
-| `Config.swift` | JSON 配置模型（TTS/ASR 路径、音色、媒体控制、微信、划词翻译等） |
+| `Config.swift` | JSON 配置模型（TTS/ASR 路径、音色、媒体控制、播报字幕、微信、划词翻译等） |
 | `Logger.swift` | 日志工具，输出到 daemon.log（0600），5MB 轮转 |
 | `DaemonStatus.swift` | `{type:status}` 的返回体：六个能力域的健康度 + 权限 |
 | `SocketClient.swift` | `AppPaths`（socket / 配置目录）+ socket 客户端 |
@@ -222,7 +226,6 @@ Daemon (actor)
 | `StreamFrame.swift` | 长度帧协议（`L<n>` + 正文 + end 标记） |
 | `AudioPipeline.swift` | 音频格式转换工具（重采样） |
 | `Translation/` | 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗 |
-| `TextSplitter.swift` | 按句切分并合并到 ≤80 字，供播报分块 |
 
 ## 并发模型
 
@@ -231,12 +234,15 @@ Daemon (actor)
 ```
 Daemon (actor)
   ├── WeChatPlatform (actor)   ← await 调用 WeChatClient (actor)
-  ├── PlaybackQueue (actor)    ← await 调度 TTSEngine / AudioPlayer
+  ├── PlaybackQueue (actor)    ← await 调度 TTSEngine / AudioPlayer（音频回调走 AudioPlayer 的 serialQueue）
   ├── SocketServer (非 actor)  → 回调 Daemon 的 actor 隔离方法
-  └── SpeechInputService       → CGEvent 回调 → actor 方法
+  ├── SpeechInputService       → CGEvent 回调 → actor 方法
+  └── CaptionPanel (@MainActor)→ 队列的音频回调 → Task { @MainActor } 更新浮窗
 ```
 
 Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。用 `let capture = varValue` 创建值拷贝再传入闭包。
+
+**往 UI（AppKit）方向的边界：一律回主线程**。后台 actor（如队列的音频回调）要更新浮窗时走 `Task { @MainActor in panel.update(...) }`。浮窗自身或标 `@MainActor`（`CaptionPanel`——调用点本就在主线程上，标注零成本），或刻意不标、由调用方切线程（`OverlayPanel`——持有者不是 MainActor 类，标注会把整条链拖成 async）。两者都是有意的取舍，不是不一致。
 
 ## 数据流
 
@@ -253,9 +259,10 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 4. PlaybackQueue.enqueue(job)
    → 追加到队尾；如空闲则启动 processNext，其入口调用 MediaController.pause()
 5. TTSEngine.synthesizeStream() → AsyncThrowingStream<Data>
-6. AudioPlayer.write(pcm) → scheduleBuffer 连续排队（超高水位背压）；跨 job 不 drain
+6. AudioPlayer.write(chunk) → scheduleBuffer 连续排队（超高水位背压）；跨 job 不 drain。
+   块带「句首」标记（`AudioChunk.sentenceText`）时，被设备读出即回报字幕（`onCaption`，见 PlaybackQueue 节）
 7. 整条管道末端 drain() 一次，等跨 job 尾音播完
-8. turnOpen 已结束且队列空 → MediaController.resume()
+8. 没有流动中的轮（`anyTurnInFlight`）且队列空 → 撤字幕 + MediaController.resume()
 ```
 
 ### pi 流式播报（第二层流式）
