@@ -171,7 +171,7 @@ Daemon (actor)
 - 键盘监听由 `HotKey/GlobalKeyTap` **独占**（一个 tap 服务多个消费者，见下节），本服务只订阅**修饰键**：右⌘(0x36) / 右⌃(0x3E) 的状态变化由它回调进来
 - **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」——用户快捷键打断之一）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 用户快捷键五个：right⌘ 说话、Cmd+D 插队念译文、Ctrl+Esc 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+1 跳整轮、Ctrl+2 读下一页。**pi 新轮与停止帧不再打断**，一律排队
+- 用户快捷键五个：right⌘ 说话、Cmd+D 插队念译文、Ctrl+Esc 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+1 跳整摞、Ctrl+2 读下一页。**pi 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 

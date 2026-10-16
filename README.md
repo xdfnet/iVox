@@ -23,7 +23,7 @@
 | 🎛️ | **媒体控制** | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 打开 `127.0.0.1:8888`，手机同局域网用 `http://<本机IP>:8888` |
 | 🎙️ | **语音输入** | 按住说话，松开识别粘贴，浮窗实时显示波形 | 右 ⌘ / 右 ⌃ |
 | 📖 | **划词翻译** | 选中即译，屏幕下方歌词式浮窗出译文并可朗读 | `Cmd+D` |
-| ⚡ | **快速操作** | 在当前目录开终端 / 分别跑 `claude`、`codex`、`pi` / 复制路径 | `Opt+Z` · `Opt+A/X/Q` · `Opt+C` |
+| ⚡ | **快速操作** | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制路径 | `Opt+Z` · `Opt+A` `Opt+X` `Opt+Q` · `Opt+C` |
 | 💬 | **微信桥接** | 微信消息直通常驻 Claude，回复自动播报并转发回微信 | `ivox wechat setup` |
 
 ---
@@ -90,7 +90,7 @@ make check-tts # 播报黑盒自检（压真实 daemon，发版前手动跑）
 make clean     # 清除 .build
 ```
 
-> `make check-tts` 需先 `ivox on` 且模型就绪（缺 node 会提示 `brew install node`）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **13 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
+> `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **13 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
 
 > 需要 Swift 6.4 开发快照（`swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`）。早期快照的编译器崩溃已在该版本修复，详见 [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)。
 

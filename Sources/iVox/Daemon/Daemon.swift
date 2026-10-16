@@ -294,7 +294,7 @@ actor Daemon {
         // 处理器都装好了，这时才开 tap（顺序反了会让启动瞬间的按键落到 nil handler 上）
         keyTap.start()
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
-        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/X/C QuickActions；手动打断三档：Ctrl+2 跳这句 / Ctrl+1 跳整轮 / Ctrl+Esc 掀桌）")
+        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/X/C QuickActions；手动打断三档：Ctrl+2 读下一页 / Ctrl+1 跳整摞 / Ctrl+Esc 掀桌）")
     }
 
     /// 播报字幕（配置开启才装）：把队列广播的「正在念的这句」显示到屏幕下方浮窗。

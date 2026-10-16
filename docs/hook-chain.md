@@ -157,7 +157,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
   | 说话 | right⌘ / right⌃ → `cancelAll` | `speech` |
   | 划词翻译 | Cmd+D → `speakUserInitiated`（掐在播 + 译文桶插到队首，其余桶全保留） | `dict` |
   | 掀桌 | Ctrl+Esc → `cancelAll` | `esc` |
-  | 跳整轮（中） | Ctrl+1 → `skipCurrentBucket` | `skip` |
+  | 跳整摞（中） | Ctrl+1 → `skipCurrentBucket` | `skip` |
   | 读下一页（轻） | Ctrl+2 → `skipCurrentPage` | `skip-page` |
   这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。**Claude 的 `Stop` 钩子只作「收尾信号」**（`hook.sh end`：丢弃 payload、不发一个字，只让队列收尾当前摞）——当年摘它是因为它连正文一起送、与 MessageDisplay 重复播两遍，现在这条不出声。以下讲的是**旧的停止帧**：**`{type:stop}` 已完全失效且无发送方**（`hook.sh interrupt` 已摘、`ivox quiet` 已删），daemon 收到只记日志忽略、不再打断（这一支留作护栏：它走正文分支，删掉会把旧脚本发来的帧当内容念出来）。流式新轮（pi）不再顶替——排队。Escape 放弃自己那轮（`cancelTurn`）只删该轮自己的桶，不占打断来源。**agent 回复到达时一律排队，不抢麦**。
 

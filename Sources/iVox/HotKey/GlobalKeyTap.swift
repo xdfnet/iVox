@@ -31,7 +31,7 @@ final class GlobalKeyTap: @unchecked Sendable {
         case openTerminalPi       // Opt+Q
         case copyPath             // Opt+C
         case escInterrupt         // Ctrl+Esc 手动闭嘴（不录音）
-        case skipBucket           // Ctrl+1 跳过当前桶（丢当前轮，播下一桶）
+        case skipBucket           // Ctrl+1 跳整摞（丢当前摞，播下一摞）
         case skipPage             // Ctrl+2 读下一页（丢掉当前页剩下的块，翻页）
     }
 
