@@ -110,10 +110,13 @@ actor PlaybackQueue {
     /// 代价：多个来源交错时会互相盖（实测：我的回复与另一组交错，两边互相收尾），那一摞可能被
     /// 拆成几个桶、Ctrl+1 跳不干净；单个来源（日常）不触发。
     private var openGroup: String?
-    /// 空闲宽限期（秒）：队列见底却仍有未结束的轮时，最多再等这么久就判「这一摞说完了」。
-    /// 取值理由：一轮里页与页之间夹工具调用，间隔是秒级——太短会在页间来回切音乐（恢复→掐掉→再恢复），
-    /// 太长又让「说完音乐不回来」的等待变久。8 秒是两者的折中。
-    private static let idleGraceSeconds: Double = 8
+    /// 空闲宽限期（秒）：**声音停下之后**再等这么久没新内容，就判「这一摞说完了」。
+    /// 取值理由：一轮里页与页之间夹工具调用，间隔是秒级——太长会让「说完音乐不回来」的体感变差，
+    /// 太短会在页间来回切音乐（恢复→掐掉→再恢复）。2 秒是飞哥定的手感。
+    private static let idleGraceSeconds: Double = 2
+    /// 等「声音播完」的上限：设备卡死时别把宽限的起点也一起带死
+    ///（宁可早一点恢复音乐，也不能再出现"永远不还"）。
+    private static let maxSilenceWaitSeconds: Double = 10
     /// `waitForJobs` 的等待者。用引用类型让「入队唤醒」与「宽限超时」**互斥**：两边都在本 actor 上
     /// 串行地从 `jobWaiters` 摘除，先摘到的 resume、后到的发现已不在数组里即放弃——
     /// `CheckedContinuation` 双重 resume 会 fatal crash，这条互斥是硬要求。
@@ -670,6 +673,10 @@ actor PlaybackQueue {
     /// 宽限期就是这个判据的兜底：等够了就当作说完了。
     private func waitForJobs() async -> Bool {
         if hasPendingBuckets { return true }   // 还没挂起又来了货
+        // 宽限从**声音停下**起算：最后一块被取走去合成时它还在响，此刻就开始数的话，
+        // 音乐会在这一句还没念完时就回来、把尾音盖掉（体感是"没念完就切走了"）。
+        await waitUntilSilent()
+        if hasPendingBuckets { return true }   // 等播空的这几秒里来了新货
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let waiter = JobWaiter(continuation)
             jobWaiters.append(waiter)
@@ -678,6 +685,19 @@ actor PlaybackQueue {
                 try? await Task.sleep(for: .seconds(Self.idleGraceSeconds))
                 await self?.expire(waiter: waiter)
             }
+        }
+    }
+
+    /// 等设备把已排队音频播完（声音真的停下），最多等 `maxSilenceWaitSeconds`。
+    ///
+    /// 用轮询而不是"播空回调 + continuation"：① 这段只持续最后一块的播放时长、粒度是秒，200ms 一问足够；
+    /// ② **回调式挂起在设备卡死时会永久卡住**，反而把宽限的起点也带死——轮询天然带超时，卡到上限就走，
+    /// 音乐照样能回来。代价是每 200ms 唤醒一次 actor，只发生在队列见底的这几秒。
+    private func waitUntilSilent() async {
+        guard player.queuedFrames > 0 else { return }
+        let deadline = Date().addingTimeInterval(Self.maxSilenceWaitSeconds)
+        while player.queuedFrames > 0, Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(200))
         }
     }
 
