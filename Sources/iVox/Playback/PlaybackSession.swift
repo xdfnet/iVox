@@ -239,12 +239,34 @@ actor PlaybackSession {
         return pageClaim.page
     }
 
-    /// 删掉领走的那一页并清占位。领到的页号为 nil（非 Claude 路径）时什么都不做。
+    /// 删掉领走的那一页并清占位。
+    ///
+    /// **无页号（页号为空）时掀的是「当前那一段的剩余块」**——需求层的结构决定二：
+    /// 页是固定的一层，无页来源退化成匿名页，所以 Ctrl+2 在任何来源下都掀得掉东西，
+    /// 用户不必先想「这个工具有没有页」。匿名页 == 那一段本身（一段无页内容就是一页）。
+    /// **不立墓碑**：立墓碑是 Ctrl+1「掀摞才彻底」那一档的语义，两者差别就在这。
+    /// ⚠️ 无分组的连续 `ivox speak` 会并进同一段（`appendPlain`），此时掀的是并起来的那一段。
     @discardableResult
     func discardClaimedPage() -> Int {
-        let page = pageClaim.page
+        let claim = pageClaim
         pageClaim = (false, nil)
-        return discardPage(page)
+        guard claim.claimed else { return 0 }
+        if let page = claim.page { return discardPage(page) }
+        return discardCurrentSegmentBlocks()
+    }
+
+    /// 匿名页：清掉游标所在那一段的全部块，**不立墓碑**（与 `discardCurrentSegment` 的区别就在这）。
+    private func discardCurrentSegmentBlocks() -> Int {
+        guard let cursor = nextCursor() else { return 0 }
+        let list = cursor.isFront ? front : segments
+        guard let seg = list.first(where: { $0.pages.contains { $0.blocks.contains { $0.seq == cursor.seq } } }) else { return 0 }
+        let dropped = seg.blockCount
+        if cursor.isFront {
+            front.removeAll { $0.id == seg.id && $0.pages.contains { $0.blocks.contains { $0.seq == cursor.seq } } }
+        } else {
+            segments.removeAll { $0.id == seg.id && $0.pages.contains { $0.blocks.contains { $0.seq == cursor.seq } } }
+        }
+        return dropped
     }
 
     /// 掀页：丢掉所有属于该页的块（页号为 nil 的那批不算——非 Claude 路径没有页的语义）。

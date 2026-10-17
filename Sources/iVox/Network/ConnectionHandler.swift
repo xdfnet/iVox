@@ -259,7 +259,7 @@ actor ConnectionHandler {
             exit(0)
         }
         
-        let (source, voiceID, content, group, isFinal, page) = extractVoicePrefix(text, config: config)
+        let (source, voiceID, content, group, isFinal, page, isNow) = extractVoicePrefix(text, config: config)
         Log.info("请求解析: source=\(source) voice=\(voiceID) group=\(group ?? "-") final=\(isFinal) raw_chars=\(content.count)")
         Log.debug("请求原始内容: source=\(source) raw=\(logPreview(content))")
         let cleaned = cleanText(content)
@@ -295,6 +295,13 @@ actor ConnectionHandler {
             // 不带分组的收尾信号：查不到 session 对应的那一摞（msgdisplay 还没触发过 / 手动发）——
             // 不猜是哪一摞（全局"最后打开的那摞"那种判据已经删掉了），交给 2 秒空闲宽限收尾。
             Log.info("收尾信号（无分组，交空闲宽限兜底）: source=\(source) chars=\(clen)")
+        } else if isNow {
+            // 用户自己要求现在念（Cmd+D 译文 / `ivox speak --now`）：**插队**——掐掉在播的、
+            // 插到最前面立刻念，其余排队内容一个不丢，念完接着播原来的。
+            // 与普通的「只排队」相反：那条是 agent 自动汇报，不该抢麦（否则两个后台会话收尾会
+            // 互相掐掉对方的内容）；这条是用户按的，必须立刻响。
+            Log.info("用户插队播报: source=\(source) voice=\(voiceID) chars=\(clen) 分块=\(jobs.count)")
+            Task { await queue.speakUserInitiated(jobs) }
         } else {
             Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(clen) 分块=\(jobs.count)")
             Task { await queue.enqueue(jobs) }
@@ -425,9 +432,9 @@ actor ConnectionHandler {
         return dict
     }
 
-    nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, group: String?, isFinal: Bool, page: String?) {
+    nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, group: String?, isFinal: Bool, page: String?, isNow: Bool) {
         guard text.hasPrefix("{"), let end = text.firstIndex(of: "}") else {
-            return ("default", config.defaultVoice, text, nil, false, nil)
+            return ("default", config.defaultVoice, text, nil, false, nil, false)
         }
         let metaStr = String(text[text.index(after: text.startIndex)..<end])
         let pairs = metaStr.split(separator: ",").map { $0.split(separator: ":", maxSplits: 1).map(String.init) }
@@ -436,6 +443,7 @@ actor ConnectionHandler {
         var group: String?
         var page: String?
         var isFinal = false
+        var isNow = false
         for pair in pairs where pair.count == 2 {
             switch pair[0] {
             case "source": sourceID = pair[1]
@@ -445,12 +453,16 @@ actor ConnectionHandler {
             // 页号 = 一**页**（hook 传 message_id）：Ctrl+2「读下一页」按它翻页
             case "page":   page = pair[1].isEmpty ? nil : pair[1]
             case "end":    isFinal = true
+            // now：用户自己要求现在念（Cmd+D 译文 / `ivox speak --now`）→ **插队**，不是排队。
+            // 与 source 无关：Cmd+D 走这条路，自检也要能压到它，否则「唯一一条机器借道」的路径
+            // 永远没有自动化回归保护。
+            case "now":    isNow = true
             default: break
             }
         }
         let voiceID = explicitVoice ?? config.sourceVoices[sourceID] ?? config.defaultVoice
         let content = String(text[text.index(after: end)...])
-        return (sourceID, voiceID, content, group, isFinal, page)
+        return (sourceID, voiceID, content, group, isFinal, page, isNow)
     }
 
     nonisolated private func oneLine(_ value: String) -> String {

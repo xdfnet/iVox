@@ -98,7 +98,7 @@
 | 7 全掀 | `E7` + `C-bargein-stress` | 已验 |
 | 8 两会话并行 | `E3-turn-isolation` + `E6` | 已验 |
 | 9 多来源混排 | `S2` | 已验 |
-| **10 Cmd+D 插队** | —— | **已知未验**：`speakUserInitiated` 只由 `TranslationCoordinator`（Cmd+D 快捷键）调用，**socket 与 CLI 都没有入口**，自检够不着。要验需先决定是否加一个 CLI 入口（如 `ivox speak --now`）——那是产品取舍，不是测试问题 |
+| **10 Cmd+D 插队** | `I1-insert-front-keeps-queue` | 已验（2026-10-17）：socket 加了 `now:1` 字段、CLI 加了 `ivox speak --now`，插队这条路从此可被自检压到——译文先播、原文接着播、后续增量不被墓碑拦 |
 | 11 轮被自取消 | `E4-cancel-drops-late` | 已验 |
 | 12 播完与新内容撞同一瞬间 | `D-liveness-after-burst` | 已验 |
 | **13 合成失败** | —— | **已知未验**：自检没有能确定触发合成失败的入口（引擎只在模型未就绪/参考音频加载失败时抛，两者都不是 socket 能驱动的；硬造有砸模型的风险）。「失败后游标照常前移、不卡在同一块」由代码结构保证（`processNext` 的 `commit` 无条件执行），但**没有端到端验证** |

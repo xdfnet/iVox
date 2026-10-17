@@ -104,6 +104,14 @@ async function speakGrouped(source, group, page, text) {
   s.end();
 }
 
+// 用户插队播报（{now:1}）= Cmd+D 译文走的那条路：掐掉在播的、插到最前面立刻念，
+// 其余排队内容一个不丢。CLI 等价物 `ivox speak --now`。
+async function speakNow(source, text) {
+  const s = await conn();
+  s.write(`{source:${source},now:1}${text}`);
+  s.end();
+}
+
 // 掐 + 掀某一档：mode=page | stack | all，逐字对应 Ctrl+2 / Ctrl+1 / Ctrl+Esc。
 async function skip(mode) {
   const s = await conn();
@@ -300,6 +308,7 @@ async function runCase(c) {
     sleep,
     speak: (text) => speak(source, text),
     speakGrouped: (group, page, text) => speakGrouped(source, group, page, text),
+    speakNow,
     skip,
     skipAll,
     openStream: (t = turn) => openStream(t, source),
@@ -834,6 +843,38 @@ const cases = [
       const grouped = ctx.log.grep(/队列入队（摞）/, ctx.t0);
       ctx.check(streamed.length >= 1, "流式来源未入队");
       ctx.check(grouped.length >= 1, "带摞页的一次性来源未入队");
+      ctx.noBad();
+    },
+  },
+  // ───────── I1：用户插队（Cmd+D 译文 / --now） ─────────
+  // 需求：译文是唯一的机器开口，只临时插队——念完即走，原队列一个不丢，且不立墓碑。
+  {
+    name: "I1-insert-front-keeps-queue",
+    async run(ctx) {
+      const g = `in${ctx.turn}`;
+      const dictSrc = ctx.ids().source;
+      await ctx.speakGrouped(g, "I1", "第一页要说的话，长度够触发一次合成就好。");
+      await ctx.speakGrouped(g, "I2", "第二页要说的话，长度够触发一次合成就好。");
+      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "第一页未开始合成");
+      await sleep(500);
+      await ctx.speakNow(dictSrc, "这是一句插队先念的译文。");
+      await sleep(300);
+      await ctx.speakGrouped(g, "I3", "第三页要说的话，长度够触发一次合成就好。");
+      const settled = await ctx.settled(60000);
+      ctx.check(!!settled, "未收尾");
+
+      const all = ctx.log.grep(/TTS 合成开始/, ctx.t0);
+      const dict = all.filter((h) => h.msg.includes(`[${dictSrc}-`));
+      ctx.check(dict.length >= 1, "译文没有被合成");
+      ctx.check(
+        all.some((h) => /\[c\d\d/.test(h.msg) && h.ts > (dict[0]?.ts ?? Infinity)),
+        "译文之后原队列没有继续播（可能被墓碑拦掉了）",
+      );
+      ctx.check(
+        all.filter((h) => /\[c\d\d/.test(h.msg)).length >= 2,
+        `原文内容有丢失（原文侧只合成了 ${all.filter((h) => /\[c\d\d/.test(h.msg)).length} 次）`,
+      );
       ctx.noBad();
     },
   },

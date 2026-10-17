@@ -25,6 +25,9 @@ struct SpeakCommand: AsyncParsableCommand {
     @Flag(name: .customLong("final"), help: "这批是该回复的最后一批（收尾该分组）")
     var isFinal: Bool = false
 
+    @Flag(name: .customLong("now"), help: "现在就念（插队）：掐掉在播的，这句插到最前面立刻念，念完接着播原来的")
+    var isNow: Bool = false
+
     @Argument(help: "要朗读的文本")
     var text: String
 
@@ -36,6 +39,7 @@ struct SpeakCommand: AsyncParsableCommand {
         if let group, !group.isEmpty { parts.append("group:\(group)") }
         if let page, !page.isEmpty { parts.append("page:\(page)") }
         if isFinal { parts.append("end:1") }
+        if isNow { parts.append("now:1") }
         let prefix = parts.isEmpty ? "" : "{\(parts.joined(separator: ","))}"
         try SocketClient.send(prefix + text, to: socketPath)
         // 给 hook 用：stdout 只能出干净的 JSON，任何诊断输出都不能混进去
