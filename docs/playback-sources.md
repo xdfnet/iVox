@@ -48,7 +48,24 @@ pub struct AgentMessageContentDeltaEvent {
 
 codex 本身支持 12 个 hook 事件（`PreToolUse` / `PostToolUse` / `SessionStart` / `UserPromptSubmit` / `Stop` …）和 `Thread` / `Turn` 两种 scope，payload 里带 `thread_id` / `turn_id`。但**这些 hook 里没有 assistant 正文增量事件**——所以只靠 hook 拿不到流。
 
-## 其他通道
+## 接入形态（真正的来源分类）
+
+产品名会变、会新增，**形态不会**。判定按形态走——队列只有三个入口，
+所有接入方最终都落到下面五种之一：
+
+| 形态 | 长什么样 | 谁在用 | 身份 | 收尾 |
+|---|---|---|---|---|
+| **A. 长连接流式** | 接入方自己开一条连接，边生成边发增量 | pi 扩展 | 接入方**自报** turn；页由翻页信号给（pi 发 `{page}` 帧） | 连接内 `{end}` / EOF，可靠；另有 `{cancel}` 自取消 |
+| **B. hook 增量分批** | 工具渲染时按行批触发 hook，每批带增量 | Claude Code（MessageDisplay） | 每批 payload 里带 `turn_id` + `message_id`（缺失时回落）；Stop 只有 `session_id`，靠 `lastturn/` 反查 | 外部 Stop 钩子（**可能丢**），丢了靠宽限兜底 |
+| **C. hook 终了一次** | 工具结束时触发 hook，payload 带完整回复 | codex，以及**任何能配 stop hook 且 payload 有 `last_assistant_message` 的工具** | 当前无（hook 面无正文增量）；协议里其实有 `turn_id`+`item_id`，需换接法才拿得到 | Stop 即完整，无缺口 |
+| **D. 一次性 speak** | 命令行丢一段文本进来 | `ivox speak`（人工、脚本） | 无 | 发完即完整 |
+| **E. 插队播报** | 用户主动开口，要立刻响 | Cmd+D 划词译文 | 无 | 发完即完整，**插队到队首** |
+| —（非播报） | 只把文本发回聊天窗口 | 微信链路 | — | `ClaudeAskService` 不进队列 |
+
+**形态 C 是一整个类别，不止 codex。** 任何工具只要能配一个 stop hook、payload 里带
+`last_assistant_message`，就能以「整段一次」的方式接进来——这是最低门槛的接法，
+也是目前 codex 的现状。
+
 
 | 通道 | 身份 | 现状 |
 |---|---|---|
@@ -63,6 +80,7 @@ codex 本身支持 12 个 hook 事件（`PreToolUse` / `PostToolUse` / `SessionS
 | 身份 | 跳页（Ctrl+2） | 跳摞（Ctrl+1） | 掀桌（Ctrl+Esc） |
 |---|---|---|---|
 | 满档（有摞有页） | ✅ | ✅ | ✅ |
+| 半档（有摞，整段一页） | 退化成只掐在播 | ✅ | ✅ |
 | 无页无摞（手动 · Cmd+D） | 退化成只掐在播 | 退化成丢当前那一桶 | ✅ |
 
 ## 准入标准（以后接新 agent 按这条判）
