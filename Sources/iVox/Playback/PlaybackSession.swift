@@ -7,6 +7,20 @@ import iVoxKit
 // 不必像旧实现那样在容器外另记一份 `playingPageID`（那份会陈旧，
 // 2026-10-17 的 bug 就是第二次按压拿旧页号删掉了后到的内容）。
 // 播报四层文档见 docs/playback/：purpose（目的/取舍）→ sources → requirements → queue。
+//
+// **三层各干各的，别管别人**（2026-10-17 起的分层契约）：
+//   ① 插入队列：只管把 段/页/块 放进容器，不关心谁会播、谁会删。
+//   ② 消费队列：只管按容器顺序取块、合成、播放，不关心插队意图与打断。
+//   ③ 过程干预：只管「掐 + 删队首」，**绝不问消费进度**。
+// 第 ③ 条是被一次实测事故逼出来的（2026-10-17 18:52）：干预层为了找「当前摞」
+// 去问游标，而游标是**合成进度**、领先真实发声 2~4 秒（预取垫 + 引擎缓冲），
+// 于是用户按下 Ctrl+1 时耳朵里是 A、代码掀的是 B——用户想听的那一摞被整摞掀掉，
+// 且毫无察觉。
+//
+// **为什么问游标是多余的**：播放严格按容器顺序推进，所以「正在播的那一摞」
+// 恒等于**容器里第一个还有未播块的段**——纯结构事实，不需要时间信息。
+// 本文件里游标只用于两件事：① 判「这个段还剩不剩内容」；② producer 取块。
+// 任何「用户在听什么」的判断都不许经过游标。
 
 /// 一块待播文本（服务拿去播报的单位，不是给用户看的）。
 /// `seq` 由 Session 在入队时分配、单调递增，游标就靠它定位。
@@ -36,7 +50,12 @@ struct PlaybackSegment: Sendable {
     var isEmpty: Bool { blockCount == 0 }
 }
 
-/// 游标指向的块及其容器坐标。「当前在播」= 游标之后的第一块。
+/// 游标指向的块及其容器坐标。
+///
+/// **它是队列进度，不是「用户在听哪」。** 生产者取块（消费层）用它；
+/// **过程干预（Ctrl+1/2/Esc）不许用它**——游标记的是「已交给合成的最高号」，
+/// 领先真实发声 2~4 秒（预取垫 + 引擎缓冲）。拿它当起点就是 2026-10-17 18:52 那场事故。
+/// 干预层只许看容器结构，见 `headStackTarget()`。
 struct PlaybackCursor: Sendable {
     let seq: UInt
     let block: PlaybackBlock
@@ -57,9 +76,14 @@ actor PlaybackSession {
     /// 加急段自带一套游标（`frontCursor`），两段各走各的，语义清楚。
     private var front: [PlaybackSegment] = []
     private var frontCursor: UInt = 0
-    /// 每块一个单调递增的号。游标记「已播到哪一号」——删除容器内容时游标**无需修正**：
-    /// 块只会往后加、序号单调，游标前方的块要么已播完要么被掀掉，两种情况都不该重播。
+    /// 每块一个单调递增的号。
     private var nextSeq: UInt = 1
+    /// **队列进度：已交给合成的最高块号。** 供消费层取块、判「还有没有活」；
+    /// 供删除操作判断「这个段还剩不剩内容」。
+    ///
+    /// **它不是「已播到哪」**（那句旧注释是错的：`commit` 在合成结束时就前移，此时音频
+    /// 可能一行都还没响），更**不是「用户在听哪」**。删除容器内容时游标**无需修正**：
+    /// 块只会往后加、序号单调，游标前方的块要么已播完要么被掀掉，两种情况都不该重播。
     private var cursorSeq: UInt = 0
 
     /// pi 双流认证用：认领过、尚未出栈的轮。
@@ -74,10 +98,6 @@ actor PlaybackSession {
         let continuation: CheckedContinuation<Bool, Never>
         init(_ continuation: CheckedContinuation<Bool, Never>) { self.continuation = continuation }
     }
-    /// 掀页靶心的占位（见 `claimCurrentPage`）：`claimed` 表示「某次按压已领走靶心、还没删完」。
-    /// `page` 单独存是因为「领到了、但那页没有页号（非 Claude 路径）」也是一种领到，
-    /// 不能和「没领」混成同一个 nil。
-    private var pageClaim: (claimed: Bool, page: String?) = (false, nil)
     private var waiters: [Waiter] = []
     /// 已排定宽限计时的等待者（防止重复计时器把同一个 waiter 摘两次）。
     private var timedOut: Set<ObjectIdentifier> = []
@@ -129,7 +149,97 @@ actor PlaybackSession {
 
     /// 当前正在播的那一页（掀页的语义：「用户感知到的当前页」）。
     /// 游标之后第一块所在的页——正是他听到的那一页。
-    var currentPageID: String? { nextCursor()?.block.pageID }
+    // 2026-10-17 删除。这个 getter 是**拿合成进度冒充用户感知位置**的源头：
+    // 掀页/掀摞的起点都取自它，而游标领先真实发声 2~4 秒。起点改由队首结构给出，
+    // 见 `headStackTarget()` / `headPageTarget()`。
+
+    // MARK: - 发声点（打断起点的唯一真源）
+
+    /// 设备当前正在渲染的块号。消费层报事实（`noteConsumed`），身份层存位置，
+    /// **推导起点的事全在下面两个 `audible*Target` 里**——三层分工不许破。
+    ///
+    /// **`dataConsumed` 领先真实发声 10~21ms，裁决为接受**：误差方向是安全的
+    /// （指向「正在响的」，最多差 21ms，不指向「还没响的」）；2026-10-17 18:52 那场事故
+    /// 是危险方向。要对齐得挂 `AVAudioEngine` tap，新增 IO 抖动风险，与收益不成比例。
+    ///
+    /// **它就是「正在响的那一块」，不落后一号**：`dataConsumed` 在 buffer 开始被渲染时回调，
+    /// 不是播完才回调 —— 仓库里字幕的 `onSentenceStarted` 早就这么用，且从没被判过字幕延迟，
+    /// 这是同一条信号在生产里跑了很久的旁证。
+    private var audibleSeq: UInt = 0
+
+    /// 消费层上报「块 `seq` 正在被设备渲染」。它只报事实，不推导起点。
+    func noteConsumed(_ seq: UInt) {
+        guard seq > audibleSeq else { return }
+        audibleSeq = seq
+    }
+
+    /// 发声点所在的段。返回 nil = 还没出声过（冷启动）或那一摞已被删除。
+    private func audibleStackTarget() -> (isFront: Bool, index: Int, id: String?)? {
+        guard let hit = locate(seq: audibleSeq) else { return nil }
+        return (hit.isFront, hit.segIndex, (hit.isFront ? front : segments)[hit.segIndex].id)
+    }
+
+    /// 发声点所在的页。
+    private func audiblePageTarget() -> (isFront: Bool, segIndex: Int, pageIndex: Int, id: String?)? {
+        guard let hit = locate(seq: audibleSeq) else { return nil }
+        let list = hit.isFront ? front : segments
+        guard let j = list[hit.segIndex].pages.firstIndex(where: { $0.blocks.contains { $0.seq == audibleSeq } })
+        else { return nil }
+        return (hit.isFront, hit.segIndex, j, list[hit.segIndex].pages[j].id)
+    }
+
+    /// 按 seq 在两个容器里反查坐标。seq 全局单调（`pages(from:)` 统一盖章），
+    /// 所以一个号在两个容器里至多命中一次。
+    private func locate(seq: UInt) -> (isFront: Bool, segIndex: Int)? {
+        guard seq > 0 else { return nil }
+        func segIndex(in list: [PlaybackSegment]) -> Int? {
+            list.firstIndex { $0.pages.contains { p in p.blocks.contains { $0.seq == seq } } }
+        }
+        if let i = segIndex(in: front) { return (true, i) }
+        if let i = segIndex(in: segments) { return (false, i) }
+        return nil
+    }
+
+    // MARK: - 起点（过程干预只许看这两个 getter）
+
+    /// 第一个**有内容**的段在容器里的下标；没有则 nil。
+    ///
+    /// **判据是「有没有内容」，不是「有没有未播」。** 一段的内容播完了（块都过了游标）
+    /// 仍在容器里、尾音还在设备上响——那正是用户耳朵里那一摞。改用「未播」会在预取把
+    /// 游标送过边界的那一刻把起点推到下一摞（2026-10-17 18:52 实测事故的形状）。
+    /// 反过来，**一块内容都没有的段**（已声明、字还没到的挂起摞）不算起点，跳过它。
+    private func firstContentIndex(in list: [PlaybackSegment]) -> Int? {
+        list.firstIndex { !$0.isEmpty }
+    }
+
+    /// 段内第一个有内容的页下标。
+    private func firstContentPageIndex(in seg: PlaybackSegment) -> Int? {
+        seg.pages.firstIndex { !$0.blocks.isEmpty }
+    }
+
+    /// **用户此刻正在听的摞**。
+    ///
+    /// 先看发声点（准确，2026-10-17 引入）；发声点还没有记录时退回**队首**——
+    /// 用户还没听到任何声音，即将播的那个就是他要听的。
+    /// 加急段（Cmd+D 译文）排在 `front`、先播，所以无发声记录时它优先。
+    ///
+    /// - Returns: `nil` = 容器里没有任何内容（队列真空 / 设备播空），此时过程干预退化成「只掐不掀」。
+    func headStackTarget() -> (isFront: Bool, index: Int, id: String?)? {
+        if let a = audibleStackTarget() { return (a.isFront, a.index, a.id) }
+        if let i = firstContentIndex(in: front) { return (true, i, front[i].id) }
+        if let i = firstContentIndex(in: segments) { return (false, i, segments[i].id) }
+        return nil
+    }
+
+    /// **用户此刻正在听的页号**（诊断用，只读）。与 `headStackTarget` 同源：发声点优先，缺则队首。
+    /// - Returns: 外层 `nil` = 没有任何内容在播；内层 `nil` = 这一页没有页号（非 Claude 路径的匿名页）。
+    var headPageID: String?? {
+        if let p = audiblePageTarget() { return .some(p.id) }
+        guard let head = headStackTarget(),
+              let j = firstContentPageIndex(in: (head.isFront ? front : segments)[head.index])
+        else { return nil }
+        return .some((head.isFront ? front : segments)[head.index].pages[j].id)
+    }
 
 
 
@@ -218,7 +328,6 @@ actor PlaybackSession {
     /// 用户取消这一轮（pi 空流 `{cancel}`）：丢掉该轮内容并立墓碑，其后续增量一律不开口。
     @discardableResult
     func cancelTurn(_ id: String) -> Bool {
-        pageClaim = (false, nil)
         let dropped = sweepSegments(matching: id, in: &segments) + sweepSegments(matching: id, in: &front)
         bury(id)
         if turnStack.last == id { turnStack.removeLast() }
@@ -226,74 +335,68 @@ actor PlaybackSession {
         return dropped > 0
     }
 
-    /// 掀页的靶心：**领走**「当前正在播的那一页」并占住它。
+    /// 掀摞（Ctrl+1）：丢掉**用户此刻正在听的这一摞**，从下一摞接着播。
     ///
-    /// 为什么不能只读一次就完事：掀页的顺序是「领靶心 → 掐在播（要 await 播放器退净）→ 删这一页」，
-    /// 中间那几个挂起点给 actor **重入**了机会——用户第二次按压会插进来，容器里这一页还没删，
-    /// 于是又领到同一个页号，两次都去删同一页（2026-10-17 `P2` 实测：两下都报 Q2，随后 daemon 崩）。
-    /// 领走即焚是另一半保险；**占位**才是治重入的那一半：领过之后返回 nil，第二次按压退化成
-    /// 「只掐在播」，不误删、也不会重复删同一页。
-    func claimCurrentPage() -> String? {
-        guard !pageClaim.claimed else { return nil }
-        pageClaim = (true, nextCursor()?.block.pageID)
-        return pageClaim.page
-    }
-
-    /// 删掉领走的那一页并清占位。
+    /// 起点取「容器里第一个还有未播块的段」——纯结构事实，**不问消费进度**。
+    /// 顺手把它前面那些「已播完、一块没剩」的段清掉：它们从没被用户作废，**不立墓碑**，
+    /// 纯粹是历史垃圾（`segments` 只增不减，不清就会越堆越多）。
     ///
-    /// **无页号（页号为空）时掀的是「当前那一段的剩余块」**——需求层的结构决定二：
-    /// 页是固定的一层，无页来源退化成匿名页，所以 Ctrl+2 在任何来源下都掀得掉东西，
-    /// 用户不必先想「这个工具有没有页」。匿名页 == 那一段本身（一段无页内容就是一页）。
-    /// **不立墓碑**：立墓碑是 Ctrl+1「掀摞才彻底」那一档的语义，两者差别就在这。
-    /// ⚠️ 无分组的连续 `ivox speak` 会并进同一段（`appendPlain`），此时掀的是并起来的那一段。
+    /// 幂等性是这套结构自带的：按第二次时队首已经换成下一摞，天然落在「听下一摞」上。
+    ///
+    /// **领取即摘走，这是本方法存在的全部理由。** 旧实现把「找起点」和「删内容」合在一步、
+    /// 且那一步排在 `await` 之后——掐在播要等旧管道退净，而那期间旧管道会 commit 掉
+    /// 正在响的最后一块、游标一越过边界，「当前摞」就从 A 变成 B，于是掀掉了用户想听的 B
+    /// （2026-10-17 18:52 实测现场：掀的是 B、A 留在容器里两秒后被宽限盖印）。
+    /// 把摘走放在**掐之前**，起点从此不可能再被游标带偏；连按也天然正确——第二次按压时
+    /// 队首已经是下一摞。旧实现那套「领走即焚 + 占位防重入」由此不再需要。
+    ///
+    /// - Returns: (被立墓碑的摞号，nil = 无分组普通播报, 丢掉的块数)。`nil` = 当时没有内容在播。
     @discardableResult
-    func discardClaimedPage() -> Int {
-        let claim = pageClaim
-        pageClaim = (false, nil)
-        guard claim.claimed else { return 0 }
-        if let page = claim.page { return discardPage(page) }
-        return discardCurrentSegmentBlocks()
+    func takeHeadStack() -> (id: String?, dropped: Int)? {
+        guard let head = headStackTarget() else { return nil }
+        let dropped = (head.isFront ? front : segments)[head.index].blockCount
+        // **删除不 signal**：signal 的含义是「新内容来了，宽限不必再等」。掀是在**删**内容——
+        // 发了 signal 会把宽限计时器唤醒，让它误判「来新货了、别盖印」，宽限就此作废而没有
+        // 接班人，这一摞永远收不掉（2026-10-17 `P3` 实测，同一毫秒内自唤醒）。
+        //
+        // 顺手把它前面那些「已播完、一块没剩」的段一并清掉：它们从没被用户作废，
+        // **不立墓碑**，纯粹是历史垃圾（`segments` 只增不减，不清就会越堆越多）。
+        if head.isFront { front.removeFirst(head.index + 1) }
+        else { segments.removeFirst(head.index + 1) }
+        // 只给正在听的那摞立墓碑：它才是用户明确放弃的。
+        if let id = head.id { bury(id) }
+        return (head.id, dropped)
     }
 
-    /// 匿名页：清掉游标所在那一段的全部块，**不立墓碑**（与 `discardCurrentSegment` 的区别就在这）。
-    private func discardCurrentSegmentBlocks() -> Int {
-        guard let cursor = nextCursor() else { return 0 }
-        let list = cursor.isFront ? front : segments
-        guard let seg = list.first(where: { $0.pages.contains { $0.blocks.contains { $0.seq == cursor.seq } } }) else { return 0 }
-        let dropped = seg.blockCount
-        if cursor.isFront {
-            front.removeAll { $0.id == seg.id && $0.pages.contains { $0.blocks.contains { $0.seq == cursor.seq } } }
+    /// 掀页（Ctrl+2）：摘走用户此刻正在听的那一页，从下一页接着播。**不立墓碑** ——
+    /// 立墓碑是「掀摞才彻底」那一档的语义，两者差别就在这。
+    ///
+    /// 同样**领取即摘走**（理由见 `takeHeadStack`）。整摞被掀空就连空壳一起清，不留垃圾。
+    /// 无页号（`ivox speak` 这类无页来源）退化成匿名页：掀掉的那一页就是它所在的那一段，
+    /// 用户不必先想「这个工具有没有页」。
+    /// - Returns: (被掀掉的页号，可能为 nil = 匿名页, 丢掉的块数)。`nil` = 当时没有内容在播。
+    @discardableResult
+    func takeHeadPage() -> (pageID: String?, dropped: Int)? {
+        // 起点先看发声点；还没出声过（冷启动）才退回队首的那一页。
+        let hit: (isFront: Bool, seg: Int, page: Int)
+        if let a = audiblePageTarget() {
+            hit = (a.isFront, a.segIndex, a.pageIndex)
+        } else if let h = headStackTarget(),
+                  let j = firstContentPageIndex(in: (h.isFront ? front : segments)[h.index]) {
+            hit = (h.isFront, h.index, j)
         } else {
-            segments.removeAll { $0.id == seg.id && $0.pages.contains { $0.blocks.contains { $0.seq == cursor.seq } } }
+            return nil
         }
-        return dropped
-    }
-
-    /// 掀页：丢掉所有属于该页的块（页号为 nil 的那批不算——非 Claude 路径没有页的语义）。
-    /// 游标**不用修正**：它是「已播到哪一号」，被删的块要么已播完、要么正是被用户掀掉的，
-    /// 两种情况都不该重播；而游标之后的第一块会自动变成新的下一块。
-    /// - Returns: 被丢掉的块数。
-    @discardableResult
-    func discardPage(_ pageID: String?) -> Int {
-        guard let pageID else { return 0 }
-        // **删除不 signal**：signal 的含义是「有新内容来了，宽限不必再等」。
-        // 掀页是在**删**内容——发了 signal 会把宽限计时器唤醒，让它误判「来新货了、别盖印」，
-        // 宽限就此作废而没有接班人，这一摞永远收不掉（2026-10-17 `P3` 实测，同一毫秒内自唤醒）。
-        return sweepPages(matching: pageID, in: &front) + sweepPages(matching: pageID, in: &segments)
-    }
-
-    /// 把符合条件的页整页删掉，返回删掉的块数。
-    private func sweepPages(matching pageID: String, in list: inout [PlaybackSegment]) -> Int {
-        var dropped = 0
-        for i in list.indices {
-            // **不能用 remove(at:) 配 indices 遍历**（2026-10-17 实测崩在这：删完索引整体前移，
-            // 下一轮越界 → Index out of range → daemon 崩、LaunchAgent 拉起、自检假红一片）。
-            // 要删的先算出来，再用 removeAll 一次性删。
-            let hit = list[i].pages.filter { $0.id == pageID }
-            dropped += hit.reduce(0) { $0 + $1.blocks.count }
-            list[i].pages.removeAll { $0.id == pageID }
+        if hit.isFront {
+            let page = front[hit.seg].pages[hit.page]
+            front[hit.seg].pages.removeFirst(hit.page + 1)
+            if front[hit.seg].isEmpty { front.remove(at: hit.seg) }
+            return (page.id, page.blocks.count)
         }
-        return dropped
+        let page = segments[hit.seg].pages[hit.page]
+        segments[hit.seg].pages.removeFirst(hit.page + 1)
+        if segments[hit.seg].isEmpty { segments.remove(at: hit.seg) }
+        return (page.id, page.blocks.count)
     }
 
     /// 把符合条件的段整段删掉，返回删掉的块数。
@@ -303,53 +406,37 @@ actor PlaybackSession {
         return dropped
     }
 
-    /// 游标之后那一块所在的段号（掀摞的靶心）。没有块在播、或那段没有摞号 → nil。
-    private var currentSegmentID: String? {
-        guard let c = nextCursor() else { return nil }
-        let list = c.isFront ? front : segments
-        for seg in list where seg.pages.contains(where: { $0.blocks.contains { $0.seq == c.seq } }) {
-            return seg.id
-        }
-        return nil
-    }
-
-    /// 掀**当前**那一摞：靶心取「游标之后第一块所在的段」——正是他听到的那一摞，
-    /// 取完即焚（第二次按压重新取，不会拿旧摞号删后到的内容）。容器里没有当前块就什么都不做。
-    /// - Returns: 被丢掉的块数（0 = 当时没有块在播）。
+    /// 回收队首那些「已经听完、也不会再来内容」的段，返回清掉的段数。**不立墓碑** ——
+    /// 用户没放弃它们，只是听完了；后续若还有页来，`appendGrouped` 会重新开段照播。
+    ///
+    /// **为什么必须清**（2026-10-17 引入发声点时发现）：容器原先只增不减，播完的摞一直留着，
+    /// 酿成两个后果——
+    /// ① `/health` 的 `audibleTurn` 在播完之后还报着一个早就不响的摞，等于对外撒谎；
+    /// ② **更要命**——播完后用户按 Ctrl+1，起点会落在那个早已播完的摞上，于是给它立墓碑；
+    /// 而 Claude 那一摞往往**还在继续送页**（一次输入 = 好几页），墓碑一立，后续页全被静默丢弃。
+    /// 每次泵顺手清一次，`segments` 才不会既虚胖又误导起点。
+    ///
+    /// - Parameter afterSilence: 调用方已确认**设备真静音**（`播报收尾` 那条路径，
+    ///   它前面跑过 `waitUntilQuiet`）。这时连「正在响」的块也已经响完了，可以连它一起清——
+    ///   发声点本身永远停在最后一块上（没有下一块来推进它），不给这条后门，`/health` 就会一直撒谎。
     @discardableResult
-    func discardCurrentSegment() -> Int {
-        pageClaim = (false, nil)
-        guard let cursor = nextCursor() else { return 0 }
-        guard let id = currentSegmentID else {
-            // 队首那段没有摞号（普通播报）：掀掉它，就是 Ctrl+1 在无分组的队首上的语义。
-            if cursor.isFront {
-                guard !front.isEmpty, front[0].id == nil else { return 0 }
-                return front.removeFirst().blockCount
+    func retireSpentSegments(afterSilence: Bool = false) -> Int {
+        func takeSpent(_ list: inout [PlaybackSegment]) -> Int {
+            var n = 0
+            while let first = list.first, first.sealed {
+                let maxSeq = first.pages.flatMap({ $0.blocks }).map(\.seq).max() ?? 0
+                // 严格小于：正在响的那一块（maxSeq == 发声点）还没响完，不能清。
+                guard afterSilence || maxSeq < audibleSeq else { break }
+                list.removeFirst(); n += 1
             }
-            guard !segments.isEmpty, segments[0].id == nil else { return 0 }
-            return segments.removeFirst().blockCount
+            return n
         }
-        return discardSegment(id)
-    }
-
-    /// 掀段：丢掉整摞并立墓碑，它的后续增量（含关连接后 EOF 兜底补出的残尾）不再开口。
-    @discardableResult
-    func discardSegment(_ id: String?) -> Int {
-        guard let id else {
-            // 无分组普通播报：只丢最靠前的那一段（Ctrl+1 在无分组的队首上就这个语义）。
-            if !front.isEmpty, front[0].id == nil { return front.removeFirst().blockCount }
-            guard !segments.isEmpty, segments[0].id == nil else { return 0 }
-            return segments.removeFirst().blockCount
-        }
-        let dropped = sweepSegments(matching: id, in: &segments) + sweepSegments(matching: id, in: &front)
-        if dropped > 0 { bury(id) }   // 同上：删除不 signal
-        return dropped
+        return takeSpent(&front) + takeSpent(&segments)
     }
 
     /// 全掀：清空容器，所有摞立墓碑。
     @discardableResult
     func discardAll() -> [String] {
-        pageClaim = (false, nil)
         // **turnStack 里的轮也要立墓碑**：它们是「已声明、块还没到」的轮，此刻容器里还没有对应的段，
         // 只按段立碑就会漏掉它们——打断之后它们陆续送来的字会照常播出来
         //（2026-10-17 `E7` 实测：清空队列时 pending=0，墓碑一个没立，打断后同一轮照样开口）。

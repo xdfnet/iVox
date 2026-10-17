@@ -254,7 +254,9 @@ actor Daemon {
             model: modelName,
             engine: engineState,
             queued: await queue.pendingCount,
-            playing: await queue.isProcessing
+            playing: await queue.isProcessing,
+            audibleTurn: await queue.audibleTurn,
+            audiblePage: await queue.audiblePage
         )
     }
 

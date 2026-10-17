@@ -730,7 +730,7 @@ const cases = [
       ctx.check(!!started, "第一页未开始合成");
       await sleep(500);
       await ctx.skip("page");
-      const dropped = await ctx.log.waitFor(/本页剩余块已丢/, { sinceTs: ctx.t0, timeout: 8000 });
+      const dropped = await ctx.log.waitFor(/这页不要了，听下一页/, { sinceTs: ctx.t0, timeout: 8000 });
       ctx.check(!!dropped, "缺掀页日志");
       const settled = await ctx.settled(45000);
       ctx.check(!!settled, "未收尾");
@@ -775,7 +775,7 @@ const cases = [
       ctx.check(!!started, "第一部分未开始合成");
       await sleep(400);
       await ctx.skip("page");                            // 第一下：掀掉页 A 当时的块
-      const dropped = await ctx.log.waitFor(/本页剩余块已丢/, { sinceTs: ctx.t0, timeout: 8000 });
+      const dropped = await ctx.log.waitFor(/这页不要了，听下一页/, { sinceTs: ctx.t0, timeout: 8000 });
       ctx.check(!!dropped, "缺第一下掀页日志");
       // 页 A 的续段这时才到。按需求层「掀页掀不彻底，没来的部分等它来了照样播」，
       // 它必须照常入队并播出来——这条钉的是能力边界不被误当成 bug 修掉。

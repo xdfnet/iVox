@@ -39,7 +39,7 @@ let package = Package(
         ),
         .testTarget(
             name: "iVoxTests",
-            dependencies: ["iVoxKit"]
+            dependencies: ["iVoxKit", "iVox"]
         ),
     ]
 )

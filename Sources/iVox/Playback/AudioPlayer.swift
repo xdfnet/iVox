@@ -34,6 +34,12 @@ final class AudioPlayer: @unchecked Sendable {
     /// 「某句开始被设备消费」回调（字幕用）：句首块被读出时触发——**比从合成侧取准得多**
     /// （合成领先播放一两句，字幕会早到）。由 PlaybackQueue 在 init 时一次性注入，之后只读。
     var onSentenceStarted: (@Sendable (String) -> Void)?
+    /// 「块 `seq` 的这一批已被设备读出」回调（发声点用）。
+    /// 由 PlaybackQueue 在 init 时注入，之后只读。播放层只报事实——**不知道摞/页，也不推导起点**。
+    var onBlockConsumed: (@Sendable (UInt) -> Void)?
+    /// 已经上报过发声的最大块号：同一块的多个 buffer 只报一次，
+    /// 不给 actor 制造可观测抖动（一次 80 字块的 PCM 可能分好几个 buffer）。
+    private var lastReportedSeq: UInt = 0
     private var needsPrime = true  // 是否需要先调度前导静音 buffer 唤醒 player node
     // 背压水位：排队音频超过 4s 暂停合成，降到 2s 再放行（留足预取掩盖下一句合成启动）
     private let highWaterFrames: Int
@@ -79,7 +85,9 @@ final class AudioPlayer: @unchecked Sendable {
     /// 被取消时由 cancelPendingPlayback 恢复挂起，调用方靠 Task.checkCancellation 退出。
     /// - Parameter startsSentence: 非 nil 表示这是**某句的第一块**，值是这句的文本；
     ///   该块被设备读出（≈ 这句开始响）时回调 `onSentenceStarted`，让字幕跟声音对齐。
-    func write(_ pcm: Data, startsSentence: String? = nil) async {
+    /// - Parameter seq: 这批 PCM 属于哪一块（`nil` = 前导静音，没有身份）。
+    ///   它被设备读出时经 `onBlockConsumed` 上报，这是「用户在听哪」的权威信号。
+    func write(_ pcm: Data, startsSentence: String? = nil, seq: UInt? = nil) async {
         guard started, !pcm.isEmpty else { return }
         let frames = AVAudioFrameCount(pcm.count / 2)
         // 进入时所属世代：被 bargeIn（cancelPendingPlayback 递增世代）唤醒后据此判定本 writer
@@ -163,6 +171,11 @@ final class AudioPlayer: @unchecked Sendable {
                     self.onConsumed(frames: Int(frames))
                     // 句首块被读出 ≈ 这句开始响：此刻才报字幕。世代校验已过，被掐掉的旧句不会误报
                     if let text = startsSentence { self.onSentenceStarted?(text) }
+                    // 发声点：同一块只报一次（一个块的 PCM 常拆成多个 buffer）
+                    if let seq, seq > self.lastReportedSeq {
+                        self.lastReportedSeq = seq
+                        self.onBlockConsumed?(seq)
+                    }
                 }
             }
         }

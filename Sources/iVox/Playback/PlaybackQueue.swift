@@ -35,6 +35,9 @@ struct PlaybackJob: Sendable {
 private struct AudioChunk: Sendable {
     let pcm: Data
     let sentenceText: String?
+    /// 这一批 PCM 属于哪一块（`PlaybackBlock.seq`）。透传到 `AudioPlayer.write` 后由它
+    /// 在设备读出时上报，身份层据此推进发声点——**打断起点由此与合成进度彻底分家**。
+    let seq: UInt
 }
 
 /// 打断来源：与 `PlaybackJob.source`（这段播报是谁发的）是一对账的标识——
@@ -112,6 +115,11 @@ actor PlaybackQueue {
         player.onSentenceStarted = { [weak self] text in
             Task { await self?.emitCaption(text) }
         }
+        // 发声点：播放器报「哪一块的 PCM 被设备读出」这个**事实**，身份层存位置、推导起点。
+        // 本层一个字的推导都不做——三层各干各的（见 PlaybackSession 文件头）。
+        player.onBlockConsumed = { [weak session] seq in
+            Task { await session?.noteConsumed(seq) }
+        }
     }
 
     func shutdown() {
@@ -143,6 +151,13 @@ actor PlaybackQueue {
     var pendingCount: Int { get async { await session.pendingCount } }
     /// 是否有正在处理的播报（/health 用）
     var isProcessing: Bool { currentTask != nil }
+    /// 用户此刻正在听的摞 / 页（/health 用）。
+    ///
+    /// **这是打断起点的对外只读投影**：三档打断取的就是它（`session.takeHead*`），
+    /// 所以黑盒脚本按压前后各读一次，就能量出「掀掉的是不是正在听的那一摞」。
+    /// nil = 还没出声（冷启动）或设备已播空。
+    var audibleTurn: String? { get async { await session.headStackTarget()?.id } }
+    var audiblePage: String? { get async { (await session.headPageID).flatMap { $0 } } }
 
     // MARK: - 入队
 
@@ -221,41 +236,39 @@ actor PlaybackQueue {
         await bargeIn(origin)   // bargeIn 内部丢弃 Session 全部内容并立墓碑
     }
 
-    /// 掀页（Ctrl+2）：掐掉正在念的这一块，并丢掉容器里**属于当前页**的剩余块，从下一页接着念。
-    /// 形象说法：**这一页撕到一半，剩下的不念了，翻页**（一页 = 一个 MessageDisplay）。
+    /// 掀页（Ctrl+2）：掐掉正在念的这一块，并丢掉**用户此刻正在听的那一页**的剩余块，
+    /// 从下一页接着念。形象说法：**这页不要了，听下一页**（一页 = 一个 MessageDisplay）。
     /// 「跳播放块」没有意义——用户听不出块边界在哪，他感知的单位是页。
     ///
-    /// **靶心用完即焚**：页靶心取的是「游标之后那一块所在的页」——正是他听到的那一页，
-    /// 取完这次就作废，下次按压重新取。为什么必须这样：Claude 同一页按行批分多次增量入队，
-    /// 掀掉当时已有的块之后这一页还可能继续来块；靶心若不清，第二次按压（他以为已经翻过去了、
-    /// 并没有东西可跳）就会拿旧页号去删**刚到的新块**——表现就是"只按了一次该跳的，新内容却被跳过"。
-    /// 取不到页号（page 为 nil，或当前没有块在播）时退化成"只掐在播"，不误删。
+    /// 起点取「正在听的那一摞里的第一个还有未播块的页」——纯容器结构事实。
+    /// **且必须在掐之前就摘走**（`takeHeadPage` 即摘走）：掐在播要 await 旧管道退净，
+    /// 那期间游标会 commit 掉正在响的最后一块、越到下一页，再取靶心就晚了
+    /// （2026-10-17 18:52 实测：摞级现场，页级同一个偏差）。
     func skipCurrentPage(_ origin: InterruptSource) async {
-        // 领靶心（Session 内占位，用完即焚 + 治重入）与掐之间隔着 await，第二次按压会插进来：
-        // 占位让它拿不到靶心，只掐不掀——见 PlaybackSession.claimCurrentPage 的注释。
-        let page = await session.claimCurrentPage()
-        Log.info("读下一页（来源=\(origin)）：丢掉当前页（\(page ?? "-")）的剩余块，从下一页接着念")
+        let taken = await session.takeHeadPage()   // 起点此刻定死，掐不掐都拿它
         await preemptCurrent(origin)
         onCaption?(nil)   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
-        let dropped = await session.discardClaimedPage()
-        // 丢了几块要落日志：翻页与"没翻动"在外部看起来一样（都是没声音），
-        // 只有这一行能区分"靶心没对上（page 空 / 页号不匹配）"和"确实翻过去了"
-        Log.info("本页剩余块已丢: page=\(page ?? "-") 块=\(dropped)")
+        // 起点与丢了多少块都要落日志：掀页与"没翻动"在外部看起来一样（都是没声音），
+        // 只有这两行能区分「当时没东西可掀」和「确实翻过去了、翻的是哪一页」
+        Log.info("这页不要了，听下一页（来源=\(origin)）：已掀 page=\(taken?.pageID ?? "匿名页") 块=\(taken?.dropped ?? 0)")
         await pumpOrSettle()   // 还有块则接着播；若这摞正等下一批字则原地等
     }
 
-    /// 掀摞（Ctrl+1）：掐掉正在念的这一块，并丢掉当前这一**摞**的全部内容，从下一摞接着播。
-    /// 形象说法：**整摞都不要了**（一摞 = 一次回复），连还没印出来的也不再印。
+    /// 掀摞（Ctrl+1）：掐掉正在念的这一块，并丢掉**用户此刻正在听的那一摞**的全部内容，
+    /// 从下一摞接着播。形象说法：**这摞不要了，听下一摞**（一摞 = 一次回复）。
     /// 与 `cancelTurn` 的区别：那个是「自取消不占打断来源」、也不掐在播（等它自己播完）；
     /// 这个是用户主动掀，必须立刻掐在播、丢段、前移。与 `cancelAll` 的区别：那个清全场，
     /// 这个只丢当前、后面的照播。
+    ///
+    /// 同样**掐之前先摘走**（理由见 `skipCurrentPage`）——旧实现正是在 await 之后才取起点，
+    /// 游标一越过边界就把用户想听的那一摞掀了。
     func skipCurrentBucket(_ origin: InterruptSource) async {
-        Log.info("跳过当前摞（来源=\(origin)）：丢整摞，从下一摞接着播")
+        let taken = await session.takeHeadStack()   // 起点此刻定死
         await preemptCurrent(origin)
         onCaption?(nil)   // 被掀掉的那一摞立刻从字幕撤下；下一摞开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移
-        await session.discardCurrentSegment()   // 内含立墓碑：后续增量不再开口
+        Log.info("这摞不要了，听下一摞（来源=\(origin)）：已掀 turn=\(taken?.id ?? "无分组") 块=\(taken?.dropped ?? 0)")
         await pumpOrSettle()   // 有下一摞则起管道接着播；没有则收尾
     }
 
@@ -281,6 +294,9 @@ actor PlaybackQueue {
     /// 还有待播就补起管道；队列空了且没有没收尾的摞就收字幕；
     /// **没有块但还有摞没收尾时，起空闲宽限计时**（不依赖管道在跑）。
     private func pumpOrSettle() async {
+        // 容器卫生先做：回收已听完且已收尾的段。它不影响待播量（回收的都是发声点之后的），
+        // 但不回收就会让打断起点落在早已播完的摞上——那摞往往还在继续送页，一掀就哑。
+        await session.retireSpentSegments()
         // **宽限先起，且不等任何管道**：它等的是「还有摞没收尾」这件事本身。排在
         // `awaitCurrentPipelineFinished()` 后面会被管道带死——那条 await 在预取背压的
         // continuation 上卡住时退不净，宽限就永远起不来，收尾锚点日志一辈子不出现
@@ -300,6 +316,10 @@ actor PlaybackQueue {
             return
         }
         if currentTask == nil, !(await session.anyUnsealed) {
+            // 这里已经跑过 waitUntilQuiet（宽限的起点就是它），**确认真静音**：
+            // 正在响的那一块也已响完，可以连它一起回收 —— 发声点永远停在最后一块上，
+            // 不给这条后门，收尾后 audibleTurn 会一直报着一个早就不响的摞。
+            await session.retireSpentSegments(afterSilence: true)
             invalidateIdleGrace()
             onCaption?(nil)
             Log.info("播报收尾: 队列已空，字幕收起")
@@ -457,7 +477,8 @@ actor PlaybackQueue {
                         // MLX 流不响应中途取消：一旦发起本句只能跑完，但被作废后不再向下游灌 PCM
                         if Task.isCancelled || pipelineSeq != seq { break }
                         pcmContinuation.yield(AudioChunk(pcm: pcm,
-                                                         sentenceText: isFirstBlock ? job.text : nil))
+                                                         sentenceText: isFirstBlock ? job.text : nil,
+                                                         seq: cursor.seq))
                         isFirstBlock = false
                     }
                     try Task.checkCancellation()
@@ -489,7 +510,7 @@ actor PlaybackQueue {
                 // write 会取到新世代、通过世代校验，把旧轮的缓冲 PCM 排进播放器——旧音频因此继续
                 // 响（打断失效），旧管道也迟迟不退出（新轮在 awaitCurrentPipelineFinished 干等）。
                 if pipelineSeq != seq { break }
-                await player.write(chunk.pcm, startsSentence: chunk.sentenceText)
+                await player.write(chunk.pcm, startsSentence: chunk.sentenceText, seq: chunk.seq)
             }
         }
 

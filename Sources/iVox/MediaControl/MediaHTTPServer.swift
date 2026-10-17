@@ -151,6 +151,8 @@ final class MediaHTTPServer: @unchecked Sendable {
             extra["engine"] = snap.engine
             extra["queued"] = snap.queued
             extra["playing"] = snap.playing
+            extra["audibleTurn"] = snap.audibleTurn
+            extra["audiblePage"] = snap.audiblePage
         }
         let json = HTTPResponseHandler.buildJSONResponse(status: "ok", additionalData: extra)
         HTTPResponseHandler.sendJSON(connection, json)

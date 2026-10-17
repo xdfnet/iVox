@@ -9,4 +9,8 @@ struct HealthSnapshot: Sendable {
     let engine: String       // notStarted | loading | ready | failed
     let queued: Int
     let playing: Bool
+    /// 用户此刻正在听的摞 / 页（打断起点）；nil = 还没出声或设备已播空。
+    /// 黑盒断言靠它量出「按压前后是不是从正在听的那一摞换到了下一摞」。
+    let audibleTurn: String?
+    let audiblePage: String?
 }
