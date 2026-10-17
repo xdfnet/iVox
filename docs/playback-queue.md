@@ -111,97 +111,55 @@
 - **`drain()` 超时定时器绑定自身序号 `drainSeq`**：超时兜底的 `asyncAfter` 闭包必须校验 `drainSeq == 自己`，否则**上一次 drain 遗留的定时器会提前放行下一次 drain**，表现为尾音被掐（曾实测 `drain 超时强制返回（pendingCount=28 尾音=1.12s）`）。
 - **`removeFirst` 前必须双重校验**：门控挂起期间 `bargeIn` 会 `jobs.removeAll()`，醒来后直接 `removeFirst()` 会 `EXC_BREAKPOINT`。先 `guard let job = jobs.first`，弹出前再确认 `jobs.first?.text == job.text`（队首仍是自己读到的那个 job）。
 
-> **⚠️ v4.0.0 起：播报不再碰背景音乐。** 下面「状态机」图里的 `media.resume()`、
-> 「场景矩阵」的 `media 命令` 一列、「关键时序」里的 pause/resume、「修复历史」里的
-> 媒体竞态条目，记录的都是 **4.0.0 之前**的设计——那时播报会借还音乐。如今播报队列
-> **一条媒体命令都不发**（借还只归语音输入，见上文「核心原则」）。**状态转换本身仍然
-> 有效**，读时把 media 相关行当历史即可。
+> **⚠️ v4.0.0 起：播报不再碰背景音乐。** 「修复历史」里的媒体竞态条目与 `↓ 跳段`
+> 相关记录，都是 **4.0.0 之前**的设计——那时播报会借还音乐、且用单个 `↓` 跳段。
+> 如今播报队列**一条媒体命令都不发**（借还只归语音输入，见上文「核心原则」），
+> 打断也改成了三档快捷键。读「修复历史」时把 media 与 `↓` 相关行当历史即可。
 
-## 状态机
+## 场景清单（现行）
 
-```
-                 ┌──────────────────────────────────────┐
-                 │                                      │
-                 ▼                                      │
-   ┌─────────────────────┐    enqueue     ┌────────────────┐
-   │   idle              │ ──────────────▶│  processing    │
-   │ (jobs=[])           │                │ (jobs 累积中)   │
-   │ (currentTask=nil)   │                │ (currentTask)  │
-   │ media: 用户原始状态  │ ◀─────────────  └────────────────┘
-   └─────────────────────┘   while 退出      │
-        ▲                      + yield         │
-        │                      + jobs 空       │ ↓ (jobs 非空)
-        │                                      │
-        │ skipCurrent                          │
-        │ (jobs 空)                            │
-        │ shutdown                             │
-        └──────────────────────────────────────┘
-                      media.resume()
-```
+> 这份是**唯一可信的场景基准**：设计对着它写、回归对着它验。改队列语义前先改这里。
+> （原先的「状态机 / 场景矩阵 / 关键时序」三节记的是 4.0.0 之前的单数组 + 借还音乐设计，
+> 连按键都还是旧的 `↓`，已于 2026-10-17 整节删除。）
 
-## 场景矩阵
+### 一、四种内容来源，身份规则各不相同
 
-### 用户主动操作
+| 来源 | 摞（`turn_id`） | 页（`message_id`） | 怎么算「说完」 |
+|---|---|---|---|
+| Claude 交互会话 | 一次回复 = 一个 turn_id | 一条 assistant 消息 | **Stop 钩子**按 session 反查 turn_id —— 信号可能丢 |
+| pi 扩展 | 流式轮的号 | 无页概念 | `{end}` 帧，或 EOF |
+| `ivox speak` / hook.sh | 无（nil） | 无 | 发完即完整 |
+| Cmd+D 译文 | 无（nil） | 无 | 发完即完整，但**要插队到队首** |
 
-| # | 场景 | 行为 | media 命令 | OK |
-|---|------|------|-----------|----|
-| 1 | 空闲 → enqueue | spawn processNext → pause → 播 | pause×1 | ✅ |
-| 2 | 播放中 → enqueue | jobs 累积，while 自动取下一个 | 不发 | ✅ |
-| 3 | 播放中 → ↓，队列非空 | 取消旧 task → spawn 新 → 播下一个 | pause×1（no-op） | ✅ |
-| 4 | 播放中 → ↓，队列空 | 取消旧 task → resume music | resume×1 | ✅ |
-| 5 | 空闲 → ↓ | `guard currentTask != nil` 拦截 | 不发 | ✅ |
-| 6 | 播放中 → ⌘ 录音 | pause music + cancelAll TTS | pause×1（外部） | ✅ |
-| 7 | 录音中 → ↓ | guard 拦截 | 不发 | ✅ |
-| 8 | 录音中 → ⌘ | state guard 拦截 | 不发 | ✅ |
-| 9 | ⌘ 松开 | resume music | resume×1（外部） | ✅ |
-| 10 | daemon 退出 | cancel task + resume | resume×1 | ✅ |
+前两种带身份、后两种不带，是「统一容器」的第一道坎。非 Claude 路径无页：Ctrl+2 在那里
+退化成「只掐在播」。
 
-### 内部状态转换
+### 二、必须处理对的场景
 
-| # | 场景 | 行为 | media 命令 | OK |
-|---|------|------|-----------|----|
-| 11 | processNext 自然完成 | while 退出 → yield → 检查 jobs → resume | resume×1 | ✅ |
-| 12 | processNext 被 ↓ 取消 | catch 分支只清本地状态 | 不发 | ✅ |
-| 13 | TTS 合成失败 | catch error → 继续 while（直到成功或队列空） | 不发 | ✅ |
-| 14 | 连续 ↓ 多次 | 每次都触发 skipCurrent | resume×0~1 | ✅ |
-| 15 | processNext 退出 + 立刻 enqueue | yield 让 enqueue 插入 → 若 jobs 非空不 resume，由新 processNext 接管 | resume×0 / pause×1 | ✅ |
+| # | 场景 | 期望行为 |
+|---|---|---|
+| 1 | **同一页分多次到**：Claude 一条消息按行批增量送来，`pageID` 相同、内容不同 | 并进同一页追加，不得当成新页 |
+| 2 | **迟到的旧帧**：摞被跳掉/掀桌后增量帧仍在来 | 静默丢弃，绝不重新开口 |
+| 3 | **块播完了、字还没来**（摞仍在说话） | 字幕不收，挂起等下一批；新内容来了揭掉宽限的印 |
+| 4 | **收尾信号丢了**：Stop 钩子没来 | 「队列见底 + 设备把音频播完 + 再静候 2 秒」兜底判定说完 |
+| 5 | **跳页**（Ctrl+2） | 掐在播 + 丢掉当前页剩余块 + 接着下一页；无页来源只掐在播 |
+| 6 | **跳摞**（Ctrl+1） | 掐在播 + 丢整摞全部桶 + 立墓碑拦它的后续批次 |
+| 7 | **掀桌**（Ctrl+Esc / 右⌘） | 全场清 + 所有轮作废 |
+| 8 | **两会话并行**：Claude A 与 B 同时排队 | 互不误杀；A 播完才轮到 B |
+| 9 | **多来源混排**：pi 与 Claude 同时来 | 按到达序稳定排队，谁都不插队（只有 Cmd+D 译文例外） |
+| 10 | **插队例外**：Cmd+D 译文 | 插队首、念完原顺序恢复；**不掀桌**，其余桶一个不丢 |
+| 11 | **队首轮被 `{cancel}`**（pi 一条消息双流、其中一条刚开就被取消） | 出栈并把属主交还给它顶掉的那一轮，否则承载正文的轮被判成过期旧轮、整轮哑掉 |
+| 12 | **自然播完与新内容撞在同一瞬间**：管道刚退出、新帧就入队 | 谁先谁后都得收敛——有活就补起管道，没活就收字幕，不许留下「有活没人干」的挂起 |
+| 13 | **TTS 合成失败**（模型报错） | 丢掉这一块继续往下，不能卡在同一个块上死循环 |
+| 14 | **daemon 退出**（SIGINT / SIGTERM） | 清场收尾；与用户打断是两条路径，别混用 |
 
-## 关键时序
+### 三、顺序语义（不可协商的底线）
 
-### ↓ 按下（队列非空）
+**长期顺序只由到达顺序决定，谁都不永久插队。** 机器最多「借道」——只有 Cmd+D 译文是插队，
+念完即走。打断权**只归用户快捷键**。
 
-```
-T0   processNext 播 job1，music 已暂停
-T1   按 ↓
-T2   skipCurrent: oldTask.cancel() + player.cancelPendingPlayback()
-T3   _ = await oldTask?.value  ← 串行化点：旧 task 全部退出
-T4   旧 task catch 分支：清本地状态、return（**不发 resume**）
-T5   skipCurrent: jobs 不空 → 启动新 processNext
-T6   新 processNext 入口 await media.pause()（no-op）
-T7   新 processNext 播 job2
-```
-
-### ↓ 按下（队列空）
-
-```
-T0-T4  同上
-T5   skipCurrent: jobs 空 → Task { await media.resume() }
-T6   media 收到 play 命令 → music 恢复
-```
-
-### 自然完成 + 立刻 enqueue（场景 15）
-
-```
-T0   processNext while 退出（jobs 空）
-T1   currentTask = nil
-T2   await Task.yield()  ← 让 enqueue 有机会插入
-T2.5 (可能的) enqueue 加新 job + spawn 新 processNext
-T3   processNext 重新获得 actor：检查 jobs.isEmpty
-       - false → 不 resume，新 processNext 入口 pause（接管）
-       - true  → resume music
-```
-
-`Task.yield()` 是修复 race 的关键。它让 `enqueue` 在 `currentTask = nil` 之后、`media.resume` 之前有机会进入 actor，避免两个独立 Task 同时发 resume 和 pause。
+由此推出一条容易被误当成 bug 的行为：**队首那摞挂着等字时，后到的摅不能插到它前面**
+（场景 8/9 一起保证）。否则队首那摞后到的字会乱序。看到「空着却不播」不是卡住，是规矩。
 
 ## 修复历史
 
