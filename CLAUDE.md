@@ -63,7 +63,7 @@ integrations/          — 各外部 agent 的对接适配层（安装时由脚�
   hook.sh              — 通用播报 hook（claude/codex 共用）
   pi/ivox.ts           — pi coding agent 流式扩展
 
-docs/                  — architecture.md, socket-api.md, hook-chain.md；播报三层各一份：playback-sources.md（接入方）· playback-requirements.md（需求）· playback-queue.md（实现）；CHANGELOG.md；archive/ 放历史复盘与调研
+docs/                  — architecture.md, socket-api.md, hook-chain.md；播报三层各一份：playback-sources.md（接入方）· playback-requirements.md（需求）· playback-queue.md（技术方案 + 当前实现）；CHANGELOG.md；archive/ 放历史复盘与调研
 scripts/               — runtime.sh, download-models.sh, install-*.sh（构建/安装工具脚本）
 ```
 
@@ -90,7 +90,7 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
 - **微信长轮询**：`GetUpdatesResp.ret` 是 `Int?`（API 在空响应时省略 `ret`）。手动用 `withThrowingTaskGroup` 让 URL 请求和 `Task.sleep` 超时竞速（URLSession idle timeout 在长轮询 TCP keep-alive 下不会触发）。
 - **TTS 两层流水线**：
   - *第一层（切句/清洗，真源只在 Swift 一份）*：文本先 `cleanText`（Markdown AST 去噪 + URL/路径/ANSI/emoji 处理）再 `splitSentences`（句末边界 `。！？!?…；;\n`，合并到 ≤80 字；英文 `.` 不切以保小数/缩写）。TS 扩展和 hook **绝不在客户端切句**（会破坏 AST 块末补句号与跨行规则）。
-  - *第二层（连续播放管道）*：`PlaybackQueue.processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，**句间不 drain**；`AudioPlayer` 用单个常驻 `AVAudioPlayerNode` 连续 `scheduleBuffer`，4s/2s 高低水位背压（`pendingFrames` 随 `dataConsumed` 核减），prime 静音仅在设备播空/取消后补一次，`drain()` 只在整轮末端调一次。改这里务必读 `docs/playback-requirements.md`（需求）与 `docs/playback-queue.md`（实现），不要重新引入逐句 drain（会导致逐字卡顿）。
+  - *第二层（连续播放管道）*：`PlaybackQueue.processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，**句间不 drain**；`AudioPlayer` 用单个常驻 `AVAudioPlayerNode` 连续 `scheduleBuffer`，4s/2s 高低水位背压（`pendingFrames` 随 `dataConsumed` 核减），prime 静音仅在设备播空/取消后补一次，`drain()` 只在整轮末端调一次。改这里务必读 `docs/playback-requirements.md`（需求）与 `docs/playback-queue.md`（技术方案），不要重新引入逐句 drain（会导致逐字卡顿）。
 - **流式 turn 协议**：pi 扩展经一条长连接按 `\n` 分帧：首帧 `{type:stream,source,turn}` → 原文增量帧（仅 text_delta）→ `{end}`/`{cancel}`，EOF=end。服务端 `StreamBuffer`（iVoxKit 纯逻辑）累积原文，只在安全边界（句末/段落、代码围栏配平、≥`minFlushChars`=24）抽出整段复用同一套 cleanText→splitSentences。`PlaybackJob.turnID`：**队列按轮分桶排队，播全播完**——同一 `turnID` 分块并入同桶顺序追加，新 turn 在队尾追加新桶、**不打断**在播旧轮（桶播完才前移）；无 turn 的普通播报（`ivox speak`/hook.sh）同上排队。**打断的准星**：动手的只有用户，机器最多「借道」—— 队列的长期顺序只由到达顺序决定，谁都不永久插队；Cmd+D 译文是唯一的机器开口，也只是临时插队（念完即走，原顺序原样）。**打断权只归用户快捷键**，手动打断三档全是「掐 + 掀」——**掐** = 断在播的那一块，**掀** = 丢弃某一层的全部内容：**Ctrl+2** = 掐 + 掀当前页（`skipCurrentPage`：掀掉当前页的剩余块；还没来的页不拦）、**Ctrl+1** = 掐 + 掀当前摞（`skipCurrentBucket`：掀掉这一摞的全部桶 + 立墓碑拦它的后续增量，下一摞接着播）、**Ctrl+Esc** = 掐 + 全掀（`cancelAll`）/ 右⌘ 说话。Cmd+D 译文是**插队**——`speakUserInitiated` 只掐在播、译文桶插到队首，其余桶全保留（播完译文接着播）。`{type:stop}` 停止帧与流式新轮**不再打断**（ConnectionHandler 对 stop 帧仅记日志忽略）。某桶 `ended` 才允许空桶前移；流动中空桶保活等下一批。连接内这四类操作经 `ConnectionHandler.StreamOpChain` **按帧序执行**（乱序会让 `{end}` 之后到达的同轮分块把已关轮次重新打开、管道永久挂起）。详见 `docs/socket-api.md`。
 - **播报的四个词**（讨论播报只用这四个，其它说法一律作废；完整术语表见 `docs/playback-requirements.md`）：
   **摞** = **你发一条信息之后 AI 为此产生的全部回复**（夹工具调用时它会回答很多次，全算这一摞；由你按回车划分，身份是 `turn_id`）；

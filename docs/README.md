@@ -9,7 +9,7 @@
 | [socket-api.md](socket-api.md) | Unix Socket IPC 协议：TTS 播报与 ASR 识别 |
 | [playback-sources.md](playback-sources.md) | 播报接入方层：谁在说话、拿得出什么身份 |
 | [playback-requirements.md](playback-requirements.md) | 播报需求层：场景清单、顺序底线、解耦约束 |
-| [playback-queue.md](playback-queue.md) | 播报实现层：连续播放管道、背压、踩过的坑 |
+| [playback-queue.md](playback-queue.md) | 播报技术方案层：目标形态 + 当前实现 |
 | [CHANGELOG.md](CHANGELOG.md) | 开发日志与版本变更 |
 | [research-native-bridge.md](research-native-bridge.md) | 微信桥「Swift 直连 claude」的方案调研与实测细节 |
 
