@@ -4,7 +4,7 @@ import iVoxKit
 // 播报播放层：只管「怎么把字念出来」——连续播放管道（合成/播放两条并发 task + 有界 PCM 流）、
 // 掐（断在播）与字幕。谁在说话、说到哪、哪层被作废全归 `PlaybackSession`（身份层）。
 // **不碰背景音乐**——暂停/恢复只归语音输入（录音时音乐会串进麦克风、干扰识别）。
-// 四层文档见 docs/playback-purpose.md（目的）→ playback-sources.md → playback-requirements.md → playback-queue.md。
+// 播报四层文档见 docs/playback/：purpose（目的/取舍）→ sources（接入方）→ requirements（需求）→ queue（实现）。
 
 /// 一条待播报的文本。身份字段（摞/页）原样带给 Session，本层不做判断。
 struct PlaybackJob: Sendable {

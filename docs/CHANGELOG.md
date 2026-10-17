@@ -2,6 +2,19 @@
 
 ## 未发布
 
+- **文档重新分层：按「回答什么问题」分类** —
+  起因是三处结构性问题：① 播报四份文档标着「第 N 层」，而**目的层（裁决依据）排在第四**，
+  新人顺着编号读要啃完细节才看到「为什么会这么定」；② `playback-queue.md` 一份扛三件事——
+  已落地的目标方案、当前实现、事故复盘，346 行且开篇写着「尚未实施」；③ 目录里没有
+  「现状 vs 历史」的分类规则，同源内容在两处重复，各自漂移（架构文档整节停在重构前就是这么来的）。
+  改法：播报四份移入 `docs/playback/`（按 purpose → sources → requirements → queue 的**阅读顺序**排列，
+  去掉「第 N 层」编号，只用名字）；`docs/README.md` 重写为三类索引 + 三条规则；
+  `queue.md` 346 → 129 行（目标方案节删除——代码是唯一事实源，其中两条非显然的设计决定留下；
+  事故与历史修复清单移入 `archive/incident-playback-queue-fixes.md`）；
+  架构文档那一节瘦回「只留地图 + 一句指针」，不再复述实现层细节。
+  顺带修掉 CLAUDE.md 里仍在教人用「桶」这个已废止术语的段落，以及一条指向
+  `processNext` 末尾 `if jobs.isEmpty` 的失效维护约束（重构后该判断已不存在）。
+
 > 从这里开始，新条目按「一条变更一行、超过 ~120 字符在句读处折行并缩进两格」的规矩写。
 > 早先的版本条目是每条一整段的长行（最长一行 4600 字符），diff 时整段变红、不便按行读；
 > **历史条目不再重排**——改旧记录的排版会让真正的内容变更淹没在噪音里。
@@ -185,7 +198,7 @@
 
 ### 文档
 
-- architecture.md「ClaudeAskService」章节改写为原生直连；README 删 Node 依赖、架构图更新；调研文档 [`research-native-bridge.md`](research-native-bridge.md) 状态改为已实施。
+- architecture.md「ClaudeAskService」章节改写为原生直连；README 删 Node 依赖、架构图更新；调研文档 `native-bridge.md` 状态改为已实施。
 
 ## v3.3.0 — 2026-10-03
 
@@ -224,7 +237,7 @@
 
 ### 新增
 
-- **支持 DeepSeek Harness 语音播报（插件直投）** — desktop profile 以 `- insert:` 挂载本地插件 `./plugins/ivox-tts.mjs`（`name` 以 `.` 开头时按 profile 目录解析，无需改 app.asar、无需 pnpm）；插件在 `session/event` 缓存候选消息（规则见 [`docs/dsh-tts.md`](dsh-tts.md#2-选取规则对齐-dsh-官方定义)），`agent/turn-stopping` 时 spawn `hook.sh dsh` 把原文写进 `last_assistant_message`。默认音色湾湾。详见 [`docs/dsh-tts.md`](dsh-tts.md)
+- **支持 DeepSeek Harness 语音播报（插件直投）** — desktop profile 以 `- insert:` 挂载本地插件 `./plugins/ivox-tts.mjs`（`name` 以 `.` 开头时按 profile 目录解析，无需改 app.asar、无需 pnpm）；插件在 `session/event` 缓存候选消息（规则见 当时的 `docs/dsh-tts.md`），`agent/turn-stopping` 时 spawn `hook.sh dsh` 把原文写进 `last_assistant_message`。默认音色湾湾。详见 当时的 `docs/dsh-tts.md`
 
 ### 文档
 
@@ -300,7 +313,7 @@
 
 - **AudioPlayer.drain 回调丢失根治** — `scheduleBuffer` 原用旧 API（`.dataPlayedBack` 语义），播放末尾引擎 auto-shutdown 时完成回调永不触发，`pendingCount` 不归零，`drain()` 只能靠超时兜底强制返回（每段末尾丢尾/超时 WARN）。现改用 `completionCallbackType: .dataConsumed`（数据被播放器读出即回调，不依赖引擎存活），从根上消除回调丢失
 - **取消后计数污染** — `cancelPendingPlayback()` 归零后旧 buffer 回调再 `-= 1` 把 `pendingCount` 减成负数（曾见 -772），drain 必走超时、账目失真。现递增 `generation` 使旧世代回调经 guard 丢弃，计数保持干净
-- 新增 `docs/audio-player-drain.md` 固化问题与三层解决方案（超时兜底 / 世代计数 / `.dataConsumed`），`docs/playback-queue.md` 同步维护约束
+- 新增 `docs/audio-player-drain.md` 固化问题与三层解决方案（超时兜底 / 世代计数 / `.dataConsumed`），`docs/playback/queue.md` 同步维护约束
 
 ## v2.8.7 — 2026-08-02
 

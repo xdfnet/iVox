@@ -105,7 +105,7 @@ Daemon (actor)
 - agent 的工作目录固定为 `~/.config/ivox/wechat/workspace`，读写收敛在隔离目录。
 - Daemon `cleanup()` 中 `await claudeAsk.stop()` 关 stdin、等退出（60×50ms）、超时 terminate，避免孤儿与新旧进程并存。
 - 权限为最大权限 `--dangerously-skip-permissions`（全自动免确认）；发 `/new` terminate 当前进程、清 session_id 指针，下次裸启新会话。
-- 协议实测细节见 [`research-native-bridge.md`](research-native-bridge.md)。
+- 协议实测细节见 [`native-bridge.md`](native-bridge.md)。
 
 ### SocketServer — Unix Domain Socket IPC
 
@@ -126,29 +126,26 @@ Daemon (actor)
 
 ### PlaybackSession + PlaybackQueue — 身份与播放
 
-**为什么分两层**：2026-10-17 重构（`Sources/iVox/Playback/PlaybackSession.swift`）把「当前在播什么」从队列的旁路变量搬进容器。起因是一次真实缺陷——掀页后页号没清，第二次按压拿旧页号删掉了后到的内容（`docs/playback-requirements.md` 场景 5）。根因不是忘了清，而是容器里压根没有「当前」。**身份层只回答「这是什么、谁被作废了」，播放层只回答「下一个块是谁」。**
+**为什么分两层**：2026-10-17 重构（`Sources/iVox/Playback/PlaybackSession.swift`）把「当前在播什么」
+从队列的旁路变量搬进容器。起因是一次真实缺陷——掀页后页号没清，第二次按压拿旧页号删掉了后到的内容。
+根因不是忘了清，而是容器里压根没有「当前」。**身份层只回答「这是什么、谁被作废了」，
+播放层只回答「下一个块是谁」。**
 
-`PlaybackSession`（actor，唯一持有容器与全部身份记账）：
+`PlaybackSession`（actor）：唯一持有容器与全部身份记账。容器三层——
+**段 Segment**（一次回复 = 一摞 / 普通播报）→ **页 Page**（一条消息）→ **块 Block**（1~80 字合成单位），
+外加一个独立的**加急段**列表（Cmd+D 译文）排在最前。游标指向当前块但**不把它弹出容器**。
+墓碑 `deadTurns` 拦用户显式作废的摞的后续增量。
 
-- 容器是三层：**段 Segment（一次回复 = 一摞 / 普通播报）→ 页 Page（一条消息）→ 块 Block（1~80 字合成单位）**，外加一个独立的**加急段**列表（Cmd+D 译文、用户插队）排在最前
-- **游标不弹出容器**：`nextCursor()` 只给位置，播完（或作废）才 `commit()` 前移。容器因此**永远包含正在合成的那一块**，掀页时它在被删范围内——不必再靠 `pipelineSeq` 间接作废，也没有「陈旧靶心」可陈旧
-- 墓碑 `deadTurns`：用户显式作废的摞，其后续增量一律丢弃（Ctrl+1 掀摞、Ctrl+Esc 掀桌、pi 自取消）
-- 掀的四个原子动作：`claimCurrentPage()` / `discardClaimedPage()` / `discardCurrentSegment()`（含立墓碑）/ `discardAll()`。**领靶心与删除要合成一个原子动作**，否则 actor 在 `await` 处可重入，第二次按压会领走同一页（2026-10-17 实测 `P2`）
-- 删除路径**不 `signal()`**：叫醒空闲宽限的等待者会让它误判「有新内容来了」而自我唤醒又自我退场，队列就此挂起
+`PlaybackQueue`（actor）：只管播放。连续管道 `processNext` 逐块 `synthesizeStream → player.write`，
+块间不 drain（设备零停顿）；**所有路径的收尾收敛到唯一的 `pumpOrSettle()`**（有活补起管道 /
+没活收字幕 / 仍有未封的段就起空闲宽限）；`pipelineSeq` 代号作废在途管道。打断权只归用户快捷键，
+三档全是「掐 + 掀」，Cmd+D 译文走插队。
 
-`PlaybackQueue`（actor，只管播放）：
+**取舍理由、维护约束与踩过的坑一律见 [`playback/queue.md`](playback/queue.md)**（本节只留地图，
+细节在两处重复就会各自漂移——2026-10-17 的架构文档漂移就是这么发生的）。
 
-- **连续播放管道**：`processNext` 是跨所有块的循环，逐块 `synthesizeStream → player.write`，块间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
-- **收敛点唯一**：所有路径结束都走 `pumpOrSettle()`——有活补起管道、没活收字幕、仍有未封的段就起空闲宽限。**谁都不许自己判断要不要起管道**：入队只靠「当前没有管道」才起管道时，旧播报收尾（drain）期间新入队会被吞成漏播（曾实测 317 字 5 块零合成）
-- **空闲宽限由 `graceTask` 自己拥有**，不等任何管道——它等的是「还有段没收尾」这件事本身。排到 `awaitCurrentPipelineFinished()` 后面会被在跑的管道带死（2026-10-17 `P3` 挂起实测）。作废用 `graceEpoch` 而不是 `cancel()`：`withCheckedContinuation` 取消并不会恢复它，Waiter 会永久留在表里
-- **过期轮次静默丢弃**：墓碑命中的迟到帧 / 收尾信号一律 no-op
-- **打断权只归用户快捷键**，三档全是「掐 + 掀」：**掀页** Ctrl+2（`skipCurrentPage`）、**掀摞** Ctrl+1（`skipCurrentBucket`，丢整摞并立墓碑）、**全掀** Ctrl+Esc（`cancelAll`，连「已声明、块还没到」的摞一起立墓碑，否则打断后同一轮照样开口）。Cmd+D 译文走 `speakUserInitiated` **插队**（掐在播 → 译文进加急段 → 其余全保留）；`{now:1}` / `ivox speak --now` 是同一条路的第二个入口。**`{type:stop}` 停止帧与流式新轮不再打断**
-- **「掐在播」与「清场」是两层**：`preemptCurrent` 只作废管道代号 + 取消在播音频与合成，**不动容器**；`bargeIn` 才是「先清空队列、再调它」（掀桌）。插队 / 掀摞 / 掀页都只 `preemptCurrent`——所以「不掀桌」不是各自实现的巧合，而是同一条路径上的自然结果
-- **播报字幕（可选，`playback.captions`）从播放侧取**：每块首句音频捎上该句文本（`AudioChunk.sentenceText`），`AudioPlayer` 在它被设备读出时回调 → 队列转发给 `onCaption`。从**合成**侧取会让字幕早一两句（合成领先播放，实测踩过）
-- ⚠️ **循环里每个 `continue` 都必须有挂起点**：producer 曾在「队首段已播空、该段尚未收尾」时落进一个无 `await` 的 `continue` —— 空转**独占整个 actor**（入队/收尾/打断全被饿死，连快捷键都进不来），播报永久瘫痪外加烧满一核，且 **10 秒读超时的 EOF 兜底也救不回**。黑盒自检 `E8` 钉住了这个现场
-- **不碰背景音乐**：暂停/恢复只归语音输入（录音才真需要安静）。播报曾整套借还音乐，是"音乐反复借还"抖动的根源，已整条删除；仅 `shutdown()` 留一道 `media.resume()` 退出安全网
-
-术语只有四个——**摞**（一次输入引发的全部回复）/ **页**（一条消息）/ **块**（合成单位）/ **段**（容器里的排队单位，一摞 = 一段）。完整术语表与取舍见 `docs/playback-requirements.md` 与 `docs/playback-purpose.md`。
+术语：**摞**（一次输入引发的全部回复）/ **页**（一条消息）/ **块**（合成单位）/ **段**（容器里的排队单位，一摞 = 一段）。
+完整术语表见 [`playback/requirements.md`](playback/requirements.md)，取舍见 [`playback/purpose.md`](playback/purpose.md)。
 
 ### AudioPlayer — 音频播放
 

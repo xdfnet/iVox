@@ -1,7 +1,7 @@
 # AudioPlayer.drain 回调丢失问题修复记录
 
 > 独立固化 2026-08-01 至 08-02 对 `AudioPlayer.drain` 回调丢失问题的完整解决方案。
-> 对应代码：`Sources/iVox/Audio/AudioPlayer.swift`。播放队列状态机见 `docs/playback-queue.md`。
+> 对应代码：`Sources/iVox/Audio/AudioPlayer.swift`。播放队列状态机见 `docs/playback/queue.md`。
 
 ## 问题链路
 
@@ -73,7 +73,7 @@ node 串行播放保证下一段 buffer 自然排队衔接，**无截尾、无�
 - ✅ `make build` + `make test`（34/34）通过
 - ✅ 已部署生效（`make update`）
 - ⏳ 验证中：部署后正常播报应不再出现 `drain 超时`，`pendingCount` 不再为负
-- 📌 修复历史已同步至 `docs/playback-queue.md`（含本次 L2/L3）
+- 📌 修复历史已同步至 `docs/playback/queue.md`（含本次 L2/L3）
 
 ## 维护约束
 

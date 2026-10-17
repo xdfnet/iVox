@@ -1,10 +1,10 @@
-# 播报目的层（第四层）
+# 播报目的层
 
-> 这一层回答：**播报为什么存在，以及遇到取舍时听谁的。**
-> 它不描述系统，只裁决。下面三层遇到争议翻上来：
-> [playback-sources.md](playback-sources.md)（谁在说话）·
-> [playback-requirements.md](playback-requirements.md)（必须做到什么）·
-> [playback-queue.md](playback-queue.md)（怎么做到）。
+> **四层里的第一份，该先读它。** 它回答：**播报为什么存在，以及遇到取舍时听谁的。**
+> 它不描述系统，只裁决。其余三层遇到争议翻上来：
+> [接入方层](sources.md)（谁在说话）·
+> [需求层](requirements.md)（必须做到什么）·
+> [实现层](queue.md)（怎么做到）。
 >
 > 每条原则下面都记着**它裁决过什么**——只有裁决记录的原则才算数，光是好听的口号一律不作数。
 

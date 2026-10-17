@@ -6,7 +6,7 @@ import iVoxKit
 // 这样「正在播的那块」永远在容器内，掀页时它落在被删范围内，
 // 不必像旧实现那样在容器外另记一份 `playingPageID`（那份会陈旧，
 // 2026-10-17 的 bug 就是第二次按压拿旧页号删掉了后到的内容）。
-// 四层文档见 docs/playback-purpose.md（目的）→ sources → requirements → queue。
+// 播报四层文档见 docs/playback/：purpose（目的/取舍）→ sources → requirements → queue。
 
 /// 一块待播文本（服务拿去播报的单位，不是给用户看的）。
 /// `seq` 由 Session 在入队时分配、单调递增，游标就靠它定位。

@@ -1,15 +1,15 @@
-# 播报接入方层（第一层）
+# 播报接入方层
 
 > 这一层只回答一个问题：**谁在往播报队列里说话，它们各自拿得出什么。**
-> 播报侧必须处理对的场景见 [playback-requirements.md](playback-requirements.md)；
+> 播报侧必须处理对的场景见 [需求层](requirements.md)；
 > 队列怎么存、容器怎么设计**本文不谈**。
 >
-> 往上还有一层**目的层**（取舍原则与裁决记录）见 [playback-purpose.md](playback-purpose.md)——三层有分歧时翻它。
+> 读法顺序：**目的层 → 接入方层（本文）→ 需求层 → 实现层**。有分歧先翻 [目的层](purpose.md)。
 > 本文与代码不符时以代码为准，但请顺手改本文——这张表是后两层的基准。
 
 ## 共性：不管接法多不一样，塌缩后是同一种东西
 
-术语以 [playback-requirements.md](playback-requirements.md) 为准，本文只说**各接入方的身份字段
+术语以 [需求层](requirements.md) 为准，本文只说**各接入方的身份字段
 分别对应哪个词**：摞 = `turn_id`、页 = 一条 assistant 消息（`message_id` / `item_id` / 翻页信号）、
 块 = 服务自己切的合成单位。**一条 assistant 消息里同时带工具调用也算一页**，不切。
 
@@ -75,7 +75,7 @@ codex 本身支持 12 个 hook 事件（`PreToolUse` / `PostToolUse` / `SessionS
 
 **页永远存在**（无页号来源退化成「无页号的页」），所以三档按键在任何来源下**行为一致**，
 差别只在这一层里到底装着什么。完整的行为对照表属需求层，见
-[playback-requirements.md](playback-requirements.md) 的「打断粒度」一节。
+[playback-requirements.md](requirements.md) 的「打断粒度」一节。
 
 一句话版：拿得到摞号才能「掀摞」，拿得到页号才能「掀页」，都没有就只剩「全掀」，
 以及 Ctrl+1 掀掉当前那一段待播内容。
