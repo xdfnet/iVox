@@ -8,6 +8,10 @@
 
 ## 共性：不管接法多不一样，塌缩后是同一种东西
 
+术语以 [playback-requirements.md](playback-requirements.md) 为准，本文只说**各接入方的身份字段
+分别对应哪个词**：摞 = `turn_id`、页 = 一条 assistant 消息（`message_id` / `item_id` / 翻页信号）、
+块 = 服务自己切的合成单位。**一条 assistant 消息里同时带工具调用也算一页**，不切。
+
 进队列前，所有接入方都被压成同一种形状：
 
 ```
