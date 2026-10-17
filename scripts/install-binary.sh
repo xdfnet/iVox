@@ -98,8 +98,8 @@ if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
     "asrPath": "${HOME}/.config/ivox/model/Qwen3-ASR-1.7B-8bit",
     "ttsPath": "${HOME}/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
   },
-  "tts": { "language": "Chinese", "streamingInterval": 0.08, "maxRetries": 2, "retryDelayMs": 500, "outputSampleRate": 48000 },
-  "mediaControl": { "enabled": true, "httpServerEnabled": true, "baseURL": "http://127.0.0.1:8888", "pausePath": "/api/pause", "resumePath": "/api/play" },
+  "tts": { "language": "Chinese", "streamingInterval": 0.08, "outputSampleRate": 48000 },
+  "mediaControl": { "enabled": true, "httpServerEnabled": true, "httpServerPort": 8888 },
   "speechInput": { "enabled": true, "language": "zh", "autoEnter": true, "maxRecordingSeconds": 30 },
   "defaultVoice": "taozi",
   "sourceVoices": { "claude": "taozi", "codex": "wanwan", "pi": "taozi" },

@@ -3,7 +3,9 @@ DerivedData/
 *.xcodeproj
 .DS_Store
 .vscode/
+.claude/
 *.profraw
 *.xcuserstate
+xcuserdata/
 install
 .swift-version

@@ -429,7 +429,4 @@ actor PlaybackSession {
         signal()
         return ids
     }
-
-    /// pi 双流认证：这一轮是否仍是合法属主（未被别的流顶掉）。
-    func owns(_ id: String) -> Bool { turnStack.last == id }
 }

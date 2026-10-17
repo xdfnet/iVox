@@ -6,8 +6,6 @@
   "tts": {
     "language": "Chinese",
     "streamingInterval": 0.15,
-    "maxRetries": 2,
-    "retryDelayMs": 500,
     "outputSampleRate": 48000
   },
   "mediaControl": {
