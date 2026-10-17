@@ -7,7 +7,9 @@
 | [architecture.md](architecture.md) | 整体架构：actor 模型、守护进程生命周期、构建系统 |
 | [hook-chain.md](hook-chain.md) | 从 AI 助手回复到出声的完整 Hook 链路（含踩坑清单） |
 | [socket-api.md](socket-api.md) | Unix Socket IPC 协议：TTS 播报与 ASR 识别 |
-| [playback-queue.md](playback-queue.md) | PlaybackQueue 状态机与媒体控制场景矩阵 |
+| [playback-sources.md](playback-sources.md) | 播报接入方层：谁在说话、拿得出什么身份 |
+| [playback-requirements.md](playback-requirements.md) | 播报需求层：场景清单、顺序底线、解耦约束 |
+| [playback-queue.md](playback-queue.md) | 播报实现层：连续播放管道、背压、踩过的坑 |
 | [CHANGELOG.md](CHANGELOG.md) | 开发日志与版本变更 |
 | [research-native-bridge.md](research-native-bridge.md) | 微信桥「Swift 直连 claude」的方案调研与实测细节 |
 
