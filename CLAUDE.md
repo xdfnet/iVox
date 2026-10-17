@@ -63,7 +63,7 @@ integrations/          — 各外部 agent 的对接适配层（安装时由脚�
   hook.sh              — 通用播报 hook（claude/codex 共用）
   pi/ivox.ts           — pi coding agent 流式扩展
 
-docs/                  — architecture.md, socket-api.md, hook-chain.md；播报三层各一份：playback-sources.md（接入方）· playback-requirements.md（需求）· playback-queue.md（技术方案 + 当前实现）；CHANGELOG.md；archive/ 放历史复盘与调研
+docs/                  — architecture.md, socket-api.md, hook-chain.md；播报四层各一份：playback-purpose.md（目的/取舍，**有分歧先翻它**）· playback-sources.md（接入方）· playback-requirements.md（需求）· playback-queue.md（技术方案 + 当前实现）；CHANGELOG.md；archive/ 放历史复盘与调研
 scripts/               — runtime.sh, download-models.sh, install-*.sh（构建/安装工具脚本）
 ```
 

@@ -4,6 +4,7 @@
 > 播报侧必须处理对的场景见 [playback-requirements.md](playback-requirements.md)；
 > 队列怎么存、容器怎么设计**本文不谈**。
 >
+> 往上还有一层**目的层**（取舍原则与裁决记录）见 [playback-purpose.md](playback-purpose.md)——三层有分歧时翻它。
 > 本文与代码不符时以代码为准，但请顺手改本文——这张表是后两层的基准。
 
 ## 共性：不管接法多不一样，塌缩后是同一种东西

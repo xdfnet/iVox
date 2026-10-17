@@ -7,6 +7,7 @@
 | [architecture.md](architecture.md) | 整体架构：actor 模型、守护进程生命周期、构建系统 |
 | [hook-chain.md](hook-chain.md) | 从 AI 助手回复到出声的完整 Hook 链路（含踩坑清单） |
 | [socket-api.md](socket-api.md) | Unix Socket IPC 协议：TTS 播报与 ASR 识别 |
+| [playback-purpose.md](playback-purpose.md) | 播报目的层：取舍原则与裁决记录（三层有分歧时翻它） |
 | [playback-sources.md](playback-sources.md) | 播报接入方层：谁在说话、拿得出什么身份 |
 | [playback-requirements.md](playback-requirements.md) | 播报需求层：场景清单、顺序底线、解耦约束 |
 | [playback-queue.md](playback-queue.md) | 播报技术方案层：目标形态 + 当前实现 |

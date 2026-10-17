@@ -1,5 +1,6 @@
 # 播报队列技术方案（第三层）
 
+> 往上还有一层**目的层**（取舍原则与裁决记录）见 [playback-purpose.md](playback-purpose.md)——三层有分歧时翻它。
 > **上游是需求层**：播报必须满足什么、场景清单、顺序底线、解耦约束见
 > [playback-requirements.md](playback-requirements.md)；再往上是接入方层
 > [playback-sources.md](playback-sources.md)（谁在说话）。
