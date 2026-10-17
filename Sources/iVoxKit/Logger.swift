@@ -5,28 +5,51 @@ import os.log
 
 private let maxLogSize: UInt64 = 5 * 1024 * 1024
 
+/// 日志级别门限，低于它的直接丢弃（os_log 也一起省掉）。
+/// DEBUG 无门限——高频路径打得太密，落盘会淹掉真正要查的 INFO。
+private enum LogLevel: Int, Comparable {
+    case debug = 0, info = 1, warn = 2, error = 3
+
+    static func < (lhs: LogLevel, rhs: LogLevel) -> Bool { lhs.rawValue < rhs.rawValue }
+}
+
 public enum Log {
     private static let subsystem = "com.user.ivox"
     private static let log = OSLog(subsystem: subsystem, category: "daemon")
     private static let fileQueue = DispatchQueue(label: "com.user.ivox.filelog")
     private static let filePath = NSString(string: "~/.config/ivox/daemon.log").expandingTildeInPath
 
+    /// 默认只留 INFO 及以上；排查时 `IVOX_LOG_LEVEL=debug` 重启守护进程即可放出 DEBUG。
+    /// 认不出 / 没设一律按 info 处理——静默降级不该让人查不了日志。
+    private static let level: LogLevel = {
+        switch ProcessInfo.processInfo.environment["IVOX_LOG_LEVEL"]?.lowercased() {
+        case "debug": return .debug
+        case "warn": return .warn
+        case "error": return .error
+        default: return .info
+        }
+    }()
+
     public static func info(_ message: String) {
+        guard level <= .info else { return }
         os_log("%{public}s", log: log, type: .info, message)
         writeFile("INFO", message)
     }
 
     public static func error(_ message: String) {
+        guard level <= .error else { return }
         os_log("%{public}s", log: log, type: .error, message)
         writeFile("ERROR", message)
     }
 
     public static func warn(_ message: String) {
+        guard level <= .warn else { return }
         os_log("%{public}s", log: log, type: .info, message)
         writeFile("WARN", message)
     }
 
     public static func debug(_ message: String) {
+        guard level <= .debug else { return }
         os_log("%{public}s", log: log, type: .debug, message)
         writeFile("DEBUG", message)
     }

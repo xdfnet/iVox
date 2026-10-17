@@ -119,7 +119,21 @@ private extension String {
     /// - **噪音必须在 removingEmoji 之前** —— 符号清理会把 `:` `/` `[` 换成空格，正则就匹配不到了；
     /// - **replacingEmojiSpeech 必须在 removingEmoji 之前** —— 先把常见 emoji 换成口语词，没命中的再剔除。
     var cleanedForTTS: String {
-        removingURLs.removingNoise.replacingEmojiSpeech.removingEmoji
+        // 逐级记录「哪一步改动了文本」：清洗是静默的，日志里只剩一个
+        // 「46字 → 0字」的结果，出了「念出来少了一截」这类问题根本无从定位到具体规则。
+        let afterURL = removingURLs
+        let afterNoise = afterURL.removingNoise
+        let afterSpeech = afterNoise.replacingEmojiSpeech
+        let afterEmoji = afterSpeech.removingEmoji
+        var trace: [String] = []
+        if afterURL != self { trace.append("去URL") }
+        if afterNoise != afterURL { trace.append("去噪音") }
+        if afterSpeech != afterNoise { trace.append("emoji口语化") }
+        if afterEmoji != afterSpeech { trace.append("去emoji") }
+        if !trace.isEmpty {
+            Log.debug("清洗命中: \(trace.joined(separator: "→")) （\(count)字 → \(afterEmoji.count)字）")
+        }
+        return afterEmoji
     }
 
     /// 剔除「眼睛能看、耳朵听不出」的噪音

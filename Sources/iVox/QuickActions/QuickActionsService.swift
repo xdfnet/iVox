@@ -75,7 +75,12 @@ final class QuickActionsService {
         do {
             try await NSWorkspace.shared.openApplication(at: Self.ghosttyApp, configuration: config)
             if let command {
-                Log.info("QuickActions: 在 \(dir) 执行 \(command)")
+                // 只报「窗口开了、命令交给登录 shell」，不报「执行了 command」——
+                // 真正的执行在 Ghostty 的 zsh 里，此刻还没发生。若 PATH 里没有该命令，
+                // 窗口照常弹出但报 not found，写「执行了」就是一条骗人的日志。
+                // 排查时看下面 DEBUG 的完整 args。
+                Log.info("QuickActions: 已在 \(dir) 打开终端（命令: \(command)，是否装有该命令以终端输出为准）")
+                Log.debug("QuickActions: Ghostty args = \(args.joined(separator: " "))")
             } else {
                 Log.info("QuickActions: 在 \(dir) 打开终端")
             }

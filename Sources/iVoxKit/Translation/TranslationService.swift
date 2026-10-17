@@ -29,6 +29,7 @@ public actor TranslationService {
         if preferProxy, let proxySession {
             let cached = await dispatch(text, session: proxySession, timeout: config.timeoutSeconds)
             if case .success = cached { return cached }
+            Log.warn("翻译: 记住的代理通道也失败了，退回直连")
             preferProxy = false   // 代理也不通了，退回直连再试一次
         }
 
@@ -38,6 +39,7 @@ public actor TranslationService {
         if case .success = direct { return direct }
 
         guard let proxySession else { return direct }
+        Log.warn("翻译: 直连不通，改走代理 \(config.proxyURL ?? "")")
         let viaProxy = await dispatch(text, session: proxySession, timeout: config.timeoutSeconds)
         if case .success = viaProxy {
             preferProxy = true
@@ -87,7 +89,14 @@ public enum GoogleTranslator {
            !translated.isEmpty {
             return .success(translated)
         }
-        return await viaBackup(text, timeout: timeout, session: session)
+        Log.debug("翻译通道: google 主通道未命中，降级备用通道 translateHtml")
+        let result = await viaBackup(text, timeout: timeout, session: session)
+        if case .success = result {
+            Log.debug("翻译通道: google 备用通道成功")
+        } else {
+            Log.warn("翻译通道: google 主备双通道均失败")
+        }
+        return result
     }
 
     /// 主通道 translate_a/t（比 single 稳：single 在同一 IP 下易被 302 跳限流页）。
@@ -111,10 +120,12 @@ public enum GoogleTranslator {
             request.httpBody = components.percentEncodedQuery?.data(using: .utf8)
             let (data, response) = try await session.data(for: request)
             if let http = response as? HTTPURLResponse, !(200...299).contains(http.statusCode) {
+                Log.debug("翻译通道: google 主通道 HTTP \(http.statusCode)")
                 return nil
             }
             return parsePrimaryResponse(data)
         } catch {
+            Log.debug("翻译通道: google 主通道请求异常: \(error.localizedDescription)")
             return nil
         }
     }
