@@ -93,8 +93,8 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
   - *第二层（连续播放管道）*：`PlaybackQueue.processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，**句间不 drain**；`AudioPlayer` 用单个常驻 `AVAudioPlayerNode` 连续 `scheduleBuffer`，4s/2s 高低水位背压（`pendingFrames` 随 `dataConsumed` 核减），prime 静音仅在设备播空/取消后补一次，`drain()` 只在整轮末端调一次。改这里务必读 `docs/playback-requirements.md`（需求）与 `docs/playback-queue.md`（实现），不要重新引入逐句 drain（会导致逐字卡顿）。
 - **流式 turn 协议**：pi 扩展经一条长连接按 `\n` 分帧：首帧 `{type:stream,source,turn}` → 原文增量帧（仅 text_delta）→ `{end}`/`{cancel}`，EOF=end。服务端 `StreamBuffer`（iVoxKit 纯逻辑）累积原文，只在安全边界（句末/段落、代码围栏配平、≥`minFlushChars`=24）抽出整段复用同一套 cleanText→splitSentences。`PlaybackJob.turnID`：**队列按轮分桶排队，播全播完**——同一 `turnID` 分块并入同桶顺序追加，新 turn 在队尾追加新桶、**不打断**在播旧轮（桶播完才前移）；无 turn 的普通播报（`ivox speak`/hook.sh）同上排队。**打断的准星**：动手的只有用户，机器最多「借道」—— 队列的长期顺序只由到达顺序决定，谁都不永久插队；Cmd+D 译文是唯一的机器开口，也只是临时插队（念完即走，原顺序原样）。**打断权只归用户快捷键**，手动打断分三档（形象说法：**一摞 = 一次回复 = 一个桶；一页 = 一个 MessageDisplay；块只是内部撕下的条，已撕在手里、不在页上**）：**轻** = Ctrl+2 **读下一页**（`skipCurrentPage`：丢掉当前页剩下的块，翻页）、**中** = Ctrl+1 **整摞不要了**（`skipCurrentBucket`：丢这一摞的全部桶，下一摞接着播）、**掀桌** = Ctrl+Esc **全扫到地上**（`cancelAll` 全场清）/ 右⌘ 说话。Cmd+D 译文是**插队**——`speakUserInitiated` 只掐在播、译文桶插到队首，其余桶全保留（播完译文接着播）。`{type:stop}` 停止帧与流式新轮**不再打断**（ConnectionHandler 对 stop 帧仅记日志忽略）。某桶 `ended` 才允许空桶前移；流动中空桶保活等下一批。连接内这四类操作经 `ConnectionHandler.StreamOpChain` **按帧序执行**（乱序会让 `{end}` 之后到达的同轮分块把已关轮次重新打开、管道永久挂起）。详见 `docs/socket-api.md`。
 - **播报的四个词**（讨论播报只用这四个，其它说法一律作废；完整术语表见 `docs/playback-requirements.md`）：
-  **摞** = 一次回复（你发一条信息 → AI 答一次，由你按回车划分，身份是 `turn_id`）；
-  **页** = 一个 MessageDisplay（一摞里"说了一段"的一次，身份是 `message_id`）；
+  **摞** = **你发一条信息之后 AI 为此产生的全部回复**（夹工具调用时它会回答很多次，全算这一摞；由你按回车划分，身份是 `turn_id`）；
+  **页** = 一摞里的**一次回复**（一条 assistant 消息，身份是 `message_id`；实测一个 turn 底下最多见过 19 页）；
   **块** = 1～80 字的合成单位（**服务拿去播报用的，不是给用户看的**；`PlaybackJob`，页上的文字被切开送去合成的那些条）；
   **桶** = 队列里的排队单位（`QueueBucket`，**一摞 = 一桶**）。
   读法：捏着队首那一摞 → 翻到当前页 → 撕下一个块去合成播放 → 这页撕完翻下一页 → 这一摞说完（下一条回复到来把它盖上）→ 换下一摞。
