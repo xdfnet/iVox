@@ -1,20 +1,32 @@
 import Foundation
 import iVoxKit
 
-// 播报队列：单队列 + 连续播放管道，管轮次、分页、打断与字幕。
+// 播报播放层：只管「怎么把字念出来」——连续播放管道（合成/播放两条并发 task + 有界 PCM 流）、
+// 掐（断在播）与字幕。谁在说话、说到哪、哪层被作废全归 `PlaybackSession`（身份层）。
 // **不碰背景音乐**——暂停/恢复只归语音输入（录音时音乐会串进麦克风、干扰识别）。
-// 播报借还音乐那套逻辑已整条删除：不借就不会乱。串行调度见 docs/playback-queue.md。
+// 四层文档见 docs/playback-purpose.md（目的）→ playback-sources.md → playback-requirements.md → playback-queue.md。
 
-/// 一条待播报的文本。
+/// 一条待播报的文本。身份字段（摞/页）原样带给 Session，本层不做判断。
 struct PlaybackJob: Sendable {
     let text: String
     let voiceID: String
     let source: String
-    /// 所属流式轮次；nil = 传统整段播报（ivox speak / hook.sh）
-    var turnID: String? = nil
-    /// 这一块属于哪**页**（Claude 的 `message_id`）。Ctrl+2「读下一页」靠它把当前页的剩余块一起丢掉；
-    /// nil = 非 Claude 路径（pi / hook / ivox speak），那时 Ctrl+2 退化成"只掐在播"。
-    var pageID: String? = nil
+    /// 所属摞（`turn_id`）；nil = 传统整段播报（ivox speak / hook.sh）
+    let turnID: String?
+    /// 这一块属于哪**页**（Claude 的 `message_id`）。掀页靠它；nil = 非 Claude 路径。
+    let pageID: String?
+
+    init(text: String, voiceID: String, source: String, turnID: String? = nil, pageID: String? = nil) {
+        self.text = text
+        self.voiceID = voiceID
+        self.source = source
+        self.turnID = turnID
+        self.pageID = pageID
+    }
+
+    var asBlock: PlaybackBlock {
+        PlaybackBlock(seq: 0, text: text, voiceID: voiceID, source: source, pageID: pageID)
+    }
 }
 
 /// 管道里流的一小块音频：PCM +（**仅句首块**）这句的文本。
@@ -36,11 +48,11 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     /// Ctrl+Esc 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，静音播报即可。
     /// **不碰背景音乐**——借还音乐是右⌘ 录音那条的事（见文件头）
     case esc
-    /// Ctrl+1 跳过当前桶：丢正在播的这一**摞**（一次回复，连同后来的页），从下一桶接着播。
-    /// 与 `.esc` 的分工——那个全场闭嘴，这个只跳当前、后面的照播。
+    /// Ctrl+1 掀摞：丢正在播的这一**摞**（一次回复，连同后来的页），从下一摞接着播。
+    /// 与 `.esc` 的分工——那个全场闭嘴，这个只掀当前、后面的照播。
     case skip
-    /// Ctrl+2 读下一页：丢掉当前这一**页**剩下的块，从下一页接着念。
-    /// 手动打断三档里的「轻」（`.skip` = 中：丢整摞；`.esc`/`.speech` = 掀桌：全场清）。
+    /// Ctrl+2 掀页：丢掉当前这一**页**剩下的块，从下一页接着念。
+    /// 手动打断三档里的「轻」（`.skip` = 中：掀整摞；`.esc`/`.speech` = 掀桌：全掀）。
     case skipPage
     /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
     case shutdown
@@ -57,77 +69,34 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     }
 }
 
-/// 一个待播桶：同一轮次的连续 job 序列（turnID 为空 = 普通播报，hook.sh/ivox speak）。
-/// 队列按到达序存桶；进 processNext 消费的 = 队首桶。旧桶播完才前移到下一桶——
-/// 这就是「按轮排队、播全播完」的载体：新 turn 不再打断旧轮，只在队尾追加新桶。
-private struct QueueBucket {
-    let turnID: String?
-    var jobs: [PlaybackJob]
-    /// 该桶的轮是否已 endTurn（普通播报 nil-turn 桶初始即视为 ended）。
-    /// 分桶后空桶不一定是「播完/取消」——可能轮还在流式生成、块还没到。只有 ended 的空桶
-    /// 才允许前移；仍在的轮（ended=false）空桶要挂起等下一批块或 endTurn。
-    var ended: Bool
-    /// 弱分组桶（Claude 的 MessageDisplay：一次回复 = 一摞），由 `Stop` 钩子收尾、不走 `turnStack`。
-    /// 收尾信号丢包时的兜底靠它把"Claude 的摞"与"pi 的强轮 / 普通播报桶"分开——兜底只该动前者，
-    /// 别去拆 pi 的轮（pi 有 `{end}`/EOF 兜底，不靠这里救）。
-}
-
 actor PlaybackQueue {
-    /// 有序待播桶。代理旧的单一 `jobs` 数组——旧实现靠单值 `currentTurn` 门控
-    /// （`processNext` 每取一块按 `t == currentTurn` 过滤）判断轮归属，多轮同处一数组
-    /// 时新旧残块必然互相误删。分桶后轮边界由桶隔离，processNext 只消费队首桶，无需跨桶跳块。
-    private var buckets: [QueueBucket] = []
+    /// 身份层：段→页→块的容器与全部身份记账（墓碑、盖印、空闲宽限）。
+    private let session = PlaybackSession()
+
     private var currentTask: Task<Void, Never>?
-    /// 管道代号：起新管道 / bargeIn 作废时递增。在跑管道靠「自己的代号是否已过期」判断
+    /// 管道代号：起新管道 / 掐断时递增。在跑管道靠「自己的代号是否已过期」判断
     /// 该不该继续——非结构化 `Task {}` 的子任务不继承取消，单靠 cancel 停不住它们。
-    /// 最近一次打断的来源：底层取消日志（TTS 合成已取消）据此对上「是谁打断的」。
-    /// 不用 actor 并发考虑——打断本身串行，写入与 processNext 读它都在本 actor 上。
-    private var lastInterrupt: InterruptSource? = nil
-    /// 正在念的那一块属于哪一页（Ctrl+2「读下一页」的靶心）。claim 时记——那块早在合成前就被
-    /// `popFrontJob` 弹出桶了，光看桶认不出它属于哪页。
-    private var playingPageID: String?
     private var pipelineSeq: UInt = 0
     /// `currentTask` 的代号，用于身份校验：仅当代号仍指向自己时才允许清空/接管。
     private var currentTaskSeq: UInt = 0
     private var generation: UInt = 0
-    /// 队首待播桶（可能空桶——桶空即应前移/消费完毕）。分桶后「当前在播」= 队首非空桶的轮。
-    private var frontBucket: QueueBucket? { buckets.first }
-    /// 是否仍有待播内容（含正在消费的队首桶）；全空才视为 idle。
-    private var hasPendingBuckets: Bool { buckets.contains { !$0.jobs.isEmpty } }
-    /// 当前播报所属轮次 = 队首待播桶的轮（分桶后消费视角）。真正在播的那桶播完才前移，
-    /// 因此「当前轮」不再随新轮到达而翻转——这是「按轮排队、播全播完」的基石。
-    private var currentTurn: String? { frontBucket?.turnID }
-    /// 是否仍有未结束的流式轮（turnID 非空且未 endTurn 的桶）。由每桶 ended 状态推导——
-    /// 取代旧全局 turnOpen 单布尔（多轮按序排队时单布尔会在旧轮收盘 set false 而新轮仍在生成、
-    /// 或反之，导致「最后一个桶播完却迟迟不判收尾」的误判）。processNext 在还有流动中轮时排空仍等待。
-    private var anyTurnInFlight: Bool { buckets.contains { $0.turnID != nil && !$0.ended } }
-    /// 轮次认领栈（pi 双流的空流 `{cancel}` 认证用）：**不作「当前在播」判定**——那是 frontBucket 的
-    /// 事。只回答「这个 turnID 是不是合法新轮/属主该不该交还」，与分桶消费正交。
-    private var turnStack: [String] = []
-    /// 已作废轮次墓碑（容量有上限）：`{cancel}`、语音打断、普通 speak 之后，该轮不再开口
-    /// （含客户端关闭连接后 EOF 兜底补出的残尾）。
-    private var deadTurns: [String] = []
-    /// 曾经这里有一个 `openGroup`（"当前正开着的那一摞"）与「新的 turn 来了就把上一个盖上」的收尾判据。
-    /// 它已随 Stop 钩子的复活而**删除**——那判据用的是一个**全局单值**，两个会话并行时 A 的新轮会关上
-    /// B 正在念的那一摞（实测："多个来源交错时互相盖"），而"盖上"要等用户发下一条消息才发生（太晚）。
-    /// 现在每摞由自己的收尾信号精确收掉：`finishTurn`（Stop）→ 兜底 `sealIdleTurns`（空闲宽限）。
-    /// 空闲宽限期（秒）：**声音停下之后**再等这么久没新内容，就判「这一摞说完了」。
-    /// 它只管**盖章**（桶能否前移、字幕收不收）——**不再管音乐**：播报已完全不碰背景音乐
-    /// （暂停/恢复只归语音输入），所以这里等多久都不会造成"音乐闪烁"。
-    /// 取值理由：一轮里页与页之间夹工具调用，间隔是秒级；太长会让字幕迟迟不收。2 秒是飞哥定的手感。
-    private static let idleGraceSeconds: Double = 2
+    /// 最近一次打断的来源：底层取消日志（TTS 合成已取消）据此对上「是谁打断的」。
+    /// 不用 actor 并发考虑——打断本身串行，写入与 processNext 读它都在本 actor 上。
+    private var lastInterrupt: InterruptSource? = nil
+    /// 空闲宽限的计时任务。**它不属于任何管道**——「还有话没说完」是身份层的事，
+    /// 管道不起的时候也得有人在计时（2026-10-17 `P3`：块被掀光但摞没收尾时，
+    /// 宽限寄生在管道循环里就永远没人跑，收尾挂死 47 秒）。
+    private var graceTask: Task<Void, Never>?
+    /// 宽限的世代号。作废一轮宽限靠**递增它**，不靠 cancel——
+    /// 挂在 `withCheckedContinuation` 上的 Task 被 cancel **不会**解开 continuation，
+    /// 那个 Waiter 会永远留在 Session 的等待表里，多来几轮就把状态搅乱（宽限时灵时不灵）。
+    /// cancel 只加不删，是这里最隐蔽的一种泄漏。
+    private var graceEpoch: UInt = 0
+
     /// 等「声音播完」的上限：设备卡死时别把宽限的起点也一起带死
     ///（宁可早一点判"这摞说完"，也不能再出现"永远判不完"）。
     private static let maxSilenceWaitSeconds: Double = 10
-    /// `waitForJobs` 的等待者。用引用类型让「入队唤醒」与「宽限超时」**互斥**：两边都在本 actor 上
-    /// 串行地从 `jobWaiters` 摘除，先摘到的 resume、后到的发现已不在数组里即放弃——
-    /// `CheckedContinuation` 双重 resume 会 fatal crash，这条互斥是硬要求。
-    private final class JobWaiter: @unchecked Sendable {
-        let continuation: CheckedContinuation<Bool, Never>
-        init(_ continuation: CheckedContinuation<Bool, Never>) { self.continuation = continuation }
-    }
-    /// processNext 等下一批块的挂起点：入队/结束/打断唤醒（true），`idleGraceSeconds` 到点也唤醒（false）。
-    private var jobWaiters: [JobWaiter] = []
+
     /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播该句文本，收起广播 nil。
     /// 在**本 actor 上**被调用，实现方自己切回主线程再碰 UI。
     private var onCaption: (@Sendable (String?) -> Void)?
@@ -150,7 +119,7 @@ actor PlaybackQueue {
         lastInterrupt = .shutdown   // 退出会取消在跑合成，打上标识免得读成上一次打断的残留
         pipelineSeq &+= 1      // 让在跑管道的 producer/consumer 退出
         currentTask?.cancel()
-        buckets.removeAll()
+        Task { await session.discardAll() }
         player.cancelPendingPlayback()
         player.stop()
         // 退出时的**安全网**，与"谁借的"无关：播报已不碰音乐（暂停/恢复只归语音输入），
@@ -171,192 +140,246 @@ actor PlaybackQueue {
     }
 
     /// 队列中等待播放的条数（/health 用）
-    var pendingCount: Int { buckets.reduce(0) { $0 + $1.jobs.count } }
+    var pendingCount: Int { get async { await session.pendingCount } }
     /// 是否有正在处理的播报（/health 用）
     var isProcessing: Bool { currentTask != nil }
 
-    /// 取消所有播放（正在播的和队列中等待的），并作废全部流式轮次。
+    // MARK: - 入队
+
+    /// 流式轮次开始（pi 首帧）。**不打断旧轮**——打断权只归用户快捷键，新轮在队尾排队。
+    func beginTurn(_ id: String, source: String) async {
+        guard await session.beginTurn(id) else { return }   // 已作废 / 被顶掉的旧轮：忽略
+        Log.info("流式轮次开始: source=\(source) turn=\(id)（排队，不打断）")
+        await pumpOrSettle()
+    }
+
+    /// 流式轮次正常结束：盖印（空段可前移），放开宽限并唤醒管道。
+    func endTurn(_ id: String) async {
+        await session.sealTurn(id)
+        await pumpOrSettle()
+    }
+
+    /// 流式轮次被取消（pi 空流 `{cancel}`）：丢弃本轮内容，自取消不占打断来源。
+    func cancelTurn(_ id: String) async {
+        Log.info("用户取消轮次 \(id)：丢弃本轮未播内容，自取消不占打断来源")
+        await session.cancelTurn(id)
+        await pumpOrSettle()   // 还有待播则补起管道，否则收尾（统一收敛点）
+    }
+
+    /// 常规入队（无分组整段播报）。
+    /// **不抢麦**：回复到达时的播报若去抢，两个后台会话收尾就会互相掐掉对方的内容
+    /// （实测 868 字长回复被 199ms 后的 84 字短回复整条掐掉）。按到达序排队、播全播完。
+    func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async {
+        guard !newJobs.isEmpty else { return }
+        if let turnID {
+            // pi 的轮：认证通过才入队，已作废的轮迟到帧静默丢弃。
+            let accepted = await session.appendGrouped(newJobs.map(\.asBlock), group: turnID)
+            guard accepted else { return }
+        } else {
+            await session.appendPlain(newJobs.map(\.asBlock))
+        }
+        await logQueueState(turn: turnID)
+        await pumpOrSettle()
+    }
+
+    func enqueue(_ job: PlaybackJob) async {
+        await enqueue([job], turnID: job.turnID)
+    }
+
+    /// 弱分组入队（Claude 的 MessageDisplay：一次回复按行批分多次短连接送来）。
+    /// 分组号是 **`turn_id`（一次回复 = 一摞）**，不是 `message_id`（一条 message = 一页）——
+    /// 「一摞 = 一段」是「Ctrl+1 掀整摞」成立的前提：一次回复里夹了工具调用就会有**好几页**，
+    /// 按页分段的话 Ctrl+1 只能掀掉一页。
+    func enqueueGrouped(_ newJobs: [PlaybackJob], group: String) async {
+        guard await session.appendGrouped(newJobs.map(\.asBlock), group: group) else { return }
+        await logQueueState(group: group)
+        await pumpOrSettle()
+    }
+
+    /// 收尾指定的那一摞（Stop 钩子按 `session_id` 反查出的 `turn_id`）。**日常收尾的主力就是它**——
+    /// Claude 一说"这轮完了"，字幕立刻归还，不必等空闲宽限。
+    /// 只盖印、**不立墓碑**：Stop 说"我说完了"不等于该轮已死（同一摞的页可能还在路上）。
+    func finishTurn(_ id: String) async {
+        Log.info("收尾信号（这一摞说完了）: turn=\(id)")
+        await session.sealTurn(id)
+        await pumpOrSettle()
+    }
+
+    private func logQueueState(turn: String? = nil, group: String? = nil) async {
+        let n = await session.pendingCount
+        let id = turn ?? group ?? "-"
+        Log.debug("队列状态: pending=\(n) processing=\(currentTask != nil) turn=\(id)")
+    }
+
+    // MARK: - 打断（掐 + 掀）：四个原子动作，热键层不再接触掐
+
+    /// 取消所有播放（正在播的和排队中的），并作废全部流式轮次。
     /// 形象说法：**把桌上所有稿纸全扫到地上**——一声不响（背景音乐不归它管）。
-    /// 「打断权只归用户快捷键」：右⌘ 说话（speech）、Ctrl+Esc 闭嘴（esc）。
-    /// Cmd+D 念译文不走这里——它是 `speakUserInitiated` 的「插队」（只掐在播、不清场）。
-    /// 停止帧 `{type:stop}` 已失效且无发送方（hook.sh interrupt 摘除、ivox quiet 已删）。
-    /// 当场静音 + 清空全部桶（一个喇叭，你快捷键开口全场停）。
     func cancelAll(origin: InterruptSource) async {
         Log.info("打断（来源=\(origin)）：作废全部流式轮次")
         lastInterrupt = origin
-        buryAllTurns()
-        await bargeIn(origin)
-        // **不碰背景音乐**：cancelAll 只管打断清场，全项目只有语音输入借还音乐（见文件头）。
+        await bargeIn(origin)   // bargeIn 内部丢弃 Session 全部内容并立墓碑
+    }
+
+    /// 掀页（Ctrl+2）：掐掉正在念的这一块，并丢掉容器里**属于当前页**的剩余块，从下一页接着念。
+    /// 形象说法：**这一页撕到一半，剩下的不念了，翻页**（一页 = 一个 MessageDisplay）。
+    /// 「跳播放块」没有意义——用户听不出块边界在哪，他感知的单位是页。
+    ///
+    /// **靶心用完即焚**：页靶心取的是「游标之后那一块所在的页」——正是他听到的那一页，
+    /// 取完这次就作废，下次按压重新取。为什么必须这样：Claude 同一页按行批分多次增量入队，
+    /// 掀掉当时已有的块之后这一页还可能继续来块；靶心若不清，第二次按压（他以为已经翻过去了、
+    /// 并没有东西可跳）就会拿旧页号去删**刚到的新块**——表现就是"只按了一次该跳的，新内容却被跳过"。
+    /// 取不到页号（page 为 nil，或当前没有块在播）时退化成"只掐在播"，不误删。
+    func skipCurrentPage(_ origin: InterruptSource) async {
+        // 领靶心（Session 内占位，用完即焚 + 治重入）与掐之间隔着 await，第二次按压会插进来：
+        // 占位让它拿不到靶心，只掐不掀——见 PlaybackSession.claimCurrentPage 的注释。
+        let page = await session.claimCurrentPage()
+        Log.info("读下一页（来源=\(origin)）：丢掉当前页（\(page ?? "-")）的剩余块，从下一页接着念")
+        await preemptCurrent(origin)
+        onCaption?(nil)   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
+        await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
+        let dropped = await session.discardClaimedPage()
+        // 丢了几块要落日志：翻页与"没翻动"在外部看起来一样（都是没声音），
+        // 只有这一行能区分"靶心没对上（page 空 / 页号不匹配）"和"确实翻过去了"
+        Log.info("本页剩余块已丢: page=\(page ?? "-") 块=\(dropped)")
+        await pumpOrSettle()   // 还有块则接着播；若这摞正等下一批字则原地等
+    }
+
+    /// 掀摞（Ctrl+1）：掐掉正在念的这一块，并丢掉当前这一**摞**的全部内容，从下一摞接着播。
+    /// 形象说法：**整摞都不要了**（一摞 = 一次回复），连还没印出来的也不再印。
+    /// 与 `cancelTurn` 的区别：那个是「自取消不占打断来源」、也不掐在播（等它自己播完）；
+    /// 这个是用户主动掀，必须立刻掐在播、丢段、前移。与 `cancelAll` 的区别：那个清全场，
+    /// 这个只丢当前、后面的照播。
+    func skipCurrentBucket(_ origin: InterruptSource) async {
+        Log.info("跳过当前摞（来源=\(origin)）：丢整摞，从下一摞接着播")
+        await preemptCurrent(origin)
+        onCaption?(nil)   // 被掀掉的那一摞立刻从字幕撤下；下一摞开始响时会重新报
+        await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移
+        await session.discardCurrentSegment()   // 内含立墓碑：后续增量不再开口
+        await pumpOrSettle()   // 有下一摞则起管道接着播；没有则收尾
     }
 
     /// 用户主动要求开口（Cmd+D 念译文）：**插队**——掐掉正在播的那一句让译文立刻响，
-    /// 但**不掀桌**：其余排队桶照旧、流式轮不作废（其后分块仍会念，播完译文接着播）。
+    /// 但**不掀桌**：其余排队内容照旧（播完译文接着播）。
     ///
-    /// 与 `enqueue(_:turnID:)` 无 turnID 路径的「只排队」语义**相反**——那条是 agent 自动汇报，
+    /// 与 `enqueue(_:turnID: nil)` 的「只排队」语义**相反**——那条是 agent 自动汇报，
     /// 不该抢麦（否则两个后台会话收尾会互相掐掉对方内容）；这条是用户自己按的，必须立刻响。
-    /// 做成**一个原子方法**而不在调用方 `preemptCurrent + enqueue` 两步拼：actor 可重入，
-    /// 两步之间会插进别的消息。
+    /// 做成**一个原子方法**而不在调用方 `掐 + 入队` 两步拼：actor 可重入，两步之间会插进别的消息。
     func speakUserInitiated(_ newJobs: [PlaybackJob]) async {
         guard !newJobs.isEmpty else { return }
         Log.info("用户主动开口（Cmd+D 划词译文）：插队到队首，其余排队内容保留")
         await preemptCurrent(.dict)
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
-        // 译文自成一轮（用户主动）：独立的 nil-turn 桶**插到队首**立刻播；其余桶顺序不动。
-        buckets.insert(QueueBucket(turnID: nil, jobs: newJobs, ended: true), at: 0)
-        signalJobs()
+        // 译文自成一段插到队首立刻播；其余段顺序不动。
+        await session.appendFirst(newJobs.map(\.asBlock))
         if currentTask == nil { startPipeline() }
     }
 
-    // 这里原本有 `resumeIfIdle()`（"队列空了就恢复音乐"）。**已删**：播报不再借音乐，也就不需要"还"。
-    // 它的三个调用点同步收敛——Ctrl+Esc 与 `ivox skip --all` 不再碰音乐；语音输入松手那条
-    // 改为直接 `media.resume()`（音乐是它自己借的，自己还，不必再等播报队列空）。
+    // MARK: - 内部
 
-    /// 流式轮次开始（首帧）：登记轮次并标记仍在生成（句间不盖章）。
-    /// **不再打断旧轮**——打断权只归用户快捷键（right⌘/Cmd+D/Ctrl+Esc）；新轮在队尾排队。
-    /// 轮次身份仍靠 `claimTurn`/`turnStack` 判定（pi 同消息双流的空流 `{cancel}` 靠栈顶识别，
-    /// 与"按桶排队"正交，不可删）。
-    func beginTurn(_ id: String, source: String) async {
-        // 轮次登记只做 pi 双流认证；「仍在生成」由 anyTurnInFlight 依桶 ended 推导，不需手动标记。
-        guard claimTurn(id) else { return }   // 已作废 / 被顶掉的旧轮：忽略
-        Log.info("流式轮次开始: source=\(source) turn=\(id)（排队，不打断）")
+    /// 收敛点（**必须原子**）：任何路径结束时都在这里落一次——
+    /// 还有待播就补起管道；队列空了且没有没收尾的摞就收字幕；
+    /// **没有块但还有摞没收尾时，起空闲宽限计时**（不依赖管道在跑）。
+    private func pumpOrSettle() async {
+        // **宽限先起，且不等任何管道**：它等的是「还有摞没收尾」这件事本身。排在
+        // `awaitCurrentPipelineFinished()` 后面会被管道带死——那条 await 在预取背压的
+        // continuation 上卡住时退不净，宽限就永远起不来，收尾锚点日志一辈子不出现
+        //（2026-10-17 `P3` 实测：两次掀页行为全对，之后日志直接断掉）。
+        if !(await session.hasPending), await session.anyUnsealed {
+            startIdleGrace()
+        }
+        // **这里刻意不等旧管道退净**：被掐的管道可能挂在 `player.drain()` 或预取背压的
+        // continuation 上迟迟不退出，这一等就把后面所有收尾逻辑（起宽限、收字幕）全带死
+        //（2026-10-17 `P3` 实测：队列已空、health 已空闲，但两条收尾日志一条都没打）。
+        // 线性化由**旧管道自己**保证：它在收尾时把 `currentTask` 置 nil，再回头调一次
+        // `pumpOrSettle()`；此处 `startPipelineIfPending` 见 `currentTask != nil` 就补不起新管道，
+        // 活交给旧管道退净后那一轮去做。真正要「立刻写播放器」的地方（掀页/掀摞/插队）各自
+        // 显式 `await awaitCurrentPipelineFinished()`，不受影响。
+        if await session.hasPending {
+            startPipelineIfPending()
+            return
+        }
+        if currentTask == nil, !(await session.anyUnsealed) {
+            invalidateIdleGrace()
+            onCaption?(nil)
+            Log.info("播报收尾: 队列已空，字幕收起")
+        }
     }
 
-    /// 流式轮次正常结束：标记该轮桶 ended（空桶可前移），放开保活并唤醒管道。
-    /// endTurn 只对自己的桶生效——分桶后可能有多个轮排队、各自在自己时机 endTurn，
-    /// 谁结束了谁的桶就允许被消费完前移，不与别的轮互相干扰。
-    func endTurn(_ id: String) async {
-        // 标记该轮桶 ended：anyTurnInFlight 靠它自动归 false，不再需要全局布尔。
-        if let idx = buckets.firstIndex(where: { $0.turnID == id }) {
-            buckets[idx].ended = true
+    /// 空闲宽限计时：没有块可播，但还有摞没收尾 → 等 2 秒；到点若仍无新内容就判「说完了」。
+    ///
+    /// 这一段**曾经寄生在播放管道的循环里**，于是「块被掀光、摞没收尾」时管道不起、
+    /// 计时器也没人跑——那一摞永远悬着，字幕收不掉（2026-10-17 `P3` 实测挂死 47 秒）。
+    /// 现在它归身份层：等的是「还有话没说完」这件事，跟当前有没有管道在播无关。
+    private func startIdleGrace() {
+        guard graceTask == nil else { return }
+        graceEpoch &+= 1
+        let epoch = graceEpoch
+        graceTask = Task { [weak self] in
+            guard let self else { return }
+            let received = await self.session.waitForContent { [weak self] in
+                await self?.waitUntilQuiet()
+            }
+            await self.idleGraceElapsed(epoch: epoch, receivedContent: received)
         }
-        signalJobs()
+    }
+
+    /// 作废当前这轮宽限（不 cancel 它的 Task，见 `graceEpoch` 的注释）。
+    private func invalidateIdleGrace() {
+        graceEpoch &+= 1
+        graceTask = nil
+    }
+
+    private func idleGraceElapsed(epoch: UInt, receivedContent: Bool) async {
+        guard epoch == graceEpoch else { return }   // 已被新一轮取代，别去动别人的 graceTask
+        graceTask = nil
+        // 等来了新货：入队路径已经起了管道/起了新宽限，但**这里必须再收敛一次**——
+        // 那次起宽限可能正好撞上 graceTask 还占着而被挡（2026-10-17 `P3` 实测），
+        // 不补这一下就没人接班，这一摞永远收不掉。
+        guard !receivedContent else { await pumpOrSettle(); return }
+        // 又来了活（管道起播期间新内容到）：宽限只是猜「说完了」，不能在播到一半时盖印。
+        guard !(await session.hasPending) else { return }
+        await session.sealIdle()
         await pumpOrSettle()
     }
 
-    /// 收敛兜底：还有待播 job 却没有管道在跑（顶替时序可能留下这种孤儿态）就补起管道，
-    /// 否则等旧管道退净、按需收字幕。保证任何路径结束后不留「有活没人干」的挂起。
-    /// （原名 `pumpOrResume`——那一步"恢复音乐"随播报不再借音乐而删除，故名同步改掉。）
-    /// 已被取消且无待播的管道要**等它退净**（已取消，退出很快）再往下走：否则 `currentTask`
-    /// 还非 nil，下面那一支进不去，字幕就永远收不掉。
-    private func pumpOrSettle() async {
-        if let task = currentTask, task.isCancelled, !hasPendingBuckets {
-            await awaitCurrentPipelineFinished()
-        }
-        if hasPendingBuckets {
-            startPipelineIfPending()
-        } else if currentTask == nil {
-            // 队列真的空了：字幕收起。**跳句/跳桶把队列跳空时也走这里**——那条路径没有"下一句
-            // 广播"来顶替，不在这里收就会永久挂在屏幕上（跟着播放改时漏过）。还有流动中的轮
-            // （未收尾）则留着，它后面还会念。
-            if !anyTurnInFlight {
-                onCaption?(nil)
-                Log.info("播报收尾: 队列已空，字幕收起")
-            }
-        }
-    }
-
-    /// 流式轮次被取消（pi 空流 `{cancel}`）：丢弃**本轮的桶**并收尾。
-    /// 分桶后只删自己这个 turn 的桶、不动其他 agent 排队的桶——空流 `{cancel}` 是 pi 双流里
-    /// 那条空流的自扇血，不该把别的排队内容一起清掉（旧实现 bargeIn(nil) 全局清空是单数组下的
-    /// 副作用，分桶后必须收敛）。
-    func cancelTurn(_ id: String) async {
-        Log.info("用户取消轮次 \(id)：丢弃本轮未播内容，自取消不占打断来源")
-        // 删除该 turn 对应的桶（若正是队首在播桶，processNext 会在取下一块时发现空叉前移）。
-        // 只删自己这轮的桶、不动其他 agent 排队内容——空流 `{cancel}` 不该连带清掉别的轮。
-        buckets.removeAll { $0.turnID == id }
-        bury(id)
-        if turnStack.last == id { turnStack.removeLast() }
-        signalJobs()
-        await pumpOrSettle()   // 还有待播则补起管道，否则收尾（统一收敛点）
-    }
-
-    /// 跳过当前桶（Ctrl+1）：丢掉正在播的**这一摞**（连同其后分块），从下一桶接着播。
-    /// 形象说法：**整摞都不要了**（一摞 = 一次回复），连还没印出来的也不再印。
-    /// 与 `cancelTurn` 的区别：那个是「自取消不占打断来源」、也不掐在播（等它自己弹空）；
-    /// 这个是用户主动跳，必须立刻掐在播、丢桶、前移。与 `cancelAll` 的区别：那个清全场，
-    /// 这个只丢当前、后面的照播。
-    func skipCurrentBucket(_ origin: InterruptSource) async {
-        guard let head = frontBucket else { return }
-        let group = head.turnID
-        Log.info("跳过当前桶（来源=\(origin)）：丢 turn=\(group ?? "-") 余 \(head.jobs.count) 块，从下一桶接着播")
-        // 整轮丢掉：立墓碑，该轮后续分块（含关连接后 EOF 兜底补出的残尾）也不再开口。
-        // 不碰 turnStack——墓碑已在 claimTurn 里优先拦住；出栈会把它顶掉的旧轮重新认成属主，
-        // 那是另一个语义，这里不做。弱分组（Claude）同样靠这块墓碑拦住它的后续批次。
-        if let group { bury(group) }
-        playingPageID = nil   // 整摞都丢了，页靶心同样作废（理由见 skipCurrentPage 注释）
-        await preemptCurrent(origin)
-        onCaption?(nil)   // 被跳掉的那轮立刻从字幕撤下；下一桶开始响时会重新报
-        await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移，避免两个 consumer 抢 player
-        // 有轮次号就丢**该轮的全部桶**：弱分组下一轮可能散在几个桶里（Claude 中途停顿被拆开），
-        // 只弹队首会把这一轮的残部留在队里接着念，「跳整摞」就跳不干净。
-        if let group {
-            buckets.removeAll { $0.turnID == group }   // 挂起期间可能已被别的路径清掉，removeAll 天然不越界
-        } else if !buckets.isEmpty {
-            buckets.removeFirst()   // 无轮次号的普通播报：只丢队首这一桶
-        }
-        signalJobs()
-        await pumpOrSettle()   // 有下一桶则起管道接着播；没有则收尾
-    }
-
-    /// 读下一页（Ctrl+2）：掐掉正在念的这一块，并丢掉桶里**属于当前页**的剩余块，从下一页接着念。
-    /// 形象说法：**这一页撕到一半，剩下的不念了，翻页**（一页 = 一个 MessageDisplay）。
-    /// 「跳播放块」没有意义——用户听不出块边界在哪，他感知的单位是页。
-    /// 手动打断三档里的「轻」——`skipCurrentBucket`（中，丢整摞）、`cancelAll`（掀桌，全场清）。
+    /// 等设备把已排队音频播完（声音真的停下），最多等 `maxSilenceWaitSeconds`。
     ///
-    /// 需要一笔记账：正在念的那块早在合成前就被 `popFrontJob` 弹出桶了，光看桶认不出它属于哪页，
-    /// 所以 claim 时把页号记进 `playingPageID`。页号为 nil（非 Claude 路径：pi / hook / 手动 speak）
-    /// 时退化成"只掐在播"。
-    ///
-    /// **靶心必须用完即焚**（进函数先置 nil，实测踩过）：Claude 同一页是按行批**分多次**增量入桶的，
-    /// 跳掉当时已有的块之后这一页还可能继续来块。若不清 `playingPageID`，用户接着再按一下
-    /// （他以为已经翻过去了、并没有东西可跳）就会拿陈旧页号去删**刚到的新块**——表现就是
-    /// "只按了一次该跳的，新内容却被跳过"。清掉后第二次按压若新块还没起播（靶心空），
-    /// 只掐在播、不误删；等它真播起来再按，靶心是新页号，语义正确。
-    func skipCurrentPage(_ origin: InterruptSource) async {
-        let page = playingPageID
-        playingPageID = nil   // 靶心用完即焚，见下面注释——不清会误删后到的同页增量
-        Log.info("读下一页（来源=\(origin)）：丢掉当前页（\(page ?? "-")）的剩余块，从下一页接着念")
-        await preemptCurrent(origin)
-        onCaption?(nil)   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
-        await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
-        var dropped = 0
-        if let page {
-            // 只删"属于这一页"的块，同桶里后面几页的块原样留着——这才是"翻页"不是"跳桶"
-            for i in buckets.indices {
-                dropped += buckets[i].jobs.filter { $0.pageID == page }.count
-                buckets[i].jobs.removeAll { $0.pageID == page }
-            }
+    /// 用轮询而不是"播空回调 + continuation"：① 这段只持续最后一块的播放时长、粒度是秒，200ms 一问足够；
+    /// ② **回调式挂起在设备卡死时会永久卡住**，反而把宽限的起点也带死——轮询天然带超时，卡到上限就走，
+    /// 收尾照样能到。代价是每 200ms 唤醒一次 actor，只发生在队列见底的这几秒。
+    private func waitUntilQuiet() async {
+        guard player.queuedFrames > 0 else { return }
+        let deadline = Date().addingTimeInterval(Self.maxSilenceWaitSeconds)
+        while player.queuedFrames > 0, Date() < deadline, !Task.isCancelled {
+            try? await Task.sleep(for: .milliseconds(200))
         }
-        // 丢了几块要落日志：翻页与"没翻动"在外部看起来一样（都是没声音），
-        // 只有这一行能区分"靶心没对上（page 空 / 页号不匹配）"和"确实翻过去了"
-        Log.info("本页剩余块已丢: page=\(page ?? "-") 块=\(dropped)")
-        signalJobs()
-        await pumpOrSettle()   // 还有块则接着播；若这摞正等下一批字则原地等
     }
 
     /// 掐掉「正在播的这一句/这一轮」：作废管道代号 + 取消在播 + 取消已排队合成与音频。
-    /// **不动 `buckets`**——它是「插队」与「掀桌」的公共前置：插队（Cmd+D 译文）只掐在播、
+    /// **不动 Session 容器**——它是「插队」与「掀桌」的公共前置：插队（Cmd+D 译文）只掐在播、
     /// 保留其余排队内容；掀桌（bargeIn）先清场再调它。
     /// 不在此清 currentTask——由旧 processNext 自然结束时自清；调用方若要立刻起新管道，
     /// 必须 `await awaitCurrentPipelineFinished()`（线性化点），否则新旧两个 consumer 会并发
     /// write 同一个 player、争夺单一背压 continuation 槽，造成 continuation 泄漏/竞态。
     private func preemptCurrent(_ origin: InterruptSource?) async {
-        // nil = 自取消（用户 Esc 放弃自己那轮），不是从别人手里抢喇叭，不占打断来源。
+        // nil = 自取消（用户放弃自己那轮），不是从别人手里抢喇叭，不占打断来源。
         let label = origin?.description ?? "自取消"
         lastInterrupt = origin
         pipelineSeq &+= 1      // 作废在跑管道：其 producer/consumer 靠代号不等立即停止
         currentTask?.cancel()
-        signalJobs()
+        await session.signal()  // 挂在 Session 里的宽限等待立刻作废（掐了就不必再宽限）
         await engine.cancelActiveSynthesis(reason: label)   // 显式作废旧纪元排队合成，不依赖任务取消传播
         player.cancelPendingPlayback()
     }
 
-    /// 打断（掀桌）：掐掉在播 + 清空全部排队桶（右⌘ 说话 / Ctrl+Esc 闭嘴）。
+    /// 掀桌：掐掉在播 + 清空全部排队内容（右⌘ 说话 / Ctrl+Esc 闭嘴）。
     private func bargeIn(_ origin: InterruptSource?) async {
         let label = origin?.description ?? "自取消"
-        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(pendingCount))、作废管道 seq\(pipelineSeq&+1)")
-        buckets.removeAll()
-        onCaption?(nil)   // 掀桌：字幕立刻收（插队/跳桶不走这里——它们的字幕由下一句广播接续）
+        let n = await session.pendingCount
+        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(n))、作废管道 seq\(pipelineSeq&+1)")
+        await session.discardAll()   // 清容器 + 所有摞立墓碑（后续增量一律不开口）
+        onCaption?(nil)   // 掀桌：字幕立刻收（插队/掀摞不走这里——它们的字幕由下一句广播接续）
         await preemptCurrent(origin)
     }
 
@@ -368,150 +391,24 @@ actor PlaybackQueue {
         if currentTaskSeq == seq { currentTask = nil }   // 挂起期间若已起新管道，别把它清掉
     }
 
-    /// 认领轮次：true = 可播（首次出现的新轮，或属主被清空后交还的最新轮）；
-    /// false = 已作废的轮，或仍挂在栈里但被更新轮顶掉的旧轮（一律静默丢弃）。
-    private func claimTurn(_ id: String) -> Bool {
-        if deadTurns.contains(id) { return false }
-        if let idx = turnStack.firstIndex(of: id) {
-            return idx == turnStack.count - 1   // 在栈中：仅当仍是最新轮才可播
-        }
-        turnStack.append(id)
-        if turnStack.count > 64 { turnStack.removeFirst() }
-        return true
-    }
-
-    /// 给轮次立墓碑：此后该轮（含关闭连接后 EOF 兜底补出的残尾）不再开口。
-    private func bury(_ id: String) {
-        guard !deadTurns.contains(id) else { return }
-        deadTurns.append(id)
-        if deadTurns.count > 64 { deadTurns.removeFirst() }
-    }
-
-    /// 作废全部流式轮次（「全场闭嘴」时用：此前所有流式轮一律不再开口）。
-    /// 调用方只剩 `cancelAll()`——`speakUserInitiated` 改成插队后不再掀桌；普通播报（无 turnID）只排队，不经过这里。
-    private func buryAllTurns() {
-        turnStack.forEach { bury($0) }
-        turnStack.removeAll()
-        // 弱分组（Claude 多批）也要立墓碑——它们刻意不进 turnStack（见 enqueueGrouped），
-        // 不从桶里捞一遍，掀桌后这条回复的后续批次就会照响，「掀不干净」。
-        buckets.compactMap(\.turnID).forEach { bury($0) }
-    }
-
     /// 起一条新管道（producer+consumer），并登记其身份序号。
     private func startPipeline() {
         pipelineSeq &+= 1
         let seq = pipelineSeq
         currentTaskSeq = seq
+        invalidateIdleGrace()   // 有活要播了，宽限不必再等
         currentTask = Task { await processNext(seq: seq) }
     }
 
     /// 仅在无管道且有活时起新管道（拆旧管道后的补起）。
     private func startPipelineIfPending() {
-        if currentTask == nil, hasPendingBuckets { startPipeline() }
-    }
-
-    /// 恢复等待新 job 的管道（anyTurnInFlight 下 processNext 挂在 waitForJobs 上）。
-    private func signalJobs() {
-        let waiters = jobWaiters
-        jobWaiters.removeAll()
-        waiters.forEach { $0.continuation.resume(returning: true) }
-    }
-
-    /// 批量入队（分桶）：一次 append 完再启动处理，消除逐条入队时"队列瞬时为空 → 白收尾一次 → 又起管道"的窗口。
-    /// - Parameter turnID: 流式轮次。分桶后**任何新轮都不打断旧轮**——按到达序 append 新桶，
-    ///   由 processNext 播完前桶再前移。同 turn 的后续分块并入已存在的桶。
-    func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async {
-        guard !newJobs.isEmpty else { return }
-        if let turnID {
-            // 同轮追加：并入该轮已存在的桶（可能在队首正在播、也可能在队尾排队）。
-            if let idx = buckets.firstIndex(where: { $0.turnID == turnID }) {
-                buckets[idx].jobs.append(contentsOf: newJobs)
-                // 又来货了：揭掉空闲宽限封的印（`sealIdleTurns` 只是猜"说完"，不是判死）
-                buckets[idx].ended = false
-            } else {
-                // 首帧或迟到的新轮：**排队，不打断**——认证通过则新增桶在队尾追加。
-                guard claimTurn(turnID) else { return }   // 已作废轮：迟到帧静默丢弃
-                buckets.append(QueueBucket(turnID: turnID, jobs: newJobs, ended: false))
-            }
-        } else {
-            // 无轮次的普通播报（hook.sh / ivox speak / Cmd+D）：排队，不抢麦。
-            // 打断权只归用户快捷键（right⌘/Cmd+D/Ctrl+Esc）——回复到达时的播报若再抢一次，
-            // 两个后台会话收尾就会互相掐掉对方的内容（实测 868 字长回复被 199ms 后的
-            // 84 字短回复整条掐掉）。这里并入队尾的 nil-turn 桶（或新开），由管道顺序播完。
-            if let last = buckets.last, last.turnID == nil {
-                buckets[buckets.count - 1].jobs.append(contentsOf: newJobs)
-            } else {
-                buckets.append(QueueBucket(turnID: nil, jobs: newJobs, ended: true))
-            }
-        }
-        signalJobs()
-        Log.debug("队列状态: pending=\(pendingCount) processing=\(currentTask != nil) turn=\(turnID ?? "-")")
-
-        // 有管道则 while 自动消费新 job；无则新起
         if currentTask == nil { startPipeline() }
-    }
-
-    func enqueue(_ job: PlaybackJob) async {
-        await enqueue([job], turnID: job.turnID)
-    }
-
-    /// 弱分组入队（Claude 的 MessageDisplay：一次回复按行批分多次短连接送来）。
-    /// 分组号是 **`turn_id`（一次回复 = 一摞）**，不是 `message_id`（一条 message = 一页）——
-    /// 「一桶 = 一摞」是「Ctrl+1 跳整摞」成立的前提：一次回复里夹了工具调用就会有**好几页**，
-    /// 按页分桶的话 Ctrl+1 只能跳掉一页。
-    /// 与 `enqueue(_:turnID:)` 的分工：那条走 `turnStack`（pi 双流认证），这条**绝不碰它**，
-    /// 只做两件事——同一摞的各页并进同桶，以及被跳掉/掀桌后拦住该摞的**后续批次**（查 `deadTurns`）。
-    ///
-    /// 桶初始 `ended: false`：要等 `finishTurn()`（`Stop` 钩子的收尾信号）或 `sealIdleTurns()`（空闲宽限）。
-    /// 中途播空也**不弹**：页级的 `final` 只说明"这页说完"，拿它收尾会让桶在第一页就"结束"、又掉回页的粒度。
-    func enqueueGrouped(_ newJobs: [PlaybackJob], group: String) async {
-        // ① **先看自己死没死**：老桶（已被盖上 / 被 Ctrl+1 跳掉 / 被掀桌）的后续页直接丢掉。
-        //    这一步**必须在"盖上一个"之前**——实测踩过：一个已死 turn 的迟到页会先盖掉当前活跃的
-        //    那一摞、再把自己丢掉，顺手把活的也打死了（日志里 `丢弃 PP` 的前一行正是 `盖上 QQ`）。
-        if deadTurns.contains(group) {
-            Log.debug("丢弃：turn=\(group) 那一摞已被盖上")
-            return
-        }
-        // ② 这里原本是「新的 turn 来了：把上一个盖上并立墓碑」。**已删除**：它靠一个全局单值认"上一个"，
-        //    两个会话并行时 A 的新轮会关掉 B 正在念的那一摞；而且"盖上"要等你发下一条消息才发生。
-        //    现在每摞自己收尾（Stop 的 `finishTurn` / 宽限的 `sealIdleTurns`），互不干扰。
-        if !newJobs.isEmpty {
-            if let idx = buckets.firstIndex(where: { $0.turnID == group }) {
-                buckets[idx].jobs.append(contentsOf: newJobs)
-                // 同 `enqueue`：同一摞的下一页到了，揭掉空闲宽限封的印
-                buckets[idx].ended = false
-            } else {
-                buckets.append(QueueBucket(turnID: group, jobs: newJobs, ended: false))
-            }
-        }
-        signalJobs()
-        Log.debug("队列状态: pending=\(pendingCount) processing=\(currentTask != nil) group=\(group)")
-        // 有管道则 while 自动消费新 job；无则新起。**必须查 `hasPendingBuckets`**：本方法不像
-        // `enqueue` 那样在最前面挡掉空入队，所以可能一次都没加 job——光看 `currentTask == nil`
-        // 会起一条空管道，它照样要跑一遍引擎就绪与收尾，纯属空转。
-        if currentTask == nil, hasPendingBuckets { startPipeline() }
-    }
-
-    /// 收尾指定的那一摞（Stop 钩子按 `session_id` 反查出的 `turn_id`；手动 `ivox speak --group X --final` 同此）。
-    /// **日常收尾的主力就是它**——Claude 一说"这轮完了"，字幕立刻归还，不必等空闲宽限。
-    /// 只标 ended、**不立墓碑**：Stop 说"我说完了"，但同一摞的页可能还在路上（钩子异步 + socket 短连并发），
-    /// 立墓碑会把正常内容一起丢掉；`deadTurns` 只由**用户显式作废**的动作来立（跳整摞 / 掀桌 / 取消轮次）。
-    func finishTurn(_ id: String) {
-        Log.info("收尾信号（这一摞说完了）: turn=\(id)")
-        closeGroup(id)
-        signalJobs()
-    }
-
-    /// 给一个弱分组的**全部桶**标记 ended（这一摞说完了）。pi 那种强轮走 `endTurn`，不走这里。
-    private func closeGroup(_ group: String) {
-        for i in buckets.indices where buckets[i].turnID == group { buckets[i].ended = true }
     }
 
     /// 连续播放管道：合成 / 播放拆成两条并发 task，中间用有界流接 PCM。
     /// - 合成 task 不停取下一句合成，句间经 `awaitPrefetchCapacity` 门控（排队音频超 4s 就先别
     ///   开下一句），因此始终领先播放一两句，设备不会在句间播空；
     /// - 播放 task 只负责 `player.write`，背压只阻塞播放、不再挡合成。
-    /// anyTurnInFlight 下队列瞬时排空，合成 task 挂起等下一批 job（保活：不盖章、不退管道）；全部轮结束且排空才收尾。
     private func processNext(seq: UInt) async {
         generation &+= 1
         let gen = generation
@@ -526,38 +423,16 @@ actor PlaybackQueue {
         let producer = Task {
             defer { pcmContinuation.finish() }
             while !Task.isCancelled {
-                if pipelineSeq != seq { return }   // 已被 bargeIn 作废：立即退出，不再合成
-                if !hasPendingBuckets {
-                    if anyTurnInFlight {
-                        // 还有流动中的轮在等块：等唤醒（入队/endTurn/打断）或等宽限到点
-                        if !(await waitForJobs()) { sealIdleTurns() }
-                        continue
-                    }
+                if pipelineSeq != seq { return }   // 已被掐断作废：立即退出，不再合成
+                guard let cursor = await session.nextCursor() else {
+                    // 没有块可播了。有没收尾的摞就交给宽限（**这里不能等**：管道下方就是
+                    // `pumpOrSettle`，它会另起 graceTask，与本管道无关），没有就整条退出。
                     return
                 }
-                // 门控/等待可能挂起较久，返回后先看取消：已被 bargeIn 就别再发起合成
+                let job = cursor.block
+                // 门控/等待可能挂起较久，返回后先看取消：已被掐断就别再发起合成
                 try Task.checkCancellation()
-                // 先**读**队首（不弹）：前移空桶后取队首待播 job，作为本句的处理目标。
-                // 真正弹出留到门控/等待之后——若期间被 bargeIn 清空，job 留在桶里由 bargeIn 一起清走，
-                // 不至于「已弹出又不播」的丢失。
-                if let fb = frontBucket, fb.jobs.isEmpty, fb.ended {   // 空且已结束的桶前移
-                    _ = takeFrontBucket()
-                    continue
-                }
-                // 空但 ended=false：轮还在流式生成、块还没到，不能当空壳弹掉。
-                // 这里必须**挂起**等，不能 `continue` 重问：后面若已排了别的桶，上面的
-                // `!hasPendingBuckets` 分支就进不去，重问就成了没有挂起点的紧循环——producer
-                // 独占本 actor 且永不释放，enqueue/endTurn/cancelAll 一律被饿死（连快捷键打断都
-                // 进不来），播报就此永久瘫痪，外加烧满一核。凑齐条件：队首轮已播空正等下一批块
-                //（常态）+ 其后已排了别人的话（多 agent 交错）。
-                guard let job = frontBucket?.jobs.first else {
-                    // 队首桶播空、等下一批块：同样给宽限期，否则「这一摞的最后一块念完」
-                    // 就永远停在这个挂起点上（收字幕在收尾条件里，走不到）
-                    if !(await waitForJobs()) { sealIdleTurns() }
-                    continue
-                }
-                // 队首桶空则前移到下一桶：这就是「播全播完」——旧桶播完才进新轮。
-                // 无需再按 currentTurn 门控跳块（旧实现是单数组 + 单值轮导致新旧残块互删的根源）。
+
                 let batchID = String(UUID().uuidString.prefix(6))
                 Log.info("TTS 合成开始 [\(job.source)-\(batchID)] chars=\(job.text.count)")
                 let startedAt = Date()
@@ -570,12 +445,10 @@ actor PlaybackQueue {
                     try await player.awaitPrefetchCapacity()
                     try Task.checkCancellation()   // 门控返回时可能已被取消，绝不带取消进模型
 
-                    // claim：门控挂起期间 bargeIn 可能已 removeAll（取消状态尚在传播窗口），
-                    // 绝不能对空数组 removeFirst（曾致 EXC_BREAKPOINT「removeFirst from empty」）。
-                    // 只在队首仍是我读到的那个 job 时才弹出（popFrontJob 已处理空桶前移）。
-                    guard let taken = popFrontJob(), taken.text == job.text else { continue }
+                    // claim：门控挂起期间可能被掀掉。**游标不弹出容器**，所以这里不用改容器，
+                    // 只要确认这一块还在（在播）就合成；不在了（掀掉了）就跳过它、游标照常前移。
+                    if await session.nextCursor()?.seq != cursor.seq { continue }
                     claimed = true
-                    playingPageID = taken.pageID   // 记下这一块属于哪页：Ctrl+2 要拿它当靶心
                     let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
 
                     // 句首块捎上这句的文本：播放器在它被设备读出时报字幕（跟随声音，而非合成）
@@ -592,15 +465,16 @@ actor PlaybackQueue {
                     Log.info("TTS 合成已取消 [\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "自取消")）")
                     throw CancellationError()
                 } catch {
-                    if !claimed, !hasPendingBuckets { _ = popFrontJob() }   // 合成失败跳过队首，避免死循环
                     Log.error("TTS 合成失败: \(error)")
                 }
+                // 游标前移：无论合成成功、失败、被取消，这一块都过去了——不前移就是死循环。
+                await session.commit(cursor)
                 let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
                 if pipelineSeq != seq {
                     // MLX 不响应中途取消：打断后被掐的这句仍跑完，但已作废。别让它显示成
                     // 普通「完成」（打断后紧邻的完成会被人误读成「没掐住」）。
                     Log.info("TTS 合成作废（MLX 不响应中途取消，这句跑完才停）[\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "自取消")） \(elapsed)s")
-                } else {
+                } else if claimed {
                     Log.info("TTS 合成完成 [\(job.source)-\(batchID)] \(elapsed)s")
                 }
             }
@@ -611,7 +485,7 @@ actor PlaybackQueue {
         let consumer = Task {
             for await chunk in pcmAsync {
                 if Task.isCancelled { break }
-                // 已被 bargeIn 作废：立刻停止灌 PCM。write 是「进入时取世代」，作废后再进来的
+                // 已被掐断作废：立刻停止灌 PCM。write 是「进入时取世代」，作废后再进来的
                 // write 会取到新世代、通过世代校验，把旧轮的缓冲 PCM 排进播放器——旧音频因此继续
                 // 响（打断失效），旧管道也迟迟不退出（新轮在 awaitCurrentPipelineFinished 干等）。
                 if pipelineSeq != seq { break }
@@ -623,106 +497,22 @@ actor PlaybackQueue {
         // 自然结束。正常路径绝不能提前 consumer.cancel()：此刻 AsyncStream 里可能还缓冲着
         // 最后一句的多块 PCM，cancel 后循环在 isCancelled 处 break，会整块丢掉尾音、drain
         // 只等到已 schedule 的部分，表现为「内容没念完就收尾、字幕提前收起」。
-        // 仅当整条任务真被 bargeIn 取消时，才 cancel consumer 让它立刻弃掉残余。
+        // 仅当整条任务真被掐断取消时，才 cancel consumer 让它立刻弃掉残余。
         _ = try? await producer.value
         if Task.isCancelled { consumer.cancel() }
         _ = try? await consumer.value
 
-
-        // 整条管道末端：等所有已排队音频真正播完（含跨 job 的尾音）；在途音频作废由
+        // 整条管道末端：等所有已排队音频真正播完（含跨块的尾音）；在途音频作废由
         // bargeIn/cancelAll 的 cancelPendingPlayback 完成（其已递增 generation）。
         if !Task.isCancelled, gen == generation {
             try? await player.drain()
         }
         if currentTaskSeq == seq { currentTask = nil }   // 已被新管道顶替则不清
         await Task.yield()
-        // 收尾窗口兜底：drain 等待尾音期间新入队的桶，旧管道正在收尾、currentTask 尚非 nil，
-        // enqueue 不肯起新管道——这里须回头检查「有桶待播却无管道」并补起，否则新内容永久躺着
+        // 收尾窗口兜底：drain 等待尾音期间新入队的内容，旧管道正在收尾、currentTask 尚非 nil，
+        // 入队路径不肯起新管道——这里须回头收敛一次，否则新内容永久躺着
         //（漏播根因，实测 17:14 claude 317字 5块入队后躺在队列零合成）。
-        if hasPendingBuckets, currentTask == nil {
-            startPipelineIfPending()
-        }
-        // 还有流动中的轮（未 endTurn）时不收尾——该轮分块可能马上到
-        if !hasPendingBuckets, gen == generation, !anyTurnInFlight, !Task.isCancelled {
-            onCaption?(nil)
-            // 收尾标记：字幕收起即队列真收尾。**这条日志是自检脚本判定"收尾了"的锚点**——
-            // 原先它借 `媒体控制: 恢复` 当锚点，播报不再碰音乐后那条就不存在了。
-            Log.info("播报收尾: 队列已空，字幕收起")
-        }
-    }
-
-    /// 弹出队首空桶（已播完 / 该 turn 被取消留下的空壳）。用于 processNext 前移桶。
-    private func takeFrontBucket() -> QueueBucket? {
-        guard !buckets.isEmpty else { return nil }
-        return buckets.removeFirst()
-    }
-
-    /// 从队首**非空**桶弹出其队首 job（门控后的 claim）。空桶不弹、交给 takeFrontBucket 前移。
-    /// 用于 processNext 闭包内同步取/弹——`buckets` 是 actor 存储，闭包里的计算属性
-    /// （frontBucket）是 get-only，不能直接 mutating，须经本方法在 actor 上改。
-    private func popFrontJob() -> PlaybackJob? {
-        guard let head = buckets.first, !head.jobs.isEmpty else { return nil }
-        return buckets[0].jobs.removeFirst()
-    }
-
-    /// 挂起直到有新 job 入队 / 轮次结束 / 被打断（signalJobs 恢复）。
-    /// 等下一批块：返回 true = 等来了新货，false = 宽限期到、仍然没有。
-    ///
-    /// **为什么必须带超时**：收尾判据是「新的 turn 来了就把上一个盖上」，可用户说完一轮之后
-    /// **不会有下一条 turn**——那一摞就永远挂着 `ended=false`，`anyTurnInFlight` 永真，
-    /// 收尾条件（收字幕）永不成立。实测两条路径都卡死：自然播完、跳页后队列见底。
-    /// 宽限期就是这个判据的兜底：等够了就当作说完了。
-    private func waitForJobs() async -> Bool {
-        // **这里必须无条件挂起**，绝不能因为"看着还有货"就提前返回：两个调用点里有一个是
-        // 「队首是个空桶（正等下一批块）、它后面还排着别的桶」——此时 `hasPendingBuckets` 为真、
-        // 而 `frontBucket` 取不到 job，早返回就会让调用方 `continue` 重问，变成**没有挂起点的紧循环**：
-        // 独占 actor、烧满一核、连快捷键打断都进不来（2026-10-16 实测：daemon 整个卡死，`/health`
-        // 也不响应，SIGTERM 都被死循环吞掉只能 kill -9）。有货时挂起也只是一瞬——入队路径末尾的
-        // `signalJobs()` 会立刻把它唤醒。
-        //
-        // 宽限从**声音停下**起算：最后一块被取走去合成时它还在响，此刻就开始数的话，
-        // 会在这一句还没念完时就判"说完"、把字幕收掉（体感是"没念完就切走了"）。
-        await waitUntilSilent()
-        return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
-            let waiter = JobWaiter(continuation)
-            jobWaiters.append(waiter)
-            // 超时支：到点若还没被 `signalJobs` 摘走，就由这里摘走并唤醒 false
-            Task { [weak self] in
-                try? await Task.sleep(for: .seconds(Self.idleGraceSeconds))
-                await self?.expire(waiter: waiter)
-            }
-        }
-    }
-
-    /// 等设备把已排队音频播完（声音真的停下），最多等 `maxSilenceWaitSeconds`。
-    ///
-    /// 用轮询而不是"播空回调 + continuation"：① 这段只持续最后一块的播放时长、粒度是秒，200ms 一问足够；
-    /// ② **回调式挂起在设备卡死时会永久卡住**，反而把宽限的起点也带死——轮询天然带超时，卡到上限就走，
-    /// 收尾照样能到。代价是每 200ms 唤醒一次 actor，只发生在队列见底的这几秒。
-    private func waitUntilSilent() async {
-        guard player.queuedFrames > 0 else { return }
-        let deadline = Date().addingTimeInterval(Self.maxSilenceWaitSeconds)
-        while player.queuedFrames > 0, Date() < deadline, !Task.isCancelled {
-            try? await Task.sleep(for: .milliseconds(200))
-        }
-    }
-
-    /// 宽限到点：把等待者从挂起表摘掉并唤醒 false。已被 `signalJobs` 摘过则什么都不做。
-    private func expire(waiter: JobWaiter) {
-        guard let idx = jobWaiters.firstIndex(where: { $0 === waiter }) else { return }
-        jobWaiters.remove(at: idx)
-        waiter.continuation.resume(returning: false)
-    }
-
-    /// 空闲宽限到点：把还挂着的桶一并盖上（= 视为「这一摞说完了」）。
-    /// 与「新 turn 盖上」的分工：同样标 `ended`，但**不立墓碑**——这只是猜"说完了"、不是判定该轮已死；
-    /// 它之后若又来页，`enqueue*` 会把 `ended` 揭回 false 继续播。标完 `anyTurnInFlight` 自然归 false，
-    /// 收尾条件成立 → 收字幕（**不还音乐**：播报已完全不碰背景音乐）。
-    private func sealIdleTurns() {
-        let ids = buckets.filter { $0.turnID != nil && !$0.ended }.compactMap(\.turnID)
-        guard !ids.isEmpty else { return }
-        Log.info("空闲 \(Int(Self.idleGraceSeconds))秒无新内容，判定说完了：盖上 \(ids.joined(separator: ","))")
-        ids.forEach { closeGroup($0) }
+        await pumpOrSettle()
     }
 
     private func waitUntilEngineReady() async throws {

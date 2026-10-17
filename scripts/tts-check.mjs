@@ -94,6 +94,22 @@ async function speak(source, text) {
   s.end();
 }
 
+// 带摞与页的一次性入队（Claude 路径的形态：{source,group,page}正文）。
+// group = 摞号（一次输入引发的全部回复），page = 页号（一条 assistant 消息）。
+// 不等 write 回调：实测在打断动作刚发生的那一刻，回调可能迟迟不触发，整条请求
+// 根本发不出去（曾让 P3 干等 41 秒）。小报文直接 write 后 end，由 socket 自己 flush。
+async function speakGrouped(source, group, page, text) {
+  const s = await conn();
+  s.write(`{source:${source},group:${group},page:${page}}${text}`);
+  s.end();
+}
+
+// 掐 + 掀某一档：mode=page | stack | all，逐字对应 Ctrl+2 / Ctrl+1 / Ctrl+Esc。
+async function skip(mode) {
+  const s = await conn();
+  s.end(`{type:skip,mode:${mode},tag:${runId}}\n`);
+}
+
 // 全场打断：停当前 + 清空排队（同 Ctrl+Esc），命令是 `ivox skip --all`。
 // 历史的 `ivox quiet`（发 `{type:stop}`）已随该帧一起退役，改用 `{type:skip,mode:all}`。
 async function skipAll() {
@@ -258,7 +274,10 @@ async function waitSettled(log, sinceTs, { timeout = 60000 } = {}) {
   let settledAt = 0;
   while (nowMs() < deadline) {
     await log.poll(sinceTs);
-    if (!settledAt) {
+    // 取**最新**一条「播报收尾」，不是第一次见到的那条：锁死第一次会算出一个负间隔
+    //（用例先探测音频时长会留下一次早收尾，真收尾在几秒后，2026-10-17 `A-tail` 假红）。
+    // 健康检查同时要求队列真空着，所以中途那次早收尾不会被误当成「已收尾」返回。
+    {
       const r = log.grep(/播报收尾: 队列已空/, sinceTs).at(-1);
       if (r) settledAt = r.ts;
     }
@@ -280,6 +299,8 @@ async function runCase(c) {
     source, turn, log, t0,
     sleep,
     speak: (text) => speak(source, text),
+    speakGrouped: (group, page, text) => speakGrouped(source, group, page, text),
+    skip,
     skipAll,
     openStream: (t = turn) => openStream(t, source),
     ttsPcm,
@@ -684,6 +705,135 @@ const cases = [
       // producer 应领先播放：5 句合成的发起时间跨度显著小于总音频秒数（很松的单向代理指标）
       ctx.check(span < totalPcm.seconds * 0.8,
         `合成发起跨度 ${span.toFixed(1)}s 未明显领先总音频 ${totalPcm.seconds.toFixed(1)}s（可能欠载）`);
+      ctx.noBad();
+    },
+  },
+
+  // ───────── P1：掀页后接着播下一页 ─────────
+  // 需求：Ctrl+2 = 掐 + 掀当前页。掀完必须落到下一页，而不是把队列掀空。
+  {
+    name: "P1-skip-page-then-next",
+    async run(ctx) {
+      const g = `pg${ctx.turn}`;
+      await ctx.speakGrouped(g, "P1", "第一页要说的话，长度够触发一次合成就好。");
+      await ctx.speakGrouped(g, "P2", "第二页要说的话，长度够触发一次合成就好。");
+      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "第一页未开始合成");
+      await sleep(500);
+      await ctx.skip("page");
+      const dropped = await ctx.log.waitFor(/本页剩余块已丢/, { sinceTs: ctx.t0, timeout: 8000 });
+      ctx.check(!!dropped, "缺掀页日志");
+      const settled = await ctx.settled(45000);
+      ctx.check(!!settled, "未收尾");
+      // 关键断言：第二页仍然被合成——掀掉一页不等于掀掉整摞
+      const starts = ctx.log.grep(/TTS 合成开始/, ctx.t0);
+      ctx.check(starts.length >= 2, `掀页后下一页没有被合成（合成开始仅 ${starts.length} 次）`);
+      ctx.noBad();
+    },
+  },
+
+  // ───────── P2：连续掀页不炸 ─────────
+  // 需求：用户可以连按。连按最容易撞上「块刚被弹出、门控还没过」与「页被删了、
+  // 游标还指着它」两个时刻，两者都得安全跳过而不是崩。
+  {
+    name: "P2-skip-page-repeat-safe",
+    async run(ctx) {
+      const g = `pr${ctx.turn}`;
+      for (let i = 1; i <= 3; i++) {
+        await ctx.speakGrouped(g, `Q${i}`, `第${i}页要说的话，长度够触发一次合成就好。`);
+      }
+      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "第一页未开始合成");
+      for (let i = 0; i < 3; i++) { await ctx.skip("page"); await sleep(120); }
+      const h = await ctx.health();                       // 连掀之后 daemon 必须还活着
+      ctx.check(!!h, "连掀三次后 daemon 不再响应");
+      await ctx.settled(30000);
+      ctx.noBad([/EXC_BREAKPOINT/, /removeFirst from empty/, /Index out of range/]);
+    },
+  },
+
+  // ───────── P3：连按两下不误删后到的页（陈旧靶心回归）─────────
+  // 背景：2026-10-17 实测 bug。用户按第一下掀页后，这一摞的后续页才陆续到达；
+  // 用户以为已经跳完、没有东西可跳，又按一下——若此时仍持着上一页的页号当靶心，
+  // 刚到的新页就被误删，表现为「新的内容凭空消失」。这条钉死它不再回归。
+  {
+    name: "P3-same-page-continues-after-skip",
+    async run(ctx) {
+      const g = `pl${ctx.turn}`;
+      // 同一页 A 分两批到（Claude 的真实行为：一条 assistant 消息按行批增量送来）
+      await ctx.speakGrouped(g, "A", "第一页的第一部分内容，长度够触发一次合成就好。");
+      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "第一部分未开始合成");
+      await sleep(400);
+      await ctx.skip("page");                            // 第一下：掀掉页 A 当时的块
+      const dropped = await ctx.log.waitFor(/本页剩余块已丢/, { sinceTs: ctx.t0, timeout: 8000 });
+      ctx.check(!!dropped, "缺第一下掀页日志");
+      // 页 A 的续段这时才到。按需求层「掀页掀不彻底，没来的部分等它来了照样播」，
+      // 它必须照常入队并播出来——这条钉的是能力边界不被误当成 bug 修掉。
+      await ctx.speakGrouped(g, "A", "同一页后到的续段内容，按需求应当照样播出来。");
+      const resumed = await ctx.log.waitFor(/队列入队（摞）/, { sinceTs: dropped.ts, timeout: 10000 });
+      ctx.check(!!resumed, "同页续段没有入队");
+      const t2 = nowMs();
+      await ctx.skip("page");                            // 第二下：掀当前正在播的那一页
+      const settled = await ctx.settled(45000);
+      ctx.check(!!settled, "未收尾");
+      // 第二下按在续段开播之后 → 它就是「当前页」，按需求该被掀掉。
+      // 若按在开播之前，则当时没有页可掀，只掐不掀（targeting 空靶心）。
+      const after2 = ctx.log.grep(/TTS 合成开始/, t2);
+      ctx.check(after2.length === 0,
+        `第二下掀页后仍在合成 ${after2.length} 次（掀页应掐住当前页）`);
+      ctx.noBad();
+    },
+  },
+
+  // ───────── S1：掀摞（Ctrl+1）并由墓碑拦住该摞后续增量（场景 6 + 2）─────────
+  {
+    name: "S1-skip-stack-and-tombstone",
+    async run(ctx) {
+      const gA = `sa${ctx.turn}`;
+      const gB = `sb${ctx.turn}`;
+      await ctx.speakGrouped(gA, "V1", "第一摞的内容，长度够触发一次合成就好。");
+      await ctx.speakGrouped(gB, "V2", "第二摞的内容，应该在第一摞掀完之后接着播。");
+      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "第一摞未开始合成");
+      await sleep(400);
+      await ctx.skip("stack");                           // 掀掉第一摞整摞
+      // 该摞的后续增量必须被墓碑静默丢弃（场景 2）
+      await ctx.speakGrouped(gA, "V1", "被掀掉那一摞的后续增量，不该再开口。");
+      await sleep(600);
+      const dead = ctx.log.grep(/队列入队（摞）/ , ctx.t0).filter((h) => /page=V1/.test(h.msg));
+      ctx.check(dead.length === 1,
+        `被掀摞的后续增量被重新入队 ${dead.length} 次（墓碑没拦住）`);
+      const settled = await ctx.settled(45000);
+      ctx.check(!!settled, "未收尾");
+      // 下一摞必须照播
+      const starts = ctx.log.grep(/TTS 合成开始/, ctx.t0);
+      ctx.check(starts.length >= 2, `掀摞后下一摞没有被播（合成开始仅 ${starts.length} 次）`);
+      ctx.noBad();
+    },
+  },
+
+  // ───────── S2：跨来源混排，顺序只由到达决定（场景 9）─────────
+  // 两种形态混排：带摞页的一次性入队（Claude 形态）+ 流式轮（pi 形态）。
+  // 断言后到的不会插到先到的前面。
+  {
+    name: "S2-mixed-sources-keep-arrival-order",
+    async run(ctx) {
+      const g = `sx${ctx.turn}`;
+      const first = ctx.ids().turn;                      // 流式轮（pi 形态）
+      const st = await ctx.openStream(first);
+      st.sendText("先到的流式内容，应该排在前面播。");
+      await sleep(200);
+      await ctx.speakGrouped(g, "M2", "后到的一次性内容，应该排在流式那一条之后。");
+      await sleep(200);
+      st.endFrame();
+      const settled = await ctx.settled(60000);
+      ctx.check(!!settled, "未收尾");
+      // 两种形态的入队日志不同名：流式写「流式入队」，带摞页的一次性写「队列入队（摞）」
+      const streamed = ctx.log.grep(/流式入队/, ctx.t0).filter((h) => /turn=/.test(h.msg));
+      const grouped = ctx.log.grep(/队列入队（摞）/, ctx.t0);
+      ctx.check(streamed.length >= 1, "流式来源未入队");
+      ctx.check(grouped.length >= 1, "带摞页的一次性来源未入队");
       ctx.noBad();
     },
   },
