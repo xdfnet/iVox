@@ -2,6 +2,11 @@
 
 ## 未发布
 
+- **两份默认配置统一** — `config.example.json`（`make install` 走它）与 `install-binary.sh`
+  （`curl | bash` 内联的那份）此前**键集合与取值都不同**：前者多 `playback`/`translation` 整段、
+  `streamingInterval` 是 0.15，后者是 0.08（与 `TTSConfig.default` 一致）。同一个人用两种方式安装
+  会拿到不同的默认行为。现已对齐（键、值、音色顺序全一致），并删掉两边都不生效的死键。
+
 - **文档重新分层：按「回答什么问题」分类** —
   起因是三处结构性问题：① 播报四份文档标着「第 N 层」，而**目的层（裁决依据）排在第四**，
   新人顺着编号读要啃完细节才看到「为什么会这么定」；② `playback-queue.md` 一份扛三件事——

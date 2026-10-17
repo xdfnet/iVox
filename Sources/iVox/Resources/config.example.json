@@ -5,12 +5,13 @@
   },
   "tts": {
     "language": "Chinese",
-    "streamingInterval": 0.15,
+    "streamingInterval": 0.08,
     "outputSampleRate": 48000
   },
   "mediaControl": {
     "enabled": true,
-    "httpServerEnabled": true
+    "httpServerEnabled": true,
+    "httpServerPort": 8888
   },
   "playback": {
     "captions": false
