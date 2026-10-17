@@ -1,0 +1,107 @@
+# 播报接入方层（第一层）
+
+> 这一层只回答一个问题：**谁在往播报队列里说话，它们各自拿得出什么。**
+> 播报侧必须处理对的场景见 [playback-queue.md](playback-queue.md)；
+> 队列怎么存、容器怎么设计**本文不谈**。
+>
+> 本文与代码不符时以代码为准，但请顺手改本文——这张表是后两层的基准。
+
+## 共性：不管接法多不一样，塌缩后是同一种东西
+
+进队列前，所有接入方都被压成同一种形状：
+
+```
+一摞（turn）  +  一页（page）  +  页内的增量正文  +  「说完了」信号
+```
+
+**流式是常态，不是特例**：页先占位、正文陆续往里塞，这就是「纯流式」。三个接入方现在都是这样。
+
+## 三方对齐表（目标态）
+
+| | 摞（turn） | 页（page） | 页内增量 | 现状 |
+|---|---|---|---|---|
+| **Claude Code** | 每批的 `turn_id`；缺失时回落 `message_id` | 每批的 `message_id` | MessageDisplay 分批带 | ✅ 已是流式 |
+| **pi** | 连接首帧自带的 turn 号 | `{page}` 帧（页号由服务端数） | `text_delta` | ✅ 已是流式 |
+| **codex** | 协议事件里的 `turn_id` | 协议事件里的 `item_id` | `AgentMessageContentDeltaEvent.delta` | ❌ 现状只挂 Stop，整段一次；**待改** |
+
+三个都应当是**满档**：有摞、有页、纯流式。粒度差异（谁切得快）不影响结构。
+
+### codex 的身份是现成的（已核实源码）
+
+`codex exec --json` 输出 JSONL 事件流，其协议里有：
+
+```rust
+// codex-rs/protocol/src/protocol.rs:2081
+pub struct AgentMessageContentDeltaEvent {
+    pub thread_id: String,
+    pub turn_id: String,   // 摞
+    pub item_id: String,   // 页：一个 item = 一条 assistant 消息
+    pub delta: String,     // 页内增量
+}
+```
+
+**两个身份都是事件里现成的，不需要反查、不需要服务端数页号**——比 Claude 现在的做法还干净。
+
+### codex 的 hook 面（现状为何是「整段一次」）
+
+`~/.codex/hooks.json` 现在只挂 `Stop`，而 Stop 的 payload 里只有 `last_assistant_message`（完整一段），故拿不到过程。
+
+codex 本身支持 12 个 hook 事件（`PreToolUse` / `PostToolUse` / `SessionStart` / `UserPromptSubmit` / `Stop` …）和 `Thread` / `Turn` 两种 scope，payload 里带 `thread_id` / `turn_id`。但**这些 hook 里没有 assistant 正文增量事件**——所以只靠 hook 拿不到流。
+
+## 其他通道
+
+| 通道 | 身份 | 现状 |
+|---|---|---|
+| **ivox speak / hook.sh 手动** | 无 | 整段一次，无摞无页 |
+| **Cmd+D 译文** | 无 | 整段一次，**插队到队首**，念完走 |
+| **微信链路** | — | **不播报**：`ClaudeAskService` 只把 assistant 帧发回微信文字 |
+
+手动播报与 Cmd+D 没有身份，打断粒度自然退化——这是**事实**不是缺陷，见下「打断粒度」。
+
+## 打断粒度由身份决定
+
+| 身份 | 跳页（Ctrl+2） | 跳摞（Ctrl+1） | 掀桌（Ctrl+Esc） |
+|---|---|---|---|
+| 满档（有摞有页） | ✅ | ✅ | ✅ |
+| 无页无摞（手动 · Cmd+D） | 退化成只掐在播 | 退化成丢当前那一桶 | ✅ |
+
+## 准入标准（以后接新 agent 按这条判）
+
+必须回答三问，**答不全就是无身份档**，不用纠结：
+
+1. **摞从哪来** —— 拿不得到稳定的轮次标识？拿不到 → 无身份
+2. **页从哪来** —— 有没有「一条 assistant 消息」的边界（message id / item id / 显式翻页信号）？
+3. **怎么算说完** —— 有没有可靠的结束信号？没有就得靠兜底猜
+
+判档只看前两问；第 3 问决定要不要兜底机制。
+
+## 链路事实：Claude 的身份是 hook 端造的
+
+最容易误解的一处，**队列侧压根不知道 session 是什么**：
+
+```
+hook.sh 收到一批 MessageDisplay
+  → 把这一批的 turn_id 写进 ~/.config/ivox/lastturn/<session_id>（每批覆写）
+Stop 钩子到来（payload 只有 session_id + last_assistant_message，没有 turn_id）
+  → 读 session_id，反查 lastturn/<sid>，取出摞号
+  → 通过 --group 传给队列
+```
+
+- `turn_id` 缺失时回落 `message_id`；两者都缺才不带 group，退回普通播报。
+- `lastturn/` 按 session 分文件存，为了两个会话并行时互不覆盖。
+- ⚠️ **时序假设**：Stop 反查它，隐含假设「Stop 到来时它仍属于本 session 正在进行的这一摞」。正常交互成立；**用户中断 Claude 提前触发 Stop、紧接着又发起新回复**时可能错位。风险点在 hook 端，不在队列。
+
+## 未决问题
+
+1. **codex 怎么接上事件流？** hook 拿不到增量，只有两条路：
+   - `codex exec --json` —— JSONL 事件流，但这是**非交互**模式，等于我们 spawn 一个新会话，抓不到用户在自己终端里跑的那个
+   - **`codex app-server` 事件订阅** —— 交互会话本来就跑在 app-server 上（`codex agents` 提到 shared local app-server daemon），订阅它才能拿到正在用的会话
+
+   待定：选 app-server 订阅；现有 Stop hook 是留作兜底还是删。
+2. **`lastturn/` 的时序错位**要不要在 hook 端加固（例如存「最近两摞」而非一个值）。
+
+## 维护约束
+
+- 接入方的能力边界（能不能拿到身份、有没有增量）是**对方工具的事实**，不是本项目的设计选择。判断依据一律回对方源码/文档查，别凭印象。
+- 改接入方接线（hook 配了哪些事件、传了什么号）**必须同步改本文**，并回头看 playback-queue.md 的场景清单还成不成立。
+- 文档里每条「现状」都应能在代码或对方源码里指出出处；写不出出处的，标成待核实。
