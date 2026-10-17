@@ -81,7 +81,7 @@ codex 本身支持 12 个 hook 事件（`PreToolUse` / `PostToolUse` / `SessionS
 
 ## 打断粒度由身份决定
 
-| 身份 | 跳页（Ctrl+2） | 跳摞（Ctrl+1） | 掀桌（Ctrl+Esc） |
+| 身份 | 掀页（Ctrl+2） | 掀摞（Ctrl+1） | 全掀（Ctrl+Esc） |
 |---|---|---|---|
 | 满档（有摞有页） | ✅ | ✅ | ✅ |
 | 半档（有摞，整段一页） | 退化成只掐在播 | ✅ | ✅ |
