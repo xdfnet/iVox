@@ -43,6 +43,9 @@ struct PlaybackPage: Sendable {
 /// 一段 = 一摞（一次回复引发的全部内容，`turn_id` 为 nil = 无分组的普通播报）。
 struct PlaybackSegment: Sendable {
     let id: String?
+    /// 属主来源（claude / codex / pi / …）。**只为 Ctrl+Esc 的墓碑分范围而存在**：
+    /// 掀容器是全体，埋墓碑只埋属主那一份（见 `discardAll`）。
+    let source: String?
     var sealed: Bool
     var pages: [PlaybackPage]
 
@@ -86,8 +89,20 @@ actor PlaybackSession {
     /// 块只会往后加、序号单调，游标前方的块要么已播完要么被掀掉，两种情况都不该重播。
     private var cursorSeq: UInt = 0
 
-    /// pi 双流认证用：认领过、尚未出栈的轮。
-    private var turnStack: [String] = []
+    /// pi 双流认证用：认领过、尚未出栈的轮。**连属主一起记**——
+    /// 「已声明、字还没到」的轮此刻容器里没有段，Ctrl+Esc 要按来源挑着埋，缺了来源就挑不出来。
+    private var turnStack: [(source: String, id: String)] = []
+
+    /// **播报员此刻在念的那份**的来源。Ctrl+Esc 的墓碑只埋它这一份——全局热键
+    /// 拿不到「当前会话」是谁，拿这个当替身：你喊闭嘴时，冲的就是他手上正拿着的那摞。
+    ///
+    /// ⚠️ 定义是「**此刻在念谁的东西**」，不是「谁在说话」——差一个字结论会反过来：
+    /// 翻译插队（`appendFirst` 也走 `noteSource`）会把属主换成 `translate`，因为那一刻
+    /// 播报员手上拿的正是你刚递的那张字条，你想喊停的也是它。译文的增量不来自某个会话，
+    /// Claude 那边不送新块就一直挂着；等它送新块，属主自然换回 `claude`。
+    /// （曾按「谁在说话」理解，以为插队纸在抢位、打算删掉 `appendFirst` 那行 `noteSource`
+    /// ——那会把「译文正响时按 Ctrl+Esc」变成不埋任何东西，正是这个字段要避免的。）
+    private var lastActiveSource: String?
     /// 墓碑：被用户显式作废（跳整摞 / 掀桌 / 取消轮次）的摞，后续增量一律丢弃。
     private var deadTurns: [String] = []
 
@@ -256,12 +271,14 @@ actor PlaybackSession {
             return false
         }
         guard !jobs.isEmpty else { return true }
+        let src = jobs[0].source
+        noteSource(src)
         if let idx = segments.firstIndex(where: { $0.id == group }) {
             segments[idx].pages.append(contentsOf: pages(from: jobs))
             // 又来货了：揭掉空闲宽限封的印（宽限只是猜「说完了」，不是判死）
             segments[idx].sealed = false
         } else {
-            segments.append(PlaybackSegment(id: group, sealed: false, pages: pages(from: jobs)))
+            segments.append(PlaybackSegment(id: group, source: src, sealed: false, pages: pages(from: jobs)))
         }
         signal()
         return true
@@ -272,10 +289,12 @@ actor PlaybackSession {
     @discardableResult
     func appendPlain(_ jobs: [PlaybackBlock]) -> Bool {
         guard !jobs.isEmpty else { return false }
+        let src = jobs[0].source
+        noteSource(src)
         if let last = segments.last, last.id == nil {
             segments[segments.count - 1].pages.append(contentsOf: pages(from: jobs))
         } else {
-            segments.append(PlaybackSegment(id: nil, sealed: true, pages: pages(from: jobs)))
+            segments.append(PlaybackSegment(id: nil, source: src, sealed: true, pages: pages(from: jobs)))
         }
         signal()
         return true
@@ -303,11 +322,17 @@ actor PlaybackSession {
 
     /// 流式轮开始（pi 首帧）：登记属主。已作废的旧轮忽略。
     @discardableResult
-    func beginTurn(_ id: String) -> Bool {
+    func beginTurn(_ id: String, source: String) -> Bool {
         guard !deadTurns.contains(id) else { return false }
-        if !turnStack.contains(id) { turnStack.append(id) }
+        if !turnStack.contains(where: { $0.id == id }) { turnStack.append((source, id)) }
+        noteSource(source)
         signal()
         return true
+    }
+
+    /// 记下「谁刚说了话」。三个入队入口 + 轮登记都走它，是插入队列对外面唯一的可观测输出。
+    private func noteSource(_ source: String) {
+        lastActiveSource = source
     }
 
     /// 这一摞说完了（Stop 钩子 / `{end}`）：盖印，**不立墓碑**——
@@ -330,7 +355,7 @@ actor PlaybackSession {
     func cancelTurn(_ id: String) -> Bool {
         let dropped = sweepSegments(matching: id, in: &segments) + sweepSegments(matching: id, in: &front)
         bury(id)
-        if turnStack.last == id { turnStack.removeLast() }
+        if let i = turnStack.lastIndex(where: { $0.id == id }) { turnStack.remove(at: i) }
         signal()
         return dropped > 0
     }
@@ -436,12 +461,23 @@ actor PlaybackSession {
 
     /// 全掀：清空容器，所有摞立墓碑。
     @discardableResult
+    /// 全掀（Ctrl+Esc）：**清容器是全体，立墓碑只给属主**。
+    ///
+    /// **清全体**——谁在念都得停，这不伤人。
+    ///
+    /// **碑只埋属主**（`lastActiveSource`，最近有块入队的那个来源）：Ctrl+Esc 是全局热键，
+    /// 拿不到「当前会话」是谁；按属主埋是替身——你喊闭嘴时，刚在说话的多半就是你正在看的那个
+    /// 工具。此前不分来源一刀切，你在 Claude 里喊闭嘴会把 **Codex 正在生成的那摞**一起埋掉，
+    /// 它随后送来的字全被丢弃、从此不再开口（这与「两会话并行、互不误杀」的场景 8 直接冲突）。
+    ///
+    /// **turnStack 里的轮同样按属主挑**：它们是「已声明、块还没到」的轮，此刻容器里还没有对应的段，
+    /// 只按段立碑就会漏掉它们——打断之后它们陆续送来的字会照常播出来
+    ///（2026-10-17 `E7` 实测：清空队列时 pending=0，墓碑一个没立，打断后同一轮照样开口）。
     func discardAll() -> [String] {
-        // **turnStack 里的轮也要立墓碑**：它们是「已声明、块还没到」的轮，此刻容器里还没有对应的段，
-        // 只按段立碑就会漏掉它们——打断之后它们陆续送来的字会照常播出来
-        //（2026-10-17 `E7` 实测：清空队列时 pending=0，墓碑一个没立，打断后同一轮照样开口）。
-        var ids = turnStack
-        ids += segments.compactMap(\.id) + front.compactMap(\.id)
+        let owner = lastActiveSource
+        var ids = turnStack.filter { $0.source == owner }.map(\.id)
+        ids += segments.filter { $0.source == owner }.compactMap(\.id)
+        ids += front.filter { $0.source == owner }.compactMap(\.id)
         turnStack.removeAll()
         segments.removeAll()
         front.removeAll()
@@ -455,7 +491,9 @@ actor PlaybackSession {
     @discardableResult
     func appendFirst(_ jobs: [PlaybackBlock]) -> Bool {
         guard !jobs.isEmpty else { return false }
-        front.insert(PlaybackSegment(id: nil, sealed: true, pages: pages(from: jobs)), at: 0)
+        noteSource(jobs[0].source)
+        front.insert(PlaybackSegment(id: nil, source: jobs[0].source, sealed: true,
+                                     pages: pages(from: jobs)), at: 0)
         signal()
         return true
     }

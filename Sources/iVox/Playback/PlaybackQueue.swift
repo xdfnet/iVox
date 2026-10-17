@@ -163,7 +163,7 @@ actor PlaybackQueue {
 
     /// 流式轮次开始（pi 首帧）。**不打断旧轮**——打断权只归用户快捷键，新轮在队尾排队。
     func beginTurn(_ id: String, source: String) async {
-        guard await session.beginTurn(id) else { return }   // 已作废 / 被顶掉的旧轮：忽略
+        guard await session.beginTurn(id, source: source) else { return }   // 已作废 / 被顶掉的旧轮：忽略
         Log.info("流式轮次开始: source=\(source) turn=\(id)（排队，不打断）")
         await pumpOrSettle()
     }

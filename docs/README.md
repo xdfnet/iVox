@@ -23,10 +23,11 @@
 
 | 顺序 | 文档 | 回答 |
 |---|---|---|
-| 1 | [playback/purpose.md](playback/purpose.md) | **目的层**：播报为什么存在，遇到取舍听谁的 |
-| 2 | [playback/sources.md](playback/sources.md) | 接入方层：谁在说话，各拿得出什么身份 |
-| 3 | [playback/requirements.md](playback/requirements.md) | 需求层：必须做到什么、场景清单、底线 |
-| 4 | [playback/queue.md](playback/queue.md) | 实现层：今天代码怎么写的、改它有什么坑 |
+| 1 | [playback/paper.md](playback/paper.md) | **比喻层**（先读这个）：一摞纸 / 一张纸 / 一个字条，播报到底怎么跑起来的 |
+| 2 | [playback/purpose.md](playback/purpose.md) | **目的层**：播报为什么存在，遇到取舍听谁的 |
+| 3 | [playback/sources.md](playback/sources.md) | 接入方层：谁在说话，各拿得出什么身份 |
+| 4 | [playback/requirements.md](playback/requirements.md) | 需求层：必须做到什么、场景清单、底线 |
+| 5 | [playback/queue.md](playback/queue.md) | 实现层：今天代码怎么写的、改它有什么坑 |
 
 **有分歧先翻第 1 份。** 它是裁决依据，每条原则下面都记着它裁决过什么——
 只有带裁决记录的原则才算数，光是好听的口号一律不作数。
