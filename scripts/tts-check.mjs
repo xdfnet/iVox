@@ -11,6 +11,11 @@
 // 退出码: 0 全过(允许 skip) / 1 有失败或 run 级致命关键字 / 2 预检或用法错误
 //
 // 只依赖 node: 内置模块，零 npm 依赖。串行执行（暂停/恢复日志无 source，只能靠时间窗关联）。
+//
+// 日志级别：断言大量依赖 DEBUG 行（如「队列状态: pending=… turn=…」数入队块数），
+// 而 daemon 默认只留 INFO 及以上（Logger 的级别门限），不特意放出 DEBUG 就会让断言
+// 读不到依据、假红。所以自检一律以 IVOX_LOG_LEVEL=debug 拉起 daemon（见 ensureDebugLogging），
+// 跑完把该变量 unset（daemon 仍在 debug，要回 INFO 需再启一次——自检是排障工具，默认留 debug 更利于追）。
 
 import net from "node:net";
 import http from "node:http";
@@ -26,6 +31,28 @@ const LOG = join(HOME, ".config", "ivox", "daemon.log");
 const IVOX = join(HOME, ".local", "bin", "ivox");
 const HEALTH_URL = "http://127.0.0.1:8888/health";
 const SR = 48000;
+const LABEL = "com.ivox.daemon";
+
+// 以 debug 级日志拉起 daemon：断言要读 DEBUG 行（如「队列状态:」数入队块数），而 daemon
+// 默认只留 INFO 及以上。环境变量走 `launchctl setenv`——LaunchAgent 跑在 launchd 下，
+// 不继承当前 shell 的环境，父进程 execFileSync 传 env 是没用的（曾在这里想当然过）。
+// 只设变量不改 daemon 已在跑的进程，必须 kickstart 才生效。
+function ensureDebugLogging() {
+  try {
+    execFileSync("/bin/launchctl", ["setenv", "IVOX_LOG_LEVEL", "debug"]);
+    execFileSync("/bin/launchctl", ["kickstart", "-k", `gui/${process.getuid()}/${LABEL}`]);
+    console.log("# 日志级别: IVOX_LOG_LEVEL=debug（daemon 已重启）");
+  } catch (e) {
+    // 设不成不算致命：断言会因读不到 DEBUG 行而失败，但那属于诊断信号、不该让自检无法启动
+    console.error(`⚠️ 切 debug 日志失败（断言可能假红）: ${e.message}`);
+  }
+}
+
+// 跑完撤掉会话级环境变量，否则之后登录/新起的进程都带着 debug。已在跑的 daemon 不受影响
+// （它已把级别读进静态常量），要回到 INFO 需再启一次。
+function restoreLogEnv() {
+  try { execFileSync("/bin/launchctl", ["setenv", "-u", "IVOX_LOG_LEVEL"]); } catch {}
+}
 
 // 否定断言：用例窗口内不得出现
 const CASE_BAD = [
@@ -686,6 +713,7 @@ async function main() {
     console.error(`✗ 找不到 socket ${SOCKET}，daemon 未运行？先 \`ivox on\``);
     process.exit(2);
   }
+  await ensureDebugLogging();
   if (MANAGED) {
     console.log("# --managed: 重启 daemon ...");
     execFileSync(IVOX, ["on"], { stdio: "inherit" });
@@ -749,5 +777,8 @@ async function main() {
   console.log(`# pass=${pass} fail=${fail} skip=${skip} advisory=${adv} duration=${((nowMs() - tRun) / 1000).toFixed(0)}s`);
   process.exit(fail > 0 || fatalHits.length > 0 ? 1 : 0);
 }
+
+// main 里用 process.exit 收尾，finally 不会执行，故挂在 exit 钩子上（同步清理）
+process.on("exit", restoreLogEnv);
 
 main().catch((e) => { console.error("✗ runner 崩溃:", e); process.exit(2); });

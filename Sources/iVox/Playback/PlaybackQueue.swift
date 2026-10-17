@@ -283,6 +283,7 @@ actor PlaybackQueue {
         // 不碰 turnStack——墓碑已在 claimTurn 里优先拦住；出栈会把它顶掉的旧轮重新认成属主，
         // 那是另一个语义，这里不做。弱分组（Claude）同样靠这块墓碑拦住它的后续批次。
         if let group { bury(group) }
+        playingPageID = nil   // 整摞都丢了，页靶心同样作废（理由见 skipCurrentPage 注释）
         await preemptCurrent(origin)
         onCaption?(nil)   // 被跳掉的那轮立刻从字幕撤下；下一桶开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移，避免两个 consumer 抢 player
@@ -305,8 +306,15 @@ actor PlaybackQueue {
     /// 需要一笔记账：正在念的那块早在合成前就被 `popFrontJob` 弹出桶了，光看桶认不出它属于哪页，
     /// 所以 claim 时把页号记进 `playingPageID`。页号为 nil（非 Claude 路径：pi / hook / 手动 speak）
     /// 时退化成"只掐在播"。
+    ///
+    /// **靶心必须用完即焚**（进函数先置 nil，实测踩过）：Claude 同一页是按行批**分多次**增量入桶的，
+    /// 跳掉当时已有的块之后这一页还可能继续来块。若不清 `playingPageID`，用户接着再按一下
+    /// （他以为已经翻过去了、并没有东西可跳）就会拿陈旧页号去删**刚到的新块**——表现就是
+    /// "只按了一次该跳的，新内容却被跳过"。清掉后第二次按压若新块还没起播（靶心空），
+    /// 只掐在播、不误删；等它真播起来再按，靶心是新页号，语义正确。
     func skipCurrentPage(_ origin: InterruptSource) async {
         let page = playingPageID
+        playingPageID = nil   // 靶心用完即焚，见下面注释——不清会误删后到的同页增量
         Log.info("读下一页（来源=\(origin)）：丢掉当前页（\(page ?? "-")）的剩余块，从下一页接着念")
         await preemptCurrent(origin)
         onCaption?(nil)   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
