@@ -69,6 +69,8 @@ scripts/               — runtime.sh, download-models.sh, install-*.sh（构建
 
 ## 架构
 
+> 本节只留**地图**（谁在哪儿、关键模式是什么），细节一律推给 `docs/`——`architecture.md`（整体架构）、`hook-chain.md`（钩子链路）、`playback-*.md`（播报四层）。地图与细节分开维护，否则两份会各自漂移。
+
 基于守护进程的 actor 架构（LaunchAgent 托管，`ivox on/off` 控制启停）：
 
 ```

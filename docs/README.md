@@ -26,5 +26,7 @@
 | [incident-hook-tts-leak.md](archive/incident-hook-tts-leak.md) | 后台进程文本泄漏进播报的排查记录（2026-08） |
 | [guide-install-network.md](archive/guide-install-network.md) | 安装期网络问题与兜底方案（HTTP/2 截断、模型下载 fallback） |
 | [guide-release-flow.md](archive/guide-release-flow.md) | 早期发布流程（最新流程见根目录 [CLAUDE.md](../CLAUDE.md)） |
+| [research-qwen3-clone-issues.md](archive/research-qwen3-clone-issues.md) | Base 模型声音克隆的已知坑与社区经验（ICL 模式 / X-Vector Only 等，2026-10-05） |
+| [research-qwen3-voice-design.md](archive/research-qwen3-voice-design.md) | VoiceDesign 在 MLX 上的失败尝试（结论：放弃 VoiceDesign，维持 Base + 参考音频克隆） |
 | [research-auk.md](archive/research-auk.md) | 腾讯混元 AuK 语音模型调研（2026-09-22） |
 | [review-stability-2026-07.md](archive/review-stability-2026-07.md) | 架构稳定性评估快照（2026-07-01） |

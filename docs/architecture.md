@@ -124,24 +124,31 @@ Daemon (actor)
 - 按音色读取 `refAudio` + `refText` 做声音克隆
 - 流式间隔由 `streamingInterval` 控制
 
-### PlaybackQueue — 播放调度
+### PlaybackSession + PlaybackQueue — 身份与播放
 
-`Sources/iVox/Playback/PlaybackQueue.swift`
+**为什么分两层**：2026-10-17 重构（`Sources/iVox/Playback/PlaybackSession.swift`）把「当前在播什么」从队列的旁路变量搬进容器。起因是一次真实缺陷——掀页后页号没清，第二次按压拿旧页号删掉了后到的内容（`docs/playback-requirements.md` 场景 5）。根因不是忘了清，而是容器里压根没有「当前」。**身份层只回答「这是什么、谁被作废了」，播放层只回答「下一个块是谁」。**
 
-- Actor，管理播报队列
-- **连续播放管道**：`processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，句间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
-- `enqueue` **按轮分桶**追加到队列尾部，同 `turnID` 分块并入同桶顺序 append；新 turn 在队尾追加新桶**不打断**在播旧轮；**无 turn 的普通播报（hook.sh / `ivox speak`）同排队**。`processNext` 播完队首桶才前移 = 「按轮排队、播全播完」
-- **过期轮次静默丢弃**：`turnID` 已被作废（`deadTurns` 墓碑）的迟到帧/`endTurn` 一律 no-op，不再开口，避免残音反杀
-- 还有未结束的流式轮（`anyTurnInFlight`，由各桶 `ended` 推导）时队列瞬时排空就挂起 `waitForJobs()` 等下一批，不退出、不盖章（先等播放器播空、再挂最多 2 秒空闲宽限，超时由 `sealIdleTurns()` 判说完）；全部轮 `ended` 且排空才收尾
-（播报的术语只有四个——**摞** = 一次回复、**页** = 一个 MessageDisplay、**块** = 内部合成单位、**桶** = 排队单位；完整术语表与「读法」见 `docs/playback-queue.md` 的「概念」一节。）
+`PlaybackSession`（actor，唯一持有容器与全部身份记账）：
 
-- **打断权只归用户快捷键**，手动打断三档：**轻** Ctrl+2 读下一页（`skipCurrentPage`：丢掉当前页剩下的块，翻页）、**中** Ctrl+1 跳整摞（`skipCurrentBucket`：丢这一摞的全部桶，下一摞接着播）、**掀桌** Ctrl+Esc 清楚（`cancelAll` 全场清）+ right⌘ 说话；Cmd+D 译文走 `speakUserInitiated` **插队**（只掐在播、译文桶插到队首，其余桶全保留）。**`{type:stop}` 停止帧与流式新轮不再打断**。agent 回复到达的普通播报只排队。旧的 ↓ 跳段已删，「跳」统一走 Ctrl+1 / Ctrl+2
-- **「掐在播」与「清场」是两层**：`preemptCurrent` 只作废管道代号 + 取消在播合成与已排队音频，**不动 `buckets`**；`bargeIn` 是「先清空队列、再调它」（掀桌）。三档里只有**掀桌**用 `bargeIn`；**跳句 / 跳桶 / 译文插队都只 `preemptCurrent`** —— 所以「不掀桌」不是各自实现的巧合，而是同一条路径上的自然结果
-- **播报字幕（可选，`playback.captions`）从播放侧取**：每句首块音频捎上该句文本（`AudioChunk.sentenceText`），`AudioPlayer` 在它被设备读出时回调 → 队列转发给 `onCaption`。从**合成**侧取会让字幕早一两句（合成领先播放，实测踩过）；跳句 / 跳桶 / 掀桌前先撤字幕，队列真空闲时由 `pumpOrResume` 收
-- ⚠️ **循环里每个 `continue` 都必须有挂起点**：producer 曾在「队首桶已播空、该轮尚未收尾」时落进一个无 `await` 的 `continue` —— 空转**独占整个 actor**（`enqueue`/`endTurn`/`cancelAll` 全被饿死，连快捷键打断都进不来），播报永久瘫痪外加烧满一核，且 **10 秒读超时的 EOF 兜底也救不回**（`endTurn` 进不了僵死的 actor）。黑盒自检 `E8` 钉住了这个现场
-- `cancelAll()` 清空队列 + 取消全部播放（bargeIn + 清 turn 状态）
-- 等待 TTS 模型就绪后再开始合成
-- **不碰背景音乐**：暂停/恢复只归语音输入（录音才真需要安静）。播报曾整套借还音乐，是"音乐反复借还"抖动的根源，已整条删除
+- 容器是三层：**段 Segment（一次回复 = 一摞 / 普通播报）→ 页 Page（一条消息）→ 块 Block（1~80 字合成单位）**，外加一个独立的**加急段**列表（Cmd+D 译文、用户插队）排在最前
+- **游标不弹出容器**：`nextCursor()` 只给位置，播完（或作废）才 `commit()` 前移。容器因此**永远包含正在合成的那一块**，掀页时它在被删范围内——不必再靠 `pipelineSeq` 间接作废，也没有「陈旧靶心」可陈旧
+- 墓碑 `deadTurns`：用户显式作废的摞，其后续增量一律丢弃（Ctrl+1 掀摞、Ctrl+Esc 掀桌、pi 自取消）
+- 掀的四个原子动作：`claimCurrentPage()` / `discardClaimedPage()` / `discardCurrentSegment()`（含立墓碑）/ `discardAll()`。**领靶心与删除要合成一个原子动作**，否则 actor 在 `await` 处可重入，第二次按压会领走同一页（2026-10-17 实测 `P2`）
+- 删除路径**不 `signal()`**：叫醒空闲宽限的等待者会让它误判「有新内容来了」而自我唤醒又自我退场，队列就此挂起
+
+`PlaybackQueue`（actor，只管播放）：
+
+- **连续播放管道**：`processNext` 是跨所有块的循环，逐块 `synthesizeStream → player.write`，块间不 drain，设备零停顿（对齐 ai-stack 的常驻 OutputStream）
+- **收敛点唯一**：所有路径结束都走 `pumpOrSettle()`——有活补起管道、没活收字幕、仍有未封的段就起空闲宽限。**谁都不许自己判断要不要起管道**：入队只靠「当前没有管道」才起管道时，旧播报收尾（drain）期间新入队会被吞成漏播（曾实测 317 字 5 块零合成）
+- **空闲宽限由 `graceTask` 自己拥有**，不等任何管道——它等的是「还有段没收尾」这件事本身。排到 `awaitCurrentPipelineFinished()` 后面会被在跑的管道带死（2026-10-17 `P3` 挂起实测）。作废用 `graceEpoch` 而不是 `cancel()`：`withCheckedContinuation` 取消并不会恢复它，Waiter 会永久留在表里
+- **过期轮次静默丢弃**：墓碑命中的迟到帧 / 收尾信号一律 no-op
+- **打断权只归用户快捷键**，三档全是「掐 + 掀」：**掀页** Ctrl+2（`skipCurrentPage`）、**掀摞** Ctrl+1（`skipCurrentBucket`，丢整摞并立墓碑）、**全掀** Ctrl+Esc（`cancelAll`，连「已声明、块还没到」的摞一起立墓碑，否则打断后同一轮照样开口）。Cmd+D 译文走 `speakUserInitiated` **插队**（掐在播 → 译文进加急段 → 其余全保留）；`{now:1}` / `ivox speak --now` 是同一条路的第二个入口。**`{type:stop}` 停止帧与流式新轮不再打断**
+- **「掐在播」与「清场」是两层**：`preemptCurrent` 只作废管道代号 + 取消在播音频与合成，**不动容器**；`bargeIn` 才是「先清空队列、再调它」（掀桌）。插队 / 掀摞 / 掀页都只 `preemptCurrent`——所以「不掀桌」不是各自实现的巧合，而是同一条路径上的自然结果
+- **播报字幕（可选，`playback.captions`）从播放侧取**：每块首句音频捎上该句文本（`AudioChunk.sentenceText`），`AudioPlayer` 在它被设备读出时回调 → 队列转发给 `onCaption`。从**合成**侧取会让字幕早一两句（合成领先播放，实测踩过）
+- ⚠️ **循环里每个 `continue` 都必须有挂起点**：producer 曾在「队首段已播空、该段尚未收尾」时落进一个无 `await` 的 `continue` —— 空转**独占整个 actor**（入队/收尾/打断全被饿死，连快捷键都进不来），播报永久瘫痪外加烧满一核，且 **10 秒读超时的 EOF 兜底也救不回**。黑盒自检 `E8` 钉住了这个现场
+- **不碰背景音乐**：暂停/恢复只归语音输入（录音才真需要安静）。播报曾整套借还音乐，是"音乐反复借还"抖动的根源，已整条删除；仅 `shutdown()` 留一道 `media.resume()` 退出安全网
+
+术语只有四个——**摞**（一次输入引发的全部回复）/ **页**（一条消息）/ **块**（合成单位）/ **段**（容器里的排队单位，一摞 = 一段）。完整术语表与取舍见 `docs/playback-requirements.md` 与 `docs/playback-purpose.md`。
 
 ### AudioPlayer — 音频播放
 
@@ -192,7 +199,7 @@ Daemon (actor)
 - `Cmd+D` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 屏幕下方居中的歌词式浮窗（`TranslationPanel`，NSPanel 非激活浮层）+ 可选朗读
 - **三个浮窗各自独立、刻意不抽公共件**（消失策略与生命周期各不同，硬抽要开一堆口子）：语音波形（`OverlayPanel`，跟鼠标收）、翻译结果（`TranslationPanel`，屏幕下方 96pt）、播报字幕（`CaptionPanel`，贴底 24pt，`playback.captions` 开关，**跟播放不跟合成**）。三者同源的是那套 `NSPanel` 组合：非激活、悬于所有窗口、跨 Space
 - 翻译走 `iVoxKit.TranslationService`（`actor`）：Google 主/备**双通道容灾**，或 OpenAI 兼容；**直连失败自动走兜底代理**（`translation.proxyURL`），直连用短超时探测（`directProbeTimeoutSeconds`），成功后记住「该走代理」
-- 朗读走 `PlaybackQueue.speakUserInitiated()`：**插队**——掐掉在播的那一句让译文立刻响，但**不掀桌**（其余桶全保留、流式轮不作废）。与 hook 汇报的「只排队」语义相反
+- 朗读走 `PlaybackQueue.speakUserInitiated()`：**插队**——掐掉在播的那一句让译文立刻响，但**不掀桌**（其余段全保留、流式轮不作废）。与 hook 汇报的「只排队」语义相反
 - 浮窗**刻意不做**拖拽 / 点击外部关闭 / 文本选择——这三样都要 key window，当前无 `NSApplication` 事件循环的形态给不了
 - CLI 侧 `ivox translate <text> [--selection] [--json]`**不依赖 daemon**，是整条链路的可验证接缝
 
@@ -261,13 +268,14 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
    - voice = sourceVoices["claude"] ?? defaultVoice
    - 显式 `{voice:xxx}` 可覆盖
    - cleanText() 清洗 Markdown + 行内噪音
-4. PlaybackQueue.enqueue(job)
-   → 追加到队尾；如空闲则启动 processNext，其入口调用 MediaController.pause()
+4. PlaybackQueue.enqueue(job) → PlaybackSession.appendPlain / appendGrouped
+   → 追加到队尾；由收敛点 `pumpOrSettle()` 判断要不要起管道（**不是这里判断**）
 5. TTSEngine.synthesizeStream() → AsyncThrowingStream<Data>
-6. AudioPlayer.write(chunk) → scheduleBuffer 连续排队（超高水位背压）；跨 job 不 drain。
-   块带「句首」标记（`AudioChunk.sentenceText`）时，被设备读出即回报字幕（`onCaption`，见 PlaybackQueue 节）
-7. 整条管道末端 drain() 一次，等跨 job 尾音播完
-8. 没有流动中的轮（`anyTurnInFlight`）且队列空 → 撤字幕 + MediaController.resume()
+6. AudioPlayer.write(chunk) → scheduleBuffer 连续排队（超高水位背压）；跨块不 drain。
+   块带「句首」标记（`AudioChunk.sentenceText`）时，被设备读出即回报字幕（`onCaption`，见上节）
+7. 每块播完（或失败/取消）都 `session.commit(cursor)` **无条件前移**——不前移就会卡在同一块上死循环
+8. 整条管道末端 drain() 一次，等跨块尾音播完
+9. 还有未封的段（`session.anyUnsealed`）但队列已空 → 起空闲宽限；否则收字幕（**不还音乐，播报早就不碰它了**）
 ```
 
 ### pi 流式播报（第二层流式）
@@ -360,6 +368,6 @@ ConnectionHandler.extractVoicePrefix():
 | Codex | `~/.codex/hooks.json` | Stop → hook.sh codex |
 | PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_update` 流式（`agent_settled` 兜底） |
 
-由 `install-hooks.sh` 统一安装（Claude 挂 MessageDisplay + Stop 收尾信号，Codex 挂 Stop 整段播报——**两边都用 `Stop` 这个键，但命令不同**，所以脚本里键名与命令是两个参数）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。`hook.sh` 有 `speak` / `msgdisplay` 两模式：`speak` 提取 `last_assistant_message`、`msgdisplay` 提取 `delta` 增量，都经 `ivox speak` 排队进桶（不打断）。
+由 `install-hooks.sh` 统一安装（Claude 挂 MessageDisplay + Stop 收尾信号，Codex 挂 Stop 整段播报——**两边都用 `Stop` 这个键，但命令不同**，所以脚本里键名与命令是两个参数）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。`hook.sh` 有 `speak` / `msgdisplay` 两模式：`speak` 提取 `last_assistant_message`、`msgdisplay` 提取 `delta` 增量，都经 `ivox speak` 排队入队（不打断）。
 
 **集成资产随发布包自包含**：release tarball 除 `ivox` 外含整个 `integrations/`（含 `install-hooks.sh`），安装/升级时解包到权威源 `~/.config/ivox/integrations/`，再由分发器幂等铺到各 agent 位置。同步只发生在三个显式时机：`make update`（runtime.sh deploy-bin）、`ivox upgrade`（UpgradeCommand 解包后 Process 调分发器）、`install-binary.sh`（curl|bash 首次安装也补齐集成）；守护进程启动不自动同步。分发器按自身位置探测素材源：脚本在 `integrations/` 内（部署态）用同级目录，在 `scripts/`（源码态）用 `../integrations`。
