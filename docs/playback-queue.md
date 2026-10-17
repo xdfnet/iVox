@@ -181,10 +181,12 @@ Segment.pages[i].blocks[j]     ← 游标指向这里
 
 ---
 
-# 当前实现（尚未按上方方案重写）
+# 当前实现
 
 这一半记的是**今天代码怎么写的**：连续播放管道、背压、管道代号、踩过的坑。
-方案实施后，这一半要按新形态重写，届时本文上半的「迁移路径」即成为决策记录。
+身份层已按上方方案落地（`PlaybackSession.swift`），下面凡是讲「桶 / playingPageID /
+waitForJobs / sealIdleTurns」的部分都已是**历史**——它们描述的是 2026-10-17 重构前的形态，
+留在那儿是为了让那些坑不再复发（每条都注明了它换成了什么）。
 
 ## 核心原则：背景音乐只归语音输入
 
@@ -223,34 +225,41 @@ Segment.pages[i].blocks[j]     ← 游标指向这里
 - producer：跨所有 job 的 `while !Task.isCancelled` 循环，逐句 `awaitPrefetchCapacity() → synthesizeStream → for await pcm { pcmContinuation.yield(pcm) }`，**句间不 drain**；consumer：`for await pcm { await player.write(pcm) }`，**每块先比对 `pipelineSeq`**——已被 bargeIn 作废就立即 break、绝不再灌 PCM（`write` 的世代校验拦不住作废后新进来的调用，见上文 AudioPlayer 的世代守卫）。
 - **尾音不丢（v3.6.2 关键修复）**：producer 正常结束时 `defer { pcmContinuation.finish() }`，consumer 的 `for await` 会把流里**仍缓冲着的最后一句多块 PCM 排空后自然终止**——因此正常路径**绝不能提前 `consumer.cancel()`**：此前 producer 一结束就 cancel，consumer 在下一块的 `isCancelled` 处 break，AsyncStream 里的尾音整块丢弃、drain 只等到已 schedule 的部分，表现为「内容没念完就恢复音乐」。只有整条任务真被 bargeIn 取消（`Task.isCancelled`）时才 cancel consumer 弃残余。
 - **MLX 串行闸门 + epoch 作废（v3.6.2，修并发崩溃与废句雪崩）**：MLX 模型非并发安全，且 MLX 流不响应中途 Task 取消（一句发起后必须跑完）。`TTSEngine` 用单调世代闸门：第 N 代合成本须等第 N−1 代完全离开模型才进 `generateStream`，否则新旧推理并发砸同一模型触发 `Fatal error: expected a non-empty mlx_array vector.cpp:51`、daemon 崩溃；`bargeIn → cancelActiveSynthesis()` 额外递增 `epoch` 并唤醒所有 gate 排队者，旧 epoch 排队者放行后检查到纪元失配立即抛 `CancellationError`、**绝不进 MLX`**（不依赖 Swift 任务取消能否传播到内部 Task），密集连打下只让「恰好撞在推理中」的那一句跑完。
-- **线性化点**：bargeIn 只 cancel 旧任务不清 `currentTask`；要立刻起新管道的调用方（enqueue/beginTurn）必须 `await currentTask.value`（`awaitCurrentPipelineFinished()`）等旧 producer+consumer **彻底退出**后才起新的，否则两个 consumer 并发 write 同一 player。
-- 队列瞬时排空时：`turnOpen == true`（流式轮次还在生成）→ 挂起在 `waitForJobs()`（continuation 存入 `jobWaiters`），**不退出、不盖章**，但最多挂 2 秒（起点在等设备播空之后）——超时唤醒返回 false，由 `sealIdleTurns()` 把未结束的桶盖上，下一圈自然走进收尾；`turnOpen == false` → 退出循环 → consumer 排空 → 末端 drain → 收字幕（打「播报收尾」）。
-- `signalJobs()` resume 并清空所有 `jobWaiters`，调用点只有：`enqueue`（新 job 到达）、`endTurn`（轮次结束）、`preemptCurrent`（掐的公共前置：打断/插队/掀摞）。三者覆盖了挂起的全部唤醒路径，无 continuation 泄漏。
-- 轮次语义（分桶排队）：**打断权只归用户快捷键**，手动打断三档全是「掐 + 掀」——Ctrl+2 掐+掀当前页、Ctrl+1 掐+掀当前摞、Ctrl+Esc 掐+全掀 / 右⌘ 说话；Cmd+D 译文走**插队**（`speakUserInitiated`：只掐在播、译文桶插到队首，其余桶全保留）。`stop` 停止帧与 pi 新轮**不再打断**播报。队列按到达序存桶（每桶一轮，nil-turn 桶=普通播报），`processNext` 播完队首桶才前移：**旧轮播全、播完才进下一轮**——这是「按轮排队」的载体。同 `turnID` 的分块并入同桶顺序 append；新 turn 在队尾追加新桶，不打断在播旧轮。
-  **两类轮次**：`turnID`（pi 流式，走 `turnStack` 认证 + `endTurn`）与**弱分组**（Claude 的 MessageDisplay，`enqueueGrouped`，**刻意不进 `turnStack`**——那是 pi 双流认证专用，混进来会把「属主交还」判错、pi 整轮没声音）。弱分组的**分组号是 `turn_id`（一次输入引发的全部回复 = 一摞）**，不是 `message_id`（一条 assistant 消息 = 一页）——一摞夹工具调用就有好几页，按页分桶的话 Ctrl+1 只能跳掉一页。**收尾主力 = `Stop` 钩子**：按 `session_id` 反查出 turn_id 精确收尾（`finishTurn`，只标 `ended`、**不立墓碑**——在途的页还要让它播完）。**空闲宽限兜底**：队列见底又仍有未结束的轮，先等设备播空（`waitUntilSilent()`：声音真停下才算起点），再静候 2 秒（`idleGraceSeconds`），等不到新内容就由 `sealIdleTurns()` 判说完（同样只盖章、不立墓碑，之后来页会揭封续播）。页级 `final` 只说明"这页说完"，认不得"整摞说完"，所以也不拿它收尾。（旧的「新的 turn 来了就把上一个盖上」判据**已删除**：它用全局单值认"上一个"，两个会话并行时会互相盖。）`skipCurrentBucket` 按轮丢**该轮的全部桶**——弱分组下一轮可能散在几个桶里，只弹队首会留下残部继续念。
+- **线性化点**：掐只 cancel 旧任务不清 `currentTask`；**要立刻往播放器写数据的调用方**（掀页 / 掀摞 / Cmd+D 插队）必须 `await currentTask.value`（`awaitCurrentPipelineFinished()`）等旧 producer+consumer **彻底退出**，否则两个 consumer 并发 write 同一 player。**入队与收尾路径不需要这句**——它们只是「有活就起管道」，`startPipelineIfPending()` 见 `currentTask != nil` 就补不起，活交给旧管道退净后自己那轮 `pumpOrSettle()` 去做。
+  ⚠️ 反过来说，`pumpOrSettle()` 里**绝不能** await 这句等旧管道退净：被掐的管道可能挂在 `player.drain()` 或预取背压的 continuation 上迟迟不退出，一等就把后面所有收尾逻辑（起宽限、收字幕）全带死（2026-10-17 `P3` 实测：队列已空、health 已空闲，两条收尾日志一条都没打）。
+- **空闲宽限归身份层，不归管道**（2026-10-17 重构）：producer 发现「没有下一块了」就**直接退出管道**（不再挂在 `waitForJobs()` 上）。「还有摞没收尾」的等待由 `PlaybackSession.waitForContent()` 单独管，计时器是队列侧的 `graceTask`，**与管道死活无关**。旧形态把 2 秒计时器挂在管道循环里，于是「块被掀光、摞没收尾」时管道不起、计时器也没人跑——那一摞永远悬着、字幕收不掉（`P3` 实测挂死 47 秒）。
+- **宽限的启动不要求「当前没有管道」**，也**排在「等旧管道退净」之前**：起它的判据只是「没有待播块、还有摞没收尾」，管道在不在、退出得干不干净都与它无关。
+- **`signal()` 只在真有新内容时发**（入队、轮次开始/结束、掐的公共前置）。**删除路径（掀页、掀摞）不发**——`signal` 的含义是「来新货了，宽限不必再等」，掀页是在**删**东西，发了会让宽限误判「有新内容、别盖印」而作废，且作废后没有接班人（`P3` 实测在同一毫秒自唤醒）。
+- **作废一轮宽限靠递增 `graceEpoch`，不靠 `cancel()`**：挂在 `withCheckedContinuation` 上的 Task 被 cancel **不会**解开 continuation，那个 Waiter 会永远留在等待表里，来几轮就把状态搅乱。`idleGraceElapsed` 收尾时若发现是被新一轮取代的 epoch，直接返回、**不去动别人的 `graceTask`**；若是被唤醒（来了新货），**必须再 `pumpOrSettle()` 一次**——那次起宽限可能正好撞上 `graceTask` 还占着而被挡，不补这一下就没人接班。
+- 轮次语义（按段排队）：**打断权只归用户快捷键**，手动打断三档全是「掐 + 掀」——Ctrl+2 掐+掀当前页、Ctrl+1 掐+掀当前摞、Ctrl+Esc 掐+全掀 / 右⌘ 说话；Cmd+D 译文走**插队**（`speakUserInitiated`：只掐在播、译文段插到加急位，其余全保留）。`stop` 停止帧与 pi 新轮**不再打断**播报。容器按到达序存段（一段一轮，无分组段=普通播报），producer 播完队首段才前移：**旧轮播全、播完才进下一轮**——这是「按轮排队」的载体。同 `turnID` 的分块并入同段顺序 append；新 turn 在队尾追加新段，不打断在播旧轮。
+  > 旧形态这里叫「桶」（`QueueBucket`），一摞散在几个桶里——那是实现语言，不是用户语言；现已并入 `PlaybackSession` 的「段」。
+  **两类轮次**：`turnID`（pi 流式，走 `turnStack` 认证 + `endTurn`）与**弱分组**（Claude 的 MessageDisplay，`enqueueGrouped`，**刻意不进 `turnStack`**——那是 pi 双流认证专用，混进来会把「属主交还」判错、pi 整轮没声音）。弱分组的**分组号是 `turn_id`（一次输入引发的全部回复 = 一摞）**，不是 `message_id`（一条 assistant 消息 = 一页）——一摞夹工具调用就有好几页，按页分桶的话 Ctrl+1 只能跳掉一页。**收尾主力 = `Stop` 钩子**：按 `session_id` 反查出 turn_id 精确收尾（`finishTurn`，只盖印、**不立墓碑**——在途的页还要让它播完）。**空闲宽限兜底**：见底又仍有没收尾的摞，先等设备播空（`waitUntilQuiet()`：声音真停下才算起点），再静候 2 秒（`idleGraceSeconds`），等不到新内容就由 `PlaybackSession.sealIdle()` 判说完（同样只盖印、不立墓碑，之后来页会揭封续播）。页级 `final` 只说明"这页说完"，认不得"整摞说完"，所以也不拿它收尾。（旧的「新的 turn 来了就把上一个盖上」判据**已删除**：它用全局单值认"上一个"，两个会话并行时会互相盖。）`skipCurrentBucket` 按轮丢**该轮的全部桶**——弱分组下一轮可能散在几个桶里，只弹队首会留下残部继续念。
 - **播报字幕（可选）取「播放侧」而非合成侧**：每句的**首块音频**捎上该句文本（`AudioChunk.sentenceText`），`AudioPlayer` 在它被设备读出（`.dataConsumed`）时回调 → 队列转发给 `onCaption`。合成领先播放一两句，**从合成侧取会让字幕比声音早**（实测踩过，飞哥听出来了）；播放侧取则与声音对齐（误差约一个 IO 缓冲）。打断天然正确——被掐掉的句子的回调本就过不了世代校验；整队播完 / 全掀（`bargeIn`）广播 `nil` 收起。
 - **三档打断的形象说法**（跟实现**同构**，动这段代码前先读它）：
-  把播报想成一个**播音员 + 一摞摞稿纸**——**一摞 = 一桶**（一次输入引发的全部回复、一批普通播报、一条译文，各是一摞），**一张纸 = 一句**。
-  要紧的是：**正在念的那张纸已经拿在手里、不在叠里了**（实现上就是 `popFrontJob` 把它弹出桶的那一刻）。
-  - **轻（Ctrl+2）= 这一页剩下的不念了，翻页** → 从下一页的第一块接着念。实现：`preemptCurrent` 掐在播 + 丢掉桶里属于当前页的剩余块（`playingPageID` 是靶心），其余页的块原样留着
-  - **中（Ctrl+1）= 整摞都不要了** → 连还没印出来的也不印（该摞后续分块立墓碑），直接拿下一摞。实现：`skipCurrentBucket`
+  把播报想成一个**播音员 + 一摞摞稿纸**——每一摞是一次输入引发的全部回复（普通播报、译文各算一摞），一张纸是一**页**（一条 assistant 消息），一张纸再撕成若干**块**送去合成。
+  **要紧的是：正在念的那张纸始终在叠里**（游标只记「已播到哪一号」，不从叠里取走）。旧形态是 `popFrontJob` 把块弹出桶、正念的那块游离在容器之外，于是得另记一份 `playingPageID` 当靶心——那份会陈旧（第二次按压拿旧页号删掉后到的内容）。
+  - **轻（Ctrl+2）= 这一页剩下的不念了，翻页** → 从下一页的第一块接着念。实现：`claimCurrentPage`（在 Session 内**占位**领走当前页）→ 掐 → 删这一页
+  - **中（Ctrl+1）= 整摞都不要了** → 连还没印出来的也不印（该摞后续分块立墓碑），直接拿下一摞。实现：`discardCurrentSegment`
   - **全掀（Ctrl+Esc）= 把桌上所有稿纸全扫到地上** → 一声不响（背景音乐不归它管）。右⌘ 说话同理：你要开口了，全场停播并让出麦克风。实现：`cancelAll`
-  - **Cmd+D 译文 = 不抢别人的叠，只把译文这张插到最上面** → 掐掉手里正念的那张让它先响，其余叠一张没动。实现：`speakUserInitiated`
-- **⚠️ 调用顺序必须先于状态判定：连接内的四个操作要按帧序落地**（`ConnectionHandler.StreamOpChain` 串成一链）。`{type:stream}` 首帧、每个入队块、`{end}`/`{cancel}` 原先各自 `Task {}` 投递到本 actor，**落地顺序全凭调度器**。实测 `{end}` 的 Task 抢在同一连接后一个入队 Task 之前执行：`endTurn` 已把轮次关闭（`turnOpen=0`），迟到的**同轮** `enqueue` 走同轮分支又把它打开，而此时再无帧可关它——分块全部播完后管道永久停在 `waitForJobs()`：`/health` 恒 `playing=true`、`queued=0`、无「播放收尾完成」，而**两把兜底都够不着**（背压看门狗要求 `pendingCount>0`，此刻已 0；drain 还没轮到）。黑盒 A-tail / E3 用例的「未收尾」即此，现场探针原始顺序为 `enqueue(open=1) → endTurn(open=0) → enqueue(open=1)`，6 秒后进入永久挂起。
-- **轮次身份靠「轮次栈 + 墓碑」判定**（`turnStack` / `deadTurns`），**消费靠「队首桶」**：
-  - **`turnStack` 只做 pi 双流的空流 `{cancel}` 认证**（回答「这个 turnID 是不是合法新轮、属主该不该交还」）；**`currentTurn` 是消费视角 = `frontBucket?.turnID`**（队首待播桶的轮），二者解耦、正交。非当前桶的迟到帧静默 return。
+  - **Cmd+D 译文 = 不抢别人的叠，只把译文这张插到最上面** → 掐掉手里正念的那张让它先响，其余叠一张没动。实现：`speakUserInitiated`（译文进独立的「加急段」列表）
+  > **掀页的靶心必须占位，不能只读一次**：`claimCurrentPage` 与「删这一页」之间隔着 `await`（等播放器退净），actor 在挂起点可重入，第二次按压会插进来、又领到同一个页号，两次都去删同一页（2026-10-17 `P2` 实测两下都报同一页，随后 daemon 崩）。**领走即焚 + 占位**两半都要：领走后第二次按压拿不到靶心，退化成「只掐在播」。
+- **⚠️ 调用顺序必须先于状态判定：连接内的四个操作要按帧序落地**（`ConnectionHandler.StreamOpChain` 串成一链）。`{type:stream}` 首帧、每个入队块、`{end}`/`{cancel}` 原先各自 `Task {}` 投递到本 actor，**落地顺序全凭调度器**。实测 `{end}` 的 Task 抢在同一连接后一个入队 Task 之前执行：`endTurn` 已把该轮盖印，迟到的**同轮** `enqueue` 又把它揭回未收尾，而此时再无帧可关它——分块全部播完后那一摞永远收不掉：`/health` 恒 `playing=true`、`queued=0`、无「播放收尾完成」，而**两把兜底都够不着**（背压看门狗要求 `pendingCount>0`，此刻已 0；drain 还没轮到）。
+  > 旧形态下这里的后果更硬：管道本身**也**永久停在 `waitForJobs()` 里。新形态里 producer 发现没块就退出管道（见上「空闲宽限归身份层」），悬住的是宽限那条等待，而宽限有 2 秒上限——所以即便帧序再乱，也不会像从前那样永久挂死。黑盒 A-tail / E3 用例的「未收尾」即此，现场探针原始顺序为 `enqueue(open=1) → endTurn(open=0) → enqueue(open=1)`，6 秒后进入永久挂起。
+- **轮次身份靠「轮次栈 + 墓碑」判定**（`turnStack` / `deadTurns`，都在 `PlaybackSession` 里），**消费靠游标**：
+  - **`turnStack` 只做 pi 双流的空流 `{cancel}` 认证**（回答「这个 turnID 是不是合法新轮、属主该不该交还」）；消费视角是「游标之后那一块」，二者解耦、正交。已作废轮的迟到帧静默丢弃。
   - **`{cancel}` 的轮出栈**：被取消的轮没有内容需要保护，属主交还给被它顶掉的那一轮。**这条是 pi 「整轮没声音」的修复关键**：pi 一个用户消息会开两条流、其中一条刚开就被 `{cancel}`，而承载正文的是先开的那条——若取消的轮继续占着栈顶，正文那条就被永久判成过期旧轮、整轮哑掉。
   - **墓碑 `deadTurns`**：`{cancel}`、用户开口（`cancelAll()`）、Ctrl+1 跳过（`skipCurrentBucket`）之后该轮不再开口，含客户端关闭连接后 EOF 兜底补出的残尾。容量 64，防止无限增长。
   只判「不等于 currentTurn」是不够的：那会把新轮的首帧和旧轮的迟到帧混为一谈；只按「见过没见过」判也不行：会把**并行那条空流**的取消算到真正在跑的轮头上。
-- **`cancelAll()` = 「全场闭嘴」的语义：停当场 + 作废全部流式轮**（`buryAllTurns()` + `bargeIn()`）。调用方只有右⌘（`speech`）与 Ctrl+Esc（`esc`）。**`{type:stop}` 停止帧已完全失效且无发送方**（hook.sh interrupt 已摘、ivox quiet 已删），收到时 ConnectionHandler 仅记日志忽略（留作护栏，防止旧帧被当正文念出来）。`turn` 顶替也不再经 bargeIn——新轮排队。
-- **「掐在播」与「清场」拆成两层**：`preemptCurrent` 只作废管道代号 + 取消在播合成与已排队音频，**不动 `buckets`**；`bargeIn` 则是「先 `removeAll()` 再调它」= 全掀。由此派生三个「只掐不清」的入口：
-  - **Cmd+D 念译文 = 插队**：`speakUserInitiated` = `preemptCurrent(.dict)` → 等旧管道退净 → 译文桶 `insert(at: 0)` **插到队首**。其余桶一个不丢，播完译文接着播（若想连当前桶一起丢，那是 Ctrl+1 的语义）。
-  - **Ctrl+1 = 掐 + 掀当前摞**：`skipCurrentBucket` = 给当前摞立墓碑（`bury`，该摞后续分块也不再开口）→ `preemptCurrent` → 丢队首桶 → `pumpOrSettle()` 接着播下一桶；没有下一桶则收尾。
-  - **Ctrl+2 = 掐 + 掀当前页**：`skipCurrentPage` = `preemptCurrent` → 丢掉桶里 `pageID == 当前页` 的剩余块 → `pumpOrSettle()`。**页号要在 claim 时记进 `playingPageID`**——正在念的那块早已弹出桶，光看桶认不出它属于哪页；页号为 nil（非 Claude 路径）时退化成「只掐在播」。
+- **`cancelAll()` = 「全场闭嘴」的语义：停当场 + 作废全部流式轮**（`discardAll()` + `bargeIn()`）。⚠️ `discardAll()` **必须连 `turnStack` 里的轮一起立墓碑**，不只是容器里已有的段：那些是「已声明、块还没到」的轮，此刻容器里还没有它们的段，只按段立碑就会漏掉——打断之后它们陆续送来的字照常播（2026-10-17 `E7` 实测：清空队列时 `pending=0`，墓碑一个没立，打断后同一轮照样开口）。调用方只有右⌘（`speech`）与 Ctrl+Esc（`esc`）。**`{type:stop}` 停止帧已完全失效且无发送方**（hook.sh interrupt 已摘、ivox quiet 已删），收到时 ConnectionHandler 仅记日志忽略（留作护栏，防止旧帧被当正文念出来）。`turn` 顶替也不再经 bargeIn——新轮排队。
+- **「掐在播」与「清场」拆成两层**：`preemptCurrent` 只作废管道代号 + 取消在播合成与已排队音频，**不动容器**；`bargeIn` 则是「先 `discardAll()` 再调它」= 全掀。由此派生三个「只掐不清」的入口：
+  - **Cmd+D 念译文 = 插队**：`speakUserInitiated` = `preemptCurrent(.dict)` → 等旧管道退净 → 译文进**加急段**（独立于常规段的 `front` 列表，`nextCursor()` 先扫它）→ 立刻起管道。其余内容一个不丢，播完译文接着播（若想连当前摞一起丢，那是 Ctrl+1 的语义）。
+  - **Ctrl+1 = 掐 + 掀当前摞**：`skipCurrentBucket` = `preemptCurrent` → `discardCurrentSegment()`（内部含立墓碑，该摞后续分块也不再开口）→ `pumpOrSettle()` 接着播；没有下一摞则收尾。
+  - **Ctrl+2 = 掐 + 掀当前页**：`skipCurrentPage` = `claimCurrentPage()`（占位领靶心）→ `preemptCurrent` → 等旧管道退净 → `discardClaimedPage()` → `pumpOrSettle()`。页号为 nil（非 Claude 路径）或没块在播时退化成「只掐在播」。
 - **`pipelineSeq` 代号作废在途管道（修「旧 producer 消费新轮任务」）**：`Task {}` 是结构化外的子任务，**不继承取消**——`bargeIn` 的 `currentTask?.cancel()` 根本停不住已进 MLX 的 producer。故 `bargeIn`/`shutdown` 递增 `pipelineSeq`，producer 每轮循环、consumer 每次循环都比对「代号是否仍是自己的」，不等即立即退场。`currentTaskSeq` 同理：管道收尾只在 `currentTaskSeq == 自己` 时才清 `currentTask`，防止旧管道把新起的管道清掉。
 - **收敛兜底 `pumpOrSettle()`**（原名 `pumpOrResume`——它那一步"恢复音乐"已随播报不再碰音乐而删除）：轮次顶替时序可能留下「有 job 但没管道」的孤儿态。`endTurn`/`cancelAll`/掀页掀摞 收尾统一走它——无管道且有活就补起管道，否则等旧管道退净、按需收字幕。任何路径结束都不会挂住。⚠️ **等它退净**：遇到「管道仍在退出中 + 已取消 + 无待播」时必须等（`awaitCurrentPipelineFinished()`），不能一律直接返回——否则 `currentTask` 还非 nil，收字幕那一支进不去，字幕就永远挂在屏幕上。
 - **`drain()` 超时定时器绑定自身序号 `drainSeq`**：超时兜底的 `asyncAfter` 闭包必须校验 `drainSeq == 自己`，否则**上一次 drain 遗留的定时器会提前放行下一次 drain**，表现为尾音被掐（曾实测 `drain 超时强制返回（pendingCount=28 尾音=1.12s）`）。
-- **`removeFirst` 前必须双重校验**：门控挂起期间 `bargeIn` 会 `jobs.removeAll()`，醒来后直接 `removeFirst()` 会 `EXC_BREAKPOINT`。先 `guard let job = jobs.first`，弹出前再确认 `jobs.first?.text == job.text`（队首仍是自己读到的那个 job）。
+- **门控挂起回来要复核目标块还在**（旧形态的 `removeFirst from empty` → `EXC_BREAKPOINT` 的等价物）：producer 在 `awaitPrefetchCapacity()` 之前读游标、回来后确认「游标之后的第一块还是我读到的那个」，不是就跳过。现在**容器不会被 producer 改动**（它只读游标），但掀页/掀摞会删——所以复核的是「这一块还在不在」，在就合成、不在就跳。
+- **`sweepPages` 不能 `remove(at:)` 配 `indices` 遍历**：删完索引整体前移，下一轮越界 → `Index out of range` → daemon 崩、LaunchAgent 拉起，一批用例集体假红（2026-10-17 实测，崩溃报告 `iVox-2026-10-17-135311.ips`）。要删的先 `filter` 出来算块数，再用 `removeAll` 一次性删。
 
 > **⚠️ v4.0.0 起：播报不再碰背景音乐。** 「修复历史」里的媒体竞态条目与 `↓ 跳段`
 > 相关记录，都是 **4.0.0 之前**的设计——那时播报会借还音乐、且用单个 `↓` 跳段。
@@ -329,9 +338,10 @@ test-B53180     26.2s
 4. **保持 `await oldTask?.value`**——这是串行化的线性化点，去掉会重新引入竞态
 5. **`cancelPendingPlayback()` 会递增 `generation`**——write 回调经 `guard generation == gen` 丢弃旧世代回调；不要移除该 guard，也不要绕过 `cancelPendingPlayback` 直接清零 `pendingCount`，否则旧回调会把计数减成负数
 6. **`scheduleBuffer` 必须带 `completionCallbackType: .dataConsumed`**——旧 API（不带 callbackType）是 `.dataPlayedBack` 语义，播放末尾引擎 auto-shutdown 时回调永不触发，会重新引入 drain 超时；`.dataConsumed` 在数据被读出即回调，不依赖引擎存活
-7. **多条 job 一次性入队时走批量入口 `enqueue([PlaybackJob])`**——逐条 `await enqueue` 时，若两段之间队列瞬时为空，`processNext` 会提前走一次收尾、下一段再重启管道（历史上表现为"播报中音乐反复跳动"，音乐现已不归播报管，但白起停管道仍要避免）。批量入口先 append 完再启动处理，消除该窗口
+7. **多条块一次性入队时走批量入口 `enqueue([PlaybackJob])`**——逐条 `await enqueue` 时，若两批之间队列瞬时为空，会白起停一次管道与收尾。批量入口先 append 完再启动处理，消除该窗口
 8. **不要在 job 之间重新引入 `await player.drain()`**——句间接力靠 AudioPlayer 连续 `scheduleBuffer` 排队，逐句 drain 会播空设备、重补 prime、重启调度，重新引入逐字卡顿。drain 只允许出现在 `processNext` 末端一次
-9. **新增 `waitForJobs()` 的唤醒出口时必须同步加到 `signalJobs()`**——turnOpen 下管道挂起在 `jobWaiters`，任何让它该醒来的事件（入队/结束/打断）都必须经过 `signalJobs`，否则 continuation 永久挂起
+9. **新增「有新内容」的入口时必须让它走到 `PlaybackSession.signal()`**——空闲宽限挂在 `waitForContent()` 的等待表上，任何让它该醒来的事件（入队/轮次开始/结束/掐）都必须经过 `signal`，否则宽限只能等满 2 秒才判。**反过来：删除路径（掀页/掀摞/全掀）绝不能发 `signal`**——`signal` 的语义是「来新货了」，删除发了会让宽限误判成有更新而作废，且作废后没有接班人，这一摞永远收不掉
+9b. **作废宽限只能递增 `graceEpoch`，不能 `graceTask?.cancel()`**——取消挂在 `withCheckedContinuation` 上的 Task 不会解开 continuation，Waiter 会永远留在等待表里。`idleGraceElapsed` 发现自己已被取代就直接返回、不动别人的 `graceTask`；被唤醒（来新货）则**必须再 `pumpOrSettle()` 一次**，否则那次起宽限可能被「`graceTask` 还占着」挡掉而没人接班
 10. **背压水位（4s/2s）调整只改 `AudioPlayer` 的 `highWaterFrames/lowWaterFrames`**——高水位是内存上限也是合成预取上限（约 48kHz Int16 单声道 ≈ 384KB/4s），低水位须低于高水位以形成滞后区间，避免在阈值边缘反复挂起/放行
-11. **弱分组只在 `enqueueGrouped` 里管，绝不要接进 `turnStack`/`claimTurn`**——`turnStack` 是 pi 双流「属主交还」的认证栈，混入别的 id 会让 pi 的正文流被判成过期旧轮（**整轮没声音**）。弱分组要的只有两件事：「同 group 并桶」和「墓碑拦住后续批次」，都不需要栈。掀摞时记得连墓碑一起立（`skipCurrentBucket` 已做），全掀时记得把桶里的分组也立上（`buryAllTurns` 已做，它们不在 `turnStack` 里，不捞一遍就拦不住）
+11. **弱分组只在 `appendGrouped` 里管，绝不要接进 `turnStack`**——`turnStack` 是 pi 双流「属主交还」的认证栈，混入别的 id 会让 pi 的正文流被判成过期旧轮（**整轮没声音**）。弱分组要的只有两件事：「同 group 并段」和「墓碑拦住后续批次」，都不需要栈。掀摞时记得连墓碑一起立（`discardCurrentSegment` 已做），**全掀时记得连 `turnStack` 里的轮一起立**（`discardAll` 已做——它们「已声明、块还没到」，此刻容器里还没有对应的段，只按段立墓碑就漏掉了，打断之后它们陆续送来的字照常播，`E7` 实测）
 12. **流式连接的队列操作一律走 `ConnectionHandler` 的 `chain.hop {}`，不许直接 `Task { await queue.… }`**——顺序是协议语义的一部分（`{end}` 之后再无帧可关轮次）；裸 `Task {}` 落地乱序会让已关轮次被迟到分块重新打开，管道永久挂起（见上「按帧序落地」条）
