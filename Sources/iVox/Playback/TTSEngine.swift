@@ -33,9 +33,26 @@ actor TTSEngine {
 
     /// 已解析的参考音频缓存：key = 路径 + mtime（文件被 voice add 覆盖即失效）。
     /// 一次播报内音色固定，缓存后免掉每句一次的 wav 读盘/解码/重采样。
-    private struct RefAudioEntry: @unchecked Sendable {
+    /// 参考音频缓存。存的是**重采样后的采样数据**而不是 `MLXArray`——
+    /// `mlx-swift 0.32` 起 `generateStream(refAudio:)` 的参数带 `sending`，要求调用方
+    /// **转移所有权**，可缓存里的实例缓存自己还持有一份，直接交出去就成了数据竞争
+    /// （2026-10-18 升级时报 `sending 'refAudio' risks causing data races`）。
+    ///
+    /// ⚠️ 但**不能改成每次现场造一个新 `MLXArray`**：`mlx-audio-swift` 内部用
+    /// `ObjectIdentifier(refAudio)` 认参考音频来复用整份输入准备上下文（音色编码 +
+    /// 语音编码），对象地址每次都变 → 那层缓存永不命中 → 每块合成多花 1~2 秒
+    /// （实测 4~5s 涨到 5~7s），预取余量被挤小，`check-tts` 的 `A-tail` 尾音用例转红
+    /// （2026-10-18 实测）。故用下面的盒子包一层：`@unchecked Sendable` 让 `sending`
+    /// 检查通过，而盒内的 `MLXArray` 始终是**同一个实例**，库内部缓存照旧命中。
+    private struct RefAudioEntry: Sendable {
         let mtime: Date
-        let audio: MLXArray
+        let box: RefAudioBox
+    }
+
+    /// 编译期视图：`@unchecked` 把实例稳定性寄托在「我们只读不写、且始终交同一个实例」
+    /// 上（`MLXArray` 底层是引用计数的 handle，库内部会 retain）。
+    private struct RefAudioBox: @unchecked Sendable {
+        let array: MLXArray
     }
     private var refAudioCache: [String: RefAudioEntry] = [:]
     /// 最近一次 `cancelActiveSynthesis` 的打断来源，供合成取消日志对上因果（见 cancelActiveSynthesis）
@@ -147,7 +164,7 @@ actor TTSEngine {
         let stream = model.generateStream(
             text: text,
             voice: nil,
-            refAudio: refAudio,
+            refAudio: refAudio?.array,
             refText: refText,
             language: ttsConfig.language,
             generationParameters: model.defaultGenerationParameters,
@@ -199,7 +216,9 @@ actor TTSEngine {
         waiters.values.forEach { $0.forEach { $0.resume() } }
     }
 
-    private func loadRefAudio(_ path: String?, sampleRate: Int) async throws -> MLXArray? {
+    /// 返回**盒子**而非裸 `MLXArray`：见 `RefAudioBox` 的注释——既让 `sending` 检查
+    /// 通过，又保证盒内 `MLXArray` 全程是同一实例（库内部缓存靠它命中）。
+    private func loadRefAudio(_ path: String?, sampleRate: Int) async throws -> sending RefAudioBox? {
         guard let path, !path.isEmpty else { return nil }
         let expanded = expandPath(path)
         guard FileManager.default.fileExists(atPath: expanded) else {
@@ -207,23 +226,25 @@ actor TTSEngine {
             return nil
         }
 
-        // 命中缓存（路径 + mtime 一致）：直接复用，免读盘/解码/重采样。
+        // 命中缓存（路径 + mtime 一致）：直接复用，免读盘/解码/重采样，
+        // 也保住盒内 `MLXArray` 的实例身份（库内部缓存靠它，见 RefAudioEntry 的注释）。
         // key 含目标采样率，模型重载后采样率变化也不会错配。
         let mtime = (try? FileManager.default.attributesOfItem(atPath: expanded)[.modificationDate] as? Date) ?? Date.distantPast
         let cacheKey = "\(expanded)#\(sampleRate)"
         if let entry = refAudioCache[cacheKey], entry.mtime == mtime {
             Log.debug("参考音频命中缓存: \(expanded)")
-            return entry.audio
+            return entry.box
         }
 
         // 磁盘 I/O 在后台执行，避免阻塞 actor
         let url = URL(fileURLWithPath: expanded)
-        let (_, refAudio) = try await Task.detached(priority: .userInitiated) {
-            try loadAudioArray(from: url, sampleRate: sampleRate)
+        let refAudio = try await Task.detached(priority: .userInitiated) {
+            try loadAudioArray(from: url, sampleRate: sampleRate).1
         }.value
-        refAudioCache[cacheKey] = RefAudioEntry(mtime: mtime, audio: refAudio)
+        let box = RefAudioBox(array: refAudio)
+        refAudioCache[cacheKey] = RefAudioEntry(mtime: mtime, box: box)
         Log.debug("参考音频已缓存: \(expanded)")
-        return refAudio
+        return box
     }
 
     private func expandPath(_ path: String) -> String {

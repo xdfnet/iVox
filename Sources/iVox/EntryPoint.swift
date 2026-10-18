@@ -14,6 +14,7 @@ struct iVox: AsyncParsableCommand {
             StatusCommand.self,
             SpeakCommand.self,
             SkipCommand.self,
+            QuickCommand.self,
             ASRCommand.self,
             VoiceCommand.self,
             WeChatCommand.self,

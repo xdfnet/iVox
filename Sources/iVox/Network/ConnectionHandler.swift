@@ -84,6 +84,8 @@ actor ConnectionHandler {
             handleStatus(fd: fd)
         } else if header.contains("type:skip") {
             handleSkip(fd: fd, header: header)
+        } else if header.contains("type:quick") {
+            handleQuick(fd: fd, header: header)
         } else {
             handleTTS(fd: fd, data: data)
         }
@@ -330,6 +332,35 @@ actor ConnectionHandler {
             }
         }
     }
+
+    /// 快速操作的命令行入口（`ivox quick <action>`）：键盘上的 Opt+Z/A/X/Q/C 由此获得第二扇门。
+    ///
+    /// **必须由 daemon 执行，不能在 CLI 进程里做**：这些动作要摸主线程（AppleScript 取
+    /// Finder 选中项、`NSPasteboard` 写剪贴板），搬到 CLI 进程里就绕开了 daemon 的主线程，
+    /// 也测不到它们与 TTS 合成并发时的行为——而那正是要查的地方。
+    private nonisolated func handleQuick(fd: Int32, header: String) {
+        defer { Darwin.close(fd) }
+        let action = parseMetaKV(header)["action"] ?? "copy-path"
+        Log.info("快速操作请求: action=\(action)")
+        guard let hotKey = Self.quickHotKeys[action] else {
+            Log.warn("快速操作: 未知动作 \(action)")
+            return
+        }
+        // `QuickActionsService` 无实例状态（只有 `static let`），现造一个即可，
+        // 省得为了这一个入口把 daemon 里那一份注入进来。
+        Task { @MainActor in
+            await QuickActionsService().handle(hotKey, at: .zero)
+        }
+    }
+
+    /// 命令行动作名 → 热键动作。只认这几个，其余一律忽略（别让请求端能触发打断三档）。
+    private nonisolated static let quickHotKeys: [String: GlobalKeyTap.HotKey] = [
+        "terminal": .openTerminal,
+        "claude": .openTerminalClaude,
+        "codex": .openTerminalCodex,
+        "pi": .openTerminalPi,
+        "copy-path": .copyPath,
+    ]
 
     private nonisolated func handleASR(fd: Int32, header: String, body: Data) {
         let lang = parseMetaKV(header)["lang"] ?? "zh"

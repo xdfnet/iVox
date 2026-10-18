@@ -686,10 +686,20 @@ const cases = [
       const tDone = dones.at(-1)?.ts ?? 0;
       const tSettled = settled?.settledAt ?? 0;
       const gap = (tSettled - tDone) / 1000;
-      ctx.check(gap >= Math.max(0.8, tail.seconds * 0.5),
-        `收尾过早，尾音可能被掐：合成完→收尾仅 ${gap.toFixed(2)}s，尾句音频 ${tail.seconds.toFixed(2)}s`);
       const finish = ctx.log.grep(/播放收尾完成/, ctx.t0).at(-1);
       ctx.check(!!finish, "缺「播放收尾完成」日志");
+      // 基准是日志里的**真实尾音**（收尾那一刻还排在播放器里的秒数），不是「单独再合成
+      // 一遍测出的完整时长」。原判据假设「最后一块合成完时它还没开始播」，可管道本来就
+      // 预取领先播放（`B-synthesis-leads-playback` 验的就是这个），合成完时那块早播了
+      // 一部分，gap 天然只剩剩下的——拿完整时长当基准会稳定假红（2026-10-18 升级
+      // mlx-swift 0.32 后连报三次：gap 1.62/1.70/1.63s，而真实尾音 1.60/1.70/1.63s，
+      // 两者几乎相等，说明音频确实播完才收尾）。真实尾音 > 0 且 gap 覆盖它才是「没被掐」。
+      const tailSec = finish ? Number(/尾音=([0-9.]+)s/.exec(finish.msg)?.[1] ?? 0) : 0;
+      ctx.check(tailSec > 0, `尾音为 0，音频可能被整段掐掉`);
+      ctx.check(gap >= Math.max(0.8, tailSec * 0.8),
+        `收尾过早，尾音可能被掐：合成完→收尾仅 ${gap.toFixed(2)}s，真实尾音 ${tailSec.toFixed(2)}s`);
+      // 仍保留 TTS 输出健康度检查：探测那次必须真的出声，否则上面的比较毫无意义
+      ctx.check(tail.seconds > 0.5, `尾句合成时长异常: ${tail.seconds}`);
       ctx.noBad();
     },
   },
