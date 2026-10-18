@@ -6,6 +6,32 @@ import iVoxKit
 
 actor ConnectionHandler {
     private let queue: PlaybackQueue
+
+    /// **跑腿侧的衔接表**：「外部 group/turn ↔ 播报站自编的摞号」。
+    ///
+    /// 播报站只认自己发的号（`PlaybackBlock` / `PlaybackSegment` 上没有任何外部编号做身份），
+    /// 所以「这批材料属于哪一摞」这张对照表归**跑腿的**记。2026-10-18 起从助理内部
+    /// 挪到这里：原先助理靠 `turnID == group` 去容器里检索，等于承认「外部号就是身份」，
+    /// 于是「无编号 ⇒ 可以合并」这种推断长了出来，把 codex 的两次回复焊成一摞
+    /// （Ctrl+1 掀一次 34 块，其中只有 6 块是新回复）。
+    private var stackOfExternalGroup: [String: Int] = [:]
+
+    /// 递一批分组材料：第一次自开一摞，之后同 group 的续批拿**助理发的号**并进去。
+    ///
+    /// 三态必须分开处理：`dead`（用户已放弃这一摞）**直接丢弃**，
+    /// 只有 `gone`（摞号被回收）才另开一摞。把两者混同等于让已放弃的摞重新开口。
+    private func deliverGrouped(_ jobs: [PlaybackJob], group: String, page: String?) async {
+        if let stack = stackOfExternalGroup[group] {
+            switch await queue.appendToStack(stack, jobs, group: group, page: page) {
+            case .appended: return
+            case .dead: return                       // 墓碑已立：这批增量不开口
+            case .gone: stackOfExternalGroup[group] = nil
+            }
+        }
+        if let fresh = await queue.enqueueGrouped(jobs, group: group) {
+            stackOfExternalGroup[group] = fresh
+        }
+    }
     private let config: Config
     private let asrEngine: ASREngine
     private let engine: TTSEngine
@@ -226,7 +252,8 @@ actor ConnectionHandler {
             PlaybackJob(text: $0, voiceID: voiceID, source: source, turnID: turn, pageID: page)
         }
         Log.info("流式入队: source=\(source) turn=\(turn) page=\(page) 分块=\(jobs.count) chars=\(cleaned.count)")
-        chain.hop { await self.queue.enqueue(jobs, turnID: turn) }
+        // pi 一轮的首帧自开一摞，后续帧拿这张对照表里的号并进去（见 `deliverGrouped`）
+        chain.hop { await self.deliverGrouped(jobs, group: turn, page: page) }
     }
 
     private nonisolated func finishStream(sb: StreamBuffer, source: String, voiceID: String,
@@ -289,9 +316,11 @@ actor ConnectionHandler {
                 Log.info("收尾信号（Stop）: source=\(source) turn=\(group) chars=\(clen)")
                 Task { await queue.finishTurn(group) }
             } else {
-                // 分组号 = Claude 的 `turn_id`（一次回复 = 一摞）；同一摞的每一页都带同一个号
+                // 分组号 = Claude 的 `turn_id`（一次回复 = 一摞）；同一摞的每一页都带同一个号。
+                // **衔接在这里收口**：外部 group ↔ 助理自编摞号的对照由跑腿侧记着，
+                // 播报站不认 group、只认自己发的号（2026-10-18 起）。
                 Log.info("队列入队（摞）: source=\(source) voice=\(voiceID) turn=\(group) page=\(page ?? "-") chars=\(clen) 分块=\(jobs.count)")
-                Task { await queue.enqueueGrouped(jobs, group: group) }
+                Task { await self.deliverGrouped(jobs, group: group, page: page) }
             }
         } else if isFinal {
             // 不带分组的收尾信号：查不到 session 对应的那一摞（msgdisplay 还没触发过 / 手动发）——

@@ -832,6 +832,35 @@ const cases = [
     },
   },
 
+  // ───────── S3：无分组内容各自成摞（场景 10）─────────
+  // 回归 2026-10-18 现场：codex 没有 turn_id，全走无分组入队，而旧实现把它们
+  // 全并进队尾那个无分组段 → 不同时间的多次回复被焊成一摞 → Ctrl+1 掀一次
+  // 连后到的一起掀掉（实测 34 块里只有 6 块是新回复）。
+  // 判据：掀完之后**后面那条还得能接着播**——这一条正是「一摞 = 一次入队」在无分组下
+  // 成立的唯一可观测证据，用带 turn_id 的 S1 永远测不到。
+  {
+    name: "S3-skip-stack-plain-stacks-are-separate",
+    async run(ctx) {
+      await ctx.speak("第一条无分组内容，长度够触发一次合成就好。");
+      await ctx.speak("第二条无分组内容，应该在第一条被掀完之后接着播出来。");
+      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "第一条未开始合成");
+      await sleep(400);
+      await ctx.skip("stack");
+      // 必须 waitFor：skip 发完就 grep 只能看到内存里已读的字节，掀摞那行还没落盘
+      // （S1 靠后面那次 speak 的往返 + sleep 躲过了这层缓冲，本用例没有）
+      const skipLine = await ctx.log.waitFor(/这摞不要了/, { sinceTs: ctx.t0, timeout: 5000 });
+      ctx.check(!!skipLine, "掀摞动作没有落日志");
+      const settled = await ctx.settled(45000);
+      ctx.check(!!settled, "未收尾");
+      // 掀之后若再无任何合成开始 = 两条被当成一摞全丢了（这正是修复前的现场）
+      const after = skipLine ? ctx.log.grep(/TTS 合成开始/, skipLine.ts) : [];
+      ctx.check(after.length >= 1,
+        `掀掉第一条之后第二条没有被继续播（无分组内容被焊成同一摞了，掀一次全丢）`);
+      ctx.noBad();
+    },
+  },
+
   // ───────── S2：跨来源混排，顺序只由到达决定（场景 9）─────────
   // 两种形态混排：带摞页的一次性入队（Claude 形态）+ 流式轮（pi 形态）。
   // 断言后到的不会插到先到的前面。

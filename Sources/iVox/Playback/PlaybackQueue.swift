@@ -13,7 +13,8 @@ struct PlaybackJob: Sendable {
     let source: String
     /// 所属摞（`turn_id`）；nil = 传统整段播报（ivox speak / hook.sh）
     let turnID: String?
-    /// 这一块属于哪**页**（Claude 的 `message_id`）。掀页靠它；nil = 非 Claude 路径。
+    /// 这一批属于哪**页**（Claude 的 `message_id`）。**它是「这一批」的页线索，
+    /// 不进块**——同一次入队的块整批同页，助理拿它归拢成页并自己发页号。
     let pageID: String?
 
     init(text: String, voiceID: String, source: String, turnID: String? = nil, pageID: String? = nil) {
@@ -25,8 +26,11 @@ struct PlaybackJob: Sendable {
     }
 
     var asBlock: PlaybackBlock {
-        PlaybackBlock(seq: 0, text: text, voiceID: voiceID, source: source, pageID: pageID)
+        PlaybackBlock(seq: 0, text: text, voiceID: voiceID, source: source)
     }
+
+    /// 这一批的页线索（取第一个块的——同批同页，调用方保证了这一点）。
+    var batchPageNote: String? { pageID }
 }
 
 /// 管道里流的一小块音频：PCM +（**仅句首块**）这句的文本。
@@ -156,8 +160,10 @@ actor PlaybackQueue {
     /// **这是打断起点的对外只读投影**：三档打断取的就是它（`session.takeHead*`），
     /// 所以黑盒脚本按压前后各读一次，就能量出「掀掉的是不是正在听的那一摞」。
     /// nil = 还没出声（冷启动）或设备已播空。
-    var audibleTurn: String? { get async { await session.headStackTarget()?.id } }
-    var audiblePage: String? { get async { (await session.headPageID).flatMap { $0 } } }
+    /// `audibleTurn` 是**外部** turn_id——无分组来源（codex / `ivox speak`）没有这个号，
+    /// 报 null 是如实反映，不是缺数据；`audiblePage` 是资料室自编的页号，任何来源都报得出。
+    var audibleTurn: String? { get async { await session.headStackTarget()?.turnID } }
+    var audiblePage: Int? { get async { await session.headPageNo } }
 
     // MARK: - 入队
 
@@ -184,31 +190,60 @@ actor PlaybackQueue {
     /// 常规入队（无分组整段播报）。
     /// **不抢麦**：回复到达时的播报若去抢，两个后台会话收尾就会互相掐掉对方的内容
     /// （实测 868 字长回复被 199ms 后的 84 字短回复整条掐掉）。按到达序排队、播全播完。
-    func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async {
-        guard !newJobs.isEmpty else { return }
+    /// - Returns: 助理自编的摞号；`turnID` 为 nil 时每次调用都自开新摞（`ivox speak` /
+    ///   codex 的形态：一次调用一摞、一摞一页）。
+    @discardableResult
+    func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async -> Int? {
+        guard !newJobs.isEmpty else { return nil }
+        let stack: Int?
         if let turnID {
-            // pi 的轮：认证通过才入队，已作废的轮迟到帧静默丢弃。
-            let accepted = await session.appendGrouped(newJobs.map(\.asBlock), group: turnID)
-            guard accepted else { return }
+            // pi 的轮：每个 turn_id 自开一摞（后续帧由调用方拿摞号走 appendToStack 并入）
+            stack = await session.newStack(newJobs.map(\.asBlock), note: turnID,
+                                           pageNote: newJobs.first?.batchPageNote)
         } else {
-            await session.appendPlain(newJobs.map(\.asBlock))
+            stack = await session.appendPlain(newJobs.map(\.asBlock))
         }
+        await reportFiling()
         await logQueueState(turn: turnID)
         await pumpOrSettle()
+        return stack
     }
 
     func enqueue(_ job: PlaybackJob) async {
         await enqueue([job], turnID: job.turnID)
     }
 
+    /// 把续批并进**助理自编的摞号** `stack`。外部 `group` / `page` 只作备注。
+    /// - Returns: 三态见 `PlaybackSession.StackAccept`。**`dead` 必须丢弃、`gone` 才重开**，
+    ///   混为一谈会让「已放弃的摞，其后续增量又播出来」。
+    func appendToStack(_ stack: Int, _ newJobs: [PlaybackJob],
+                       group: String?, page: String? = nil) async -> PlaybackSession.StackAccept {
+        guard !newJobs.isEmpty else { return .appended }
+        let note = page ?? newJobs.first?.batchPageNote
+        let verdict = await session.appendToStack(stack, newJobs.map(\.asBlock),
+                                                  note: group, pageNote: note)
+        guard verdict == .appended else { return verdict }
+        await reportFiling()
+        await logQueueState(group: group)
+        await pumpOrSettle()
+        return .appended
+    }
+
     /// 弱分组入队（Claude 的 MessageDisplay：一次回复按行批分多次短连接送来）。
     /// 分组号是 **`turn_id`（一次回复 = 一摞）**，不是 `message_id`（一条 message = 一页）——
     /// 「一摞 = 一段」是「Ctrl+1 掀整摞」成立的前提：一次回复里夹了工具调用就会有**好几页**，
     /// 按页分段的话 Ctrl+1 只能掀掉一页。
-    func enqueueGrouped(_ newJobs: [PlaybackJob], group: String) async {
-        guard await session.appendGrouped(newJobs.map(\.asBlock), group: group) else { return }
+    ///
+    /// **老接口，保留是因为它把「新开一摞」包起来了**；返回助理自编的摞号，
+    /// 调用方拿它记住「外部 group ↔ 助理摞号」，后续同摞的页改走 `appendToStack`。
+    @discardableResult
+    func enqueueGrouped(_ newJobs: [PlaybackJob], group: String) async -> Int? {
+        guard let stack = await session.newStack(newJobs.map(\.asBlock), note: group,
+                                                 pageNote: newJobs.first?.batchPageNote) else { return nil }
+        await reportFiling()
         await logQueueState(group: group)
         await pumpOrSettle()
+        return stack
     }
 
     /// 收尾指定的那一摞（Stop 钩子按 `session_id` 反查出的 `turn_id`）。**日常收尾的主力就是它**——
@@ -218,6 +253,30 @@ actor PlaybackQueue {
         Log.info("收尾信号（这一摞说完了）: turn=\(id)")
         await session.sealTurn(id)
         await pumpOrSettle()
+    }
+
+    /// **播报员报备**：把资料室刚给的摞号与页号原样播出来。
+    /// 有了它，「哪块属于哪一摞哪一页」从收下那一刻就在日志里，掀的时候不必再推断——
+    /// 掀变成查号，所以怎么按都不会掀错（2026-10-18：以前掀摞只打得出「无分组 块=34」，
+    /// 事后根本看不出掀的是哪一摞，那次 34 块全丢就是这么看糊涂的）。
+    private func reportFiling() async {
+        guard let f = await session.lastFiling else { return }
+        let ext = f.turnID.map { "（外部 \($0)）" } ?? ""
+        Log.info("资料室收下：第\(f.stack)摞\(ext) 第\(Self.pageRangeText(f.pages))页")
+    }
+
+    /// 页号列表压成人话：单页 `7`、连号 `7~9`、多段 `3, 7~9`。
+    private static func pageRangeText(_ pages: [Int]) -> String {
+        guard !pages.isEmpty else { return "-" }
+        var out: [String] = []
+        var i = 0
+        while i < pages.count {
+            var j = i
+            while j + 1 < pages.count, pages[j + 1] == pages[j] + 1 { j += 1 }
+            out.append(j > i ? "\(pages[i])~\(pages[j])" : "\(pages[i])")
+            i = j + 1
+        }
+        return out.joined(separator: ",")
     }
 
     private func logQueueState(turn: String? = nil, group: String? = nil) async {
@@ -250,8 +309,9 @@ actor PlaybackQueue {
         onCaption?(nil)   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
         // 起点与丢了多少块都要落日志：掀页与"没翻动"在外部看起来一样（都是没声音），
-        // 只有这两行能区分「当时没东西可掀」和「确实翻过去了、翻的是哪一页」
-        Log.info("这页不要了，听下一页（来源=\(origin)）：已掀 page=\(taken?.pageID ?? "匿名页") 块=\(taken?.dropped ?? 0)")
+        // 只有这两行能区分「当时没东西可掀」和「确实翻过去了、翻的是哪一页」。
+        // 页号是资料室自编的（`localID`），所以任何来源都报得出「第几页」，不再是「匿名页」。
+        Log.info("这页不要了，听下一页（来源=\(origin)）：已掀 第\(taken?.pageNo.description ?? "-")页 块=\(taken?.dropped ?? 0)")
         await pumpOrSettle()   // 还有块则接着播；若这摞正等下一批字则原地等
     }
 
@@ -268,7 +328,12 @@ actor PlaybackQueue {
         await preemptCurrent(origin)
         onCaption?(nil)   // 被掀掉的那一摞立刻从字幕撤下；下一摞开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移
-        Log.info("这摞不要了，听下一摞（来源=\(origin)）：已掀 turn=\(taken?.id ?? "无分组") 块=\(taken?.dropped ?? 0)")
+        // 摞号与页号都是资料室自编的，所以**不论来的是 claude / codex / pi / ivox speak，
+        // 日志里都报得出「第几摞」**——早先这里打外部 turn_id，无编号的来源只能打「无分组」，
+        // 事后无从判断掀掉的到底是哪一摞（18:11 那次 34 块就是这么看糊涂的）。
+        let no = taken.map { "\($0.localID)" } ?? "-"
+        let turn = taken?.turnID.map { "（外部 \($0)）" } ?? ""
+        Log.info("这摞不要了，听下一摞（来源=\(origin)）：已掀 第\(no)摞\(turn) 块=\(taken?.dropped ?? 0)")
         await pumpOrSettle()   // 有下一摞则起管道接着播；没有则收尾
     }
 
@@ -488,9 +553,10 @@ actor PlaybackQueue {
                 } catch {
                     // 身份标识必须带全：这是「播到一半没了」最该留线索的一行，
                     // 而同一循环里成功/取消/作废三条路径都带 [来源-批次号]。
-                    // 以前这里只有一句错误描述，事后无从判断是哪摞的哪一块失败
-                    // （2026-10-18 补）。页号能反查摞，够回溯了（Block 上没有 turnID）。
-                    Log.error("TTS 合成失败 [\(job.source)-\(batchID)] page=\(job.pageID ?? "-") voice=\(job.voiceID) chars=\(job.text.count): \(error)")
+                    // 以前这里只有一句错误描述，事后无从判断是哪摞的哪一块失败（2026-10-18 补）；
+                    // 现在块号是助理自编的 `seq`，拿它能在日志里反查是哪一摞的哪一块
+                    // （Block 上不再挂任何外部编号，见 `PlaybackBlock`）。
+                    Log.error("TTS 合成失败 [\(job.source)-\(batchID)] seq=\(job.seq) voice=\(job.voiceID) chars=\(job.text.count): \(error)")
                 }
                 // 游标前移：无论合成成功、失败、被取消，这一块都过去了——不前移就是死循环。
                 await session.commit(cursor)

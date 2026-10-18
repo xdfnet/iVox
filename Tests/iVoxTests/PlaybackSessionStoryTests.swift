@@ -12,16 +12,43 @@ final class PlaybackSessionStoryTests: XCTestCase {
 
     // MARK: - 夹具
 
-    private func block(_ text: String, page: String?, source: String = "claude") -> PlaybackBlock {
-        PlaybackBlock(seq: 0, text: text, voiceID: "v", source: source, pageID: page)
+    /// 造一块材料。**块上没有任何外部编号**（2026-10-18 起：块的身份只有助理发的 `seq`），
+    /// 摞线索走 `deliver` 的 `group`、页线索走 `deliver` 的 `page`。
+    private func block(_ text: String, source: String = "claude") -> PlaybackBlock {
+        PlaybackBlock(seq: 0, text: text, voiceID: "v", source: source)
+    }
+
+    /// **跑腿侧的对照表**：「外部 group ↔ 助理自编的摞号」。
+    ///
+    /// 2026-10-18 起助理不再按外部号检索容器——摞的身份只有它自己发的 `localID`。
+    /// 谁来记「这批材料属于哪一摞」？**衔接归跑腿的管**：生产环境这张表在
+    /// `ConnectionHandler`，测试里由 `deliver` 就地模拟。
+    ///
+    /// 于是本文件的视角始终是「跑腿的递材料、助理分配编号」，
+    /// 而不是「助理自己认 group」——后者正是 2026-10-18 那次焊接 bug 的成因。
+    private var stackLedger: [String: Int] = [:]
+
+    /// 递一批材料进去：第一次自开一摞，之后同 group 的续批按**助理发的号**并进去。
+    /// - Returns: 三态。`dead` 必须丢弃、`gone` 才另开一摞（混同会让已放弃的摞重新开口）。
+    @discardableResult
+    private func deliver(_ session: PlaybackSession, group: String, page: String?,
+                         blocks: [PlaybackBlock]) async -> PlaybackSession.StackAccept {
+        if let stack = stackLedger[group] {
+            let verdict = await session.appendToStack(stack, blocks, note: group, pageNote: page)
+            if verdict != .gone { return verdict }
+            stackLedger[group] = nil            // 号已失效：作废的摞就这么丢掉这条对照
+        }
+        guard let fresh = await session.newStack(blocks, note: group, pageNote: page) else { return .dead }
+        stackLedger[group] = fresh
+        return .appended
     }
 
     /// 喂若干摞，每摞一页一页地入队（模拟 Claude 按行批：一个 turn 底下好几页）。
     private func seed(_ session: PlaybackSession, stacks: [(id: String, pages: [[String]])]) async {
         for st in stacks {
             for (i, p) in st.pages.enumerated() {
-                _ = await session.appendGrouped(p.map { block($0, page: "\(st.id)-p\(i)") },
-                                               group: st.id)
+                _ = await deliver(session, group: st.id, page: "\(st.id)-p\(i)",
+                                  blocks: p.map { block($0) })
             }
         }
     }
@@ -56,7 +83,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
     }
 
     private func headStackID(_ session: PlaybackSession) async -> String? {
-        await session.headStackTarget()?.id
+        await session.headStackTarget()?.turnID
     }
 
     // MARK: - 清单 3：一摞的边界还是「你一次开口引发的全部」吗？
@@ -69,7 +96,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         await seed(s, stacks: [(id: "gB", pages: [["B1"]])])
         await advanceAll(s)
 
-        let taken = await s.takeHeadStack()?.id
+        let taken = await s.takeHeadStack()?.turnID
         XCTAssertEqual(taken, "gB", "空摞不是「正在听的那摞」，该跳过")
     }
 
@@ -78,8 +105,8 @@ final class PlaybackSessionStoryTests: XCTestCase {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["A1"]]), (id: "gB", pages: [["B1"]])])
         _ = await s.takeHeadStack()
-        let late = await s.appendGrouped([block("A2", page: "gA-p0")], group: "gA")
-        XCTAssertFalse(late, "被放弃的摞，它后续送来的字不该再开口")
+        let late = await deliver(s, group: "gA", page: "gA-p0", blocks: [block("A2")])
+        XCTAssertEqual(late, .dead, "被放弃的摞，它后续送来的字不该再开口")
     }
 
     /// **没被你放弃的摞，它后续送来的页必须仍能开口。**
@@ -89,8 +116,8 @@ final class PlaybackSessionStoryTests: XCTestCase {
         await seed(s, stacks: [(id: "gA", pages: [["A1"]]), (id: "gB", pages: [["B1"]])])
         await advanceAll(s)
         _ = await s.takeHeadStack()                    // 放弃 gA
-        let ok = await s.appendGrouped([block("B2", page: "gB-p1")], group: "gB")
-        XCTAssertTrue(ok, "gB 没被放弃，它后续送来的页必须还能入队")
+        let ok = await deliver(s, group: "gB", page: "gB-p1", blocks: [block("B2")])
+        XCTAssertEqual(ok, .appended, "gB 没被放弃，它后续送来的页必须还能入队")
     }
 
     // MARK: - 清单 4：新纸还是排队不打断吗？（只有翻译能插队）
@@ -101,7 +128,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
     func testLaterPaperWaitsItsTurnEvenWhenItIsShorter() async {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["长长的一句话", "还有第二句"]])])
-        _ = await s.appendPlain([block("短", page: nil, source: "speak")])   // 后到的一字纸
+        _ = await s.appendPlain([block("短", source: "speak")])   // 后到的一字纸
 
         let order = await spokenOrder(s)
         XCTAssertEqual(order, ["长长的一句话", "还有第二句", "短"],
@@ -113,7 +140,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
     func testOnlyTranslationJumpsTheQueueAndTheRestResumes() async {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["第一句", "第二句", "第三句"]])])
-        _ = await s.appendFirst([block("译文", page: nil, source: "translate")])
+        _ = await s.appendFirst([block("译文", source: "translate")])
 
         let order = await spokenOrder(s)
         XCTAssertEqual(order, ["译文", "第一句", "第二句", "第三句"],
@@ -142,9 +169,9 @@ final class PlaybackSessionStoryTests: XCTestCase {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["A1", "A2"]]),
                                (id: "gB", pages: [["B1", "B2"]])])
-        _ = await s.appendFirst([block("译文", page: nil, source: "translate")])
+        _ = await s.appendFirst([block("译文", source: "translate")])
 
-        let taken = await s.takeHeadStack()?.id
+        let taken = await s.takeHeadStack()?.turnID
         let after = await headStackID(s)
         XCTAssertNil(taken, "队首应是加急段（无分组）")
         XCTAssertEqual(after, "gA", "加急段念完了，常规摞顶上")
@@ -155,7 +182,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
     func testJumpingDoesNotDropTheRestOfTheQueue() async {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["A1", "A2", "A3"]])])
-        _ = await s.appendFirst([block("译文", page: nil, source: "translate")])
+        _ = await s.appendFirst([block("译文", source: "translate")])
 
         _ = await s.takeHeadStack()                     // 领走译文
         let rest = await spokenOrder(s)
@@ -178,7 +205,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
 
         let taken = await s.takeHeadStack()
         let after = await headStackID(s)
-        XCTAssertEqual(taken?.id, "gA", "起点被进度带偏了：你在听 gA，掀掉的却是别的摞")
+        XCTAssertEqual(taken?.turnID, "gA", "起点被进度带偏了：你在听 gA，掀掉的却是别的摞")
         XCTAssertEqual(after, "gB", "掀完自然落到下一摞")
     }
 
@@ -198,7 +225,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         let atEnd = await headStackID(s)
         XCTAssertEqual(atEnd, "gA", "备好推到哪都不该改变起点")
 
-        let taken = await s.takeHeadStack()?.id
+        let taken = await s.takeHeadStack()?.turnID
         let next = await headStackID(s)
         XCTAssertEqual(taken, "gA")
         XCTAssertEqual(next, "gB")
@@ -212,18 +239,18 @@ final class PlaybackSessionStoryTests: XCTestCase {
     func testStartPointIsTheSoundingBlockItself() async {
         let s = PlaybackSession()
         for i in 1...3 {
-            _ = await s.appendGrouped([block("A\(i)", page: "pgA\(i)")], group: "gA")
+            _ = await deliver(s, group: "gA", page: "pgA\(i)", blocks: [block("A\(i)")])
         }
-        let beforeAnySound = await s.headPageID
-        XCTAssertEqual(beforeAnySound, .some("pgA1"), "还没出声时退回队首")
+        let beforeAnySound = await s.headPageNo
+        XCTAssertEqual(beforeAnySound, 1, "还没出声时退回队首")
 
         await s.noteConsumed(1)
-        let atA1 = await s.headPageID
-        XCTAssertEqual(atA1, .some("pgA1"), "块 1 在响 ⇒ 起点就是 pgA1")
+        let atA1 = await s.headPageNo
+        XCTAssertEqual(atA1, 1, "块 1 在响 ⇒ 起点就是第 1 页")
 
         await s.noteConsumed(3)
-        let atA3 = await s.headPageID
-        XCTAssertEqual(atA3, .some("pgA3"), "块 3 在响 ⇒ 起点就是 pgA3，不许落后也不许超前")
+        let atA3 = await s.headPageNo
+        XCTAssertEqual(atA3, 3, "块 3 在响 ⇒ 起点就是第 3 页，不许落后也不许超前")
     }
 
     /// 发声点对摞级同样生效，而且**两条路答案必须一致**——
@@ -236,7 +263,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         await s.noteConsumed(2)      // 用户在听块 1，仍在 gA
 
         let head = await headStackID(s)
-        let taken = await s.takeHeadStack()?.id
+        let taken = await s.takeHeadStack()?.turnID
         XCTAssertEqual(head, "gA")
         XCTAssertEqual(taken, "gA", "备好推到末尾也不能把起点带偏")
     }
@@ -252,9 +279,9 @@ final class PlaybackSessionStoryTests: XCTestCase {
                                (id: "gC", pages: [["C1"]])])
         await advanceAll(s)
 
-        let a = await s.takeHeadStack()?.id
-        let b = await s.takeHeadStack()?.id
-        let c = await s.takeHeadStack()?.id
+        let a = await s.takeHeadStack()?.turnID
+        let b = await s.takeHeadStack()?.turnID
+        let c = await s.takeHeadStack()?.turnID
         let d = await s.takeHeadStack()
         let head = await headStackID(s)
         XCTAssertEqual(a, "gA")
@@ -274,31 +301,31 @@ final class PlaybackSessionStoryTests: XCTestCase {
     func testSkipPageTakesThePageBeingHeard() async {
         let s = PlaybackSession()
         for i in 1...3 {
-            _ = await s.appendGrouped([block("A\(i)", page: "pgA\(i)")], group: "gA")
+            _ = await deliver(s, group: "gA", page: "pgA\(i)", blocks: [block("A\(i)")])
         }
-        _ = await s.appendGrouped([block("B1", page: "pgB1")], group: "gB")
+        _ = await deliver(s, group: "gB", page: "pgB1", blocks: [block("B1")])
         await advance(s, 2)          // pgA1 已念完，pgA2、pgA3 已备好
         await s.noteConsumed(2)      // 块 2 正在响 ⇒ 你此刻在听 pgA2
 
         let taken = await s.takeHeadPage()
-        let nowHead = await s.headPageID
-        XCTAssertEqual(taken?.pageID, "pgA2", "掀的必须是用户正在听的那一页")
-        XCTAssertEqual(nowHead, .some("pgA3"), "掀完自然落到下一页")
+        let nowHead = await s.headPageNo
+        XCTAssertEqual(taken?.pageNo, 2, "掀的必须是用户正在听的那一页")
+        XCTAssertEqual(nowHead, 3, "掀完自然落到下一页")
     }
 
     /// 连按翻页 = 连着往下听。
     func testConsecutiveSkipPageWalksDown() async {
         let s = PlaybackSession()
         for i in 1...3 {
-            _ = await s.appendGrouped([block("A\(i)", page: "pgA\(i)")], group: "gA")
+            _ = await deliver(s, group: "gA", page: "pgA\(i)", blocks: [block("A\(i)")])
         }
-        let a = await s.takeHeadPage()?.pageID
-        let b = await s.takeHeadPage()?.pageID
-        let c = await s.takeHeadPage()?.pageID
+        let a = await s.takeHeadPage()?.pageNo
+        let b = await s.takeHeadPage()?.pageNo
+        let c = await s.takeHeadPage()?.pageNo
         let d = await s.takeHeadPage()
-        XCTAssertEqual(a, "pgA1")
-        XCTAssertEqual(b, "pgA2")
-        XCTAssertEqual(c, "pgA3")
+        XCTAssertEqual(a, 1)
+        XCTAssertEqual(b, 2)
+        XCTAssertEqual(c, 3)
         XCTAssertNil(d)
     }
 
@@ -306,23 +333,61 @@ final class PlaybackSessionStoryTests: XCTestCase {
     /// 还没来的页等它来了照样播（掀页只能掀已经出现的那一页）。
     func testSkipPageDoesNotAbandonTheStack() async {
         let s = PlaybackSession()
-        _ = await s.appendGrouped([block("A1", page: "pgA1")], group: "gA")
-        _ = await s.appendGrouped([block("A2", page: "pgA2")], group: "gA")
+        _ = await deliver(s, group: "gA", page: "pgA1", blocks: [block("A1")])
+        _ = await deliver(s, group: "gA", page: "pgA2", blocks: [block("A2")])
         _ = await s.takeHeadPage()
-        let later = await s.appendGrouped([block("A3", page: "pgA3")], group: "gA")
-        XCTAssertTrue(later, "掀一页不该作废整摞——同摞后续页仍要能入队")
+        let later = await deliver(s, group: "gA", page: "pgA3", blocks: [block("A3")])
+        XCTAssertEqual(later, .appended, "掀一页不该作废整摞——同摞后续页仍要能入队")
     }
 
-    /// 陌生人的纸没有页号，**退化成匿名页**：按下去照样掀得掉东西。
-    /// 故事里叫「它没有名牌，连撕到一张纸那一层都只是勉强的」。
-    func testSkipPageOnAPaperWithoutName() async {
+    /// 陌生人的纸没有外部页号，**照样有自己的页号**。
+    ///
+    /// 这是 2026-10-18 那次改造的核心断言：早先页号直接存外部 `message_id`，
+    /// 外部不给就挂「匿名页」，掀页与掀摞在日志上都说不清掀的是哪一张。
+    /// 改成资料室自编之后，**身份不再由端决定**——`ivox speak` / codex 这类没有
+    /// 外部页号的来源，掀页照样掀得掉、也照样报得出第几页。
+    func testSkipPageOnAPaperWithoutExternalName() async {
         let s = PlaybackSession()
-        _ = await s.appendPlain([block("说点什么", page: nil, source: "speak")])
+        _ = await s.appendPlain([block("说点什么", source: "speak")])
         let taken = await s.takeHeadPage()
         let head = await headStackID(s)
-        XCTAssertNil(taken?.pageID, "没有页号就是匿名页")
-        XCTAssertEqual(taken?.dropped, 1, "但还是掀得掉——不能按不动")
+        XCTAssertEqual(taken?.pageNo, 1, "没有外部页号也照样有自编页号（助理的规矩不依赖端）")
+        XCTAssertEqual(taken?.dropped, 1, "掀得掉——不能按不动")
         XCTAssertNil(head)
+    }
+
+    /// **无外部编号的稿子，一份就是一摞**——这是 2026-10-18 18:11 那次现场：
+    /// codex 没 turn_id，早先的实现把它和之前那条长回复焊进了同一个段，
+    /// Ctrl+1 掀一次 34 块全丢（其中只有 6 块是新回复）。
+    /// 助理的规矩：外部编号只配当「同一摞」的线索，缺席时**各自成摞**，绝不合并。
+    func testPlainStacksAreNeverWeldedTogether() async {
+        let s = PlaybackSession()
+        _ = await s.appendPlain([block("甲的第一句", source: "codex")])
+        _ = await s.appendPlain([block("乙的第一句", source: "codex")])
+        let first = await s.takeHeadStack()
+        XCTAssertEqual(first?.dropped, 1, "掀第一摞只该丢它自己的块，不该把后到的一起带走")
+        let second = await s.takeHeadStack()
+        XCTAssertEqual(second?.dropped, 1, "第二摞还在原地等着（无编号不等于同一摞）")
+        let third = await s.takeHeadStack()
+        XCTAssertNil(third, "两摞都掀完了")
+    }
+
+    /// **`ivox speak` 一次就是一摞，一摞里只有一张**（飞哥 2026-10-18 定的契约）。
+    ///
+    /// 「只有一张」不是约定俗成，是结构上成立的：无 page_id 的块两两比较 `nil == nil` 为真，
+    /// 于是无论送来多少块都归成同一页。所以对 `ivox speak` 而言 **掀页与掀摞等价**——
+    /// 这正是「用户不必先想这个工具有没有页」成立的原因，别让归页逻辑改出第二页。
+    func testPlainSpeechIsOneStackWithExactlyOnePage() async {
+        let s = PlaybackSession()
+        _ = await s.appendPlain([
+            block("第一块。", source: "speak"),
+            block("第二块。", source: "speak"),
+            block("第三块。", source: "speak"),
+        ])
+        let taken = await s.takeHeadPage()
+        XCTAssertEqual(taken?.dropped, 3, "一次 speak 的三块应同属一页")
+        let next = await s.takeHeadPage()
+        XCTAssertNil(next, "一摞里没有第二页（掀完页这摞就没了）")
     }
 
     // MARK: - 清单 8：跨来源喊闭嘴，会不会挂错那摞的牌？
@@ -333,24 +398,24 @@ final class PlaybackSessionStoryTests: XCTestCase {
     /// 这条钉的是：**容器照旧全清，墓碑只给最近有块入队的那个来源。**
     func testShutUpBuriesOnlyTheSourceThatWasTalking() async {
         let s = PlaybackSession()
-        _ = await s.appendGrouped([block("C1", page: "p1", source: "claude")], group: "gClaude")
-        _ = await s.appendGrouped([block("X1", page: "p2", source: "codex")], group: "gCodex")
-        _ = await s.appendGrouped([block("C2", page: "p3", source: "claude")], group: "gClaude")
+        _ = await deliver(s, group: "gClaude", page: "p1", blocks: [block("C1", source: "claude")])
+        _ = await deliver(s, group: "gCodex", page: "p2", blocks: [block("X1", source: "codex")])
+        _ = await deliver(s, group: "gClaude", page: "p3", blocks: [block("C2", source: "claude")])
 
         let buried = await s.discardAll()
 
-        let codexLater = await s.appendGrouped([block("X2", page: "p4", source: "codex")], group: "gCodex")
-        let claudeLater = await s.appendGrouped([block("C3", page: "p5", source: "claude")], group: "gClaude")
+        let codexLater = await deliver(s, group: "gCodex", page: "p4", blocks: [block("X2", source: "codex")])
+        let claudeLater = await deliver(s, group: "gClaude", page: "p5", blocks: [block("C3", source: "claude")])
         XCTAssertEqual(buried, ["gClaude"], "只该埋正在说话那一摞的牌")
-        XCTAssertTrue(codexLater, "Codex 没被喊停，它的后续增量必须照常入队")
-        XCTAssertFalse(claudeLater, "正在说话的那个被喊停了，它不该再开口")
+        XCTAssertEqual(codexLater, .appended, "Codex 没被喊停，它的后续增量必须照常入队")
+        XCTAssertEqual(claudeLater, .dead, "正在说话的那个被喊停了，它不该再开口")
     }
 
     /// 声音是全体的事：不管谁在念，按下去都得停。
     func testShutUpStopsWhicheverSourceIsSpeaking() async {
         let s = PlaybackSession()
-        _ = await s.appendGrouped([block("C1", page: "p1", source: "claude")], group: "gClaude")
-        _ = await s.appendGrouped([block("X1", page: "p2", source: "codex")], group: "gCodex")
+        _ = await deliver(s, group: "gClaude", page: "p1", blocks: [block("C1", source: "claude")])
+        _ = await deliver(s, group: "gCodex", page: "p2", blocks: [block("X1", source: "codex")])
         await advanceAll(s)
 
         _ = await s.discardAll()
@@ -370,10 +435,10 @@ final class PlaybackSessionStoryTests: XCTestCase {
 
         _ = await s.discardAll()
 
-        let piLater = await s.appendGrouped([block("P1", page: "q1", source: "pi")], group: "gPi")
-        let claudeLater = await s.appendGrouped([block("C1", page: "q2", source: "claude")], group: "gClaude")
-        XCTAssertTrue(piLater, "pi 那摞没被喊停")
-        XCTAssertFalse(claudeLater, "正在说话那个已声明未到字的一摞，也得被埋")
+        let piLater = await deliver(s, group: "gPi", page: "q1", blocks: [block("P1", source: "pi")])
+        let claudeLater = await deliver(s, group: "gClaude", page: "q2", blocks: [block("C1", source: "claude")])
+        XCTAssertEqual(piLater, .appended, "pi 那摞没被喊停")
+        XCTAssertEqual(claudeLater, .dead, "正在说话那个已声明未到字的一摞，也得被埋")
     }
 
     // MARK: - 清单 9：念完的纸收走了吗？有没有误收「还在写」的？
@@ -420,9 +485,9 @@ final class PlaybackSessionStoryTests: XCTestCase {
         _ = await s.sealIdle()
         _ = await s.retireSpentSegments(afterSilence: true)
 
-        let later = await s.appendGrouped([block("A2", page: "gA-p1")], group: "gA")
+        let later = await deliver(s, group: "gA", page: "gA-p1", blocks: [block("A2")])
         let head = await headStackID(s)
-        XCTAssertTrue(later, "收桌子只是清容器 —— 后续页必须还能入队")
+        XCTAssertEqual(later, .appended, "收桌子只是清容器 —— 后续页必须还能入队")
         XCTAssertEqual(head, "gA")
     }
 

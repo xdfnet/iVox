@@ -238,7 +238,11 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 
 > `{type:stop}` 停止帧（旧的 `ivox quiet`）已删除，服务端收到只记日志忽略——那一支保留作护栏，防止旧脚本发来的停止帧落进正文分支被念出来。
 
-翻页的靶心是块上的 `pageID`（Claude 的 `message_id`）；非 Claude 路径没有页号，`mode:page` 会退化成"只掐在播"。
+翻页的靶心是**资料室自编的页号**（`PlaybackPage.localID`），不依赖块上有没有 `pageID`
+（Claude 的 `message_id`）。2026-10-18 改：早先这里写着「非 Claude 路径没有页号，
+`mode:page` 会退化成只掐在播」——**这条已经作废**，页号一律由助理自编，
+`ivox speak` / codex 这类不带 `pageID` 的来源照样掀得掉整页，只是掀在同一摞内（它们通常一摞一页，
+于是掀页与掀摞等价）。
 
 ### 6. CLI 工具
 

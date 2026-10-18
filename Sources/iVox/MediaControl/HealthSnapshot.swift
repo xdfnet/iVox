@@ -10,7 +10,8 @@ struct HealthSnapshot: Sendable {
     let queued: Int
     let playing: Bool
     /// 用户此刻正在听的摞 / 页（打断起点）；nil = 还没出声或设备已播空。
-    /// 黑盒断言靠它量出「按压前后是不是从正在听的那一摞换到了下一摞」。
+    /// `audibleTurn` 是**外部** turn_id（无分组来源为 null——它们没有这个号）；
+    /// `audiblePage` 是**资料室自编**的页号，所以任何来源都报得出第几页（2026-10-18 起为数字）。
     let audibleTurn: String?
-    let audiblePage: String?
+    let audiblePage: Int?
 }
