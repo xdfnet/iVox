@@ -2,6 +2,30 @@
 
 ## 未发布
 
+- **摞号页号块号改由助理自编（推翻了「名牌决定身份」）** — 起因是 codex 那边按 Ctrl+1
+  掀摞后后面内容全没了：现场是 34 块一起丢、其中只有 6 块是新回复。根因在身份设计——
+  摞/页的身份原先**靠外部 `turn_id` / `message_id`**（codex 的 `Stop` 那时还只取
+  `last_assistant_message`，不带分组），没编号的来源被 `appendPlain` 焊进同一段，
+  「掀这一摞」于是等于「掀掉这期间的一切」。飞哥的裁决：**跑腿的只提供材料和线索，
+  编号一律助理自己发**（主次不能反——不能为迁就某一端而在助理里长出它的特例）。
+  改法：`PlaybackBlock.seq` / `PlaybackPage.localID` / `PlaybackSegment.localID` 全部自增
+  永不复用；外部编号降为**备注**（只用于对日志、给墓碑分范围）；衔接表「外部 group ↔
+  助理自编摞号」搬到跑腿侧（`ConnectionHandler.stackOfExternalGroup`），块里不再带外部页号。
+  顺手修掉本次改造自己引入的一个真 bug：`appendToStack` 原返回 `Bool`，把「墓碑已立」
+  与「摞号失效」混成一种，掀摞后的增量会被当新摞重开、墓碑白立——改三态
+  `appended / dead / gone`。结果：codex、翻译、`ivox speak` 全都自成摞，Ctrl+1 能整摞掀。
+
+- **codex 侧接上 `turn_id` + 装 Interrupt 收尾（端侧第一步）** — 查 codex 源码发现
+  `StopRequest` 与 `InterruptRequest` **都自带 `turn_id`**（`codex-rs/hooks/src/events/`），
+  此前 hook 白扔了它（只取正文不带分组），这是「无编号入队」的端侧根因。现
+  `hook.sh speak codex` 拿它当分组号，每次回复自成摞。顺带装上 `Interrupt` → `hook.sh end codex`：
+  按 Esc 中断时那条路**不走 Stop**，那一摞本来永远等不到收尾信号，只能干等 2 秒空闲宽限；
+  `InterruptRequest` 也带 `turn_id`，直接复用 end 分支（只送「说完了」暗号、不出声、不打断）。
+  同时订正两处过时文档：`UserPromptSubmit` interrupt 是 2026-10-14（57179ae）**已明确废除**的
+  机制（打断权只归快捷键），`write_prompt_hook` 是故意留的 no-op 壳，**不接回**；
+  「Claude 的 Stop 没有 `turn_id`」经官方 hooks reference 核实**属实**（通用字段是
+  `prompt_id`），错的只是原注释笼统断言没区分两家——现按 Claude/Codex 两路分叉写清。
+
 - **崩溃捕获（`CrashTrap`）** — MLX 后端崩在 C++ 层时系统日志里只有一行
   `mutex lock failed: Invalid argument`，没有调用栈，事后无从判断是哪个路径撞上去的
   （两次「整摞没念完」都查到这里就断了）。现接住 `SIGABRT/SIGSEGV/SIGBUS/SIGILL/SIGFPE`，

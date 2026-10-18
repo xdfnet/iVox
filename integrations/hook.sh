@@ -45,8 +45,9 @@ Path.home().joinpath('.config/ivox/hook.log').open('a').write(
     '%s hook.sh msgdisplay source=%s turn=%s mid=%s index=%s final=%s delta=%s\n' % (
     datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], '$2',
     d.get('turn_id',''), d.get('message_id',''), d.get('index',''), d.get('final',''), delta[:40]))
-# 按 session_id 记下「这条会话最后一次是哪一摞」——Stop 的 payload 里**没有 turn_id**
-# （只有 session_id + last_assistant_message），收尾信号要靠这一笔反查才能精确指认。
+# 按 session_id 记下「这条会话最后一次是哪一摞」——**Claude 的** Stop payload 里没有 turn_id
+# （只有 prompt_id 与 last_assistant_message，见官方 hooks reference），收尾信号要靠这一笔
+# 反查才能精确指认。Codex 的 Stop 自带 turn_id，不走这条反查（见 end 分支）。
 # 分文件存是为了两个会话并行时互不覆盖（一个文件按 session 一键）。
 sid = san(d.get('session_id',''))
 if sid and grp:
@@ -75,18 +76,28 @@ if [[ "$1" == "end" ]]; then
   # 作用：让队列立刻判「这一摞说完了」→ 收尾（收字幕），不必再等空闲宽限那 2 秒。
   # 与 msgdisplay 的分工：那条送**内容**，这条只说**完了**。
   # 当年摘 Stop（57179ae）是因为它连正文一起送、与 MessageDisplay 重复播两遍；现在只送暗号，不重复。
-  # Stop 的 payload 里**没有 turn_id**（只有 session_id），所以按 session_id 反查 msgdisplay 记下的那一笔，
-  # 把收尾精确指到本会话的最后一摞——查不到就不带 group（服务端退化成"收最后打开的那摞"）。
+  # Stop 的 payload **两家不一样**，这行是关键的分叉（2026-10-18 核实）：
+  #   · Codex  —— 带 `turn_id`（`StopRequest.session_id/turn_id/...`），直接用，精确指认。
+  #   · Claude —— **没有 turn_id**（官方 hooks reference 的 Stop 事件专属字段只有
+  #     stop_hook_active / last_assistant_message / background_tasks / session_crons，
+  #     通用字段里是 prompt_id 不是 turn_id），只能按 session_id 反查 msgdisplay 记下的那一笔。
+  # 两家都取不到就不带 group（服务端退化成"收最后打开的那摞"）。
   # 另注：按 Esc 中断与 API 报错（走 StopFailure）时本钩子**不会触发**，那两种情形交给 2 秒空闲宽限兜底。
   payload="$(cat)"
   grp=$(printf '%s' "$payload" | python3 -c "
 import json, sys, re
 from pathlib import Path
 try:
-    sid = re.sub(r'[^A-Za-z0-9_.-]', '', str(json.load(sys.stdin).get('session_id','')))
-    print((Path.home()/'.config/ivox/lastturn'/sid).read_text().strip() if sid else '')
+    d = json.load(sys.stdin)
 except Exception:
-    print('')
+    d = {}
+tid = re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('turn_id') or ''))
+if tid:
+    print(tid)
+else:
+    sid = re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('session_id','')))
+    p = Path.home()/'.config/ivox/lastturn'/sid if sid else None
+    print(p.read_text().strip() if p and p.exists() else '')
 " 2>/dev/null)
   args=(speak --source "$2")
   [[ -n "$grp" ]] && args+=(--group "$grp")
@@ -103,9 +114,24 @@ exec 1>/dev/null
 
 payload="$(cat)"
 
+# **codex 的 Stop payload 带 `turn_id`**（`hooks/src/events/stop.rs` 的 `StopRequest`），
+# 拿它当分组号，这一摞就是「这一次输入引发的全部回复」，Ctrl+1 能整摞掀掉。
+# 早先这里只取 `last_assistant_message` 不带分组，codex 每次回复都成「无编号入队」——
+# 叠加助理侧曾按无编号合并，一次掀摞把几十块一起丢了（2026-10-18 修）。
+# Claude 的 Stop **没有** turn_id（只有 prompt_id），走本分支时 grp 为空，退回无分组入队——
+# Claude 的正文由 MessageDisplay 送、带 turn_id，本分支对它不是主通路。
+# 分组号与正文分两次 python 取：正文可能含换行，一次性读两行会把它截断。
+grp=$(printf '%s' "$payload" | python3 -c "
+import json, sys, re
+try:
+    d = json.loads(sys.stdin.read()) if sys.stdin.readable() else {}
+except Exception:
+    d = {}
+print(re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('turn_id') or '')))
+" 2>/dev/null)
 text=$(python3 -c "
 import json, sys, re
-d = json.loads(sys.argv[1]) if len(sys.argv) > 1 else {}
+d = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].strip() else {}
 text = d.get('last_assistant_message', '')
 # 过短的纯西文确认（如 true/ok/done）不播报
 if text and len(text) <= 5 and not re.search(r'[一-鿿]', text):
@@ -114,5 +140,7 @@ print(text if text else '')
 " "$payload" 2>/dev/null)
 
 [[ -z "${text// }" ]] && echo '{"continue": true}' >&3 && exit 0
-ivox speak --source "$source" -- "$text" 2>/dev/null 3>&- &
+args=(speak --source "$source")
+[[ -n "$grp" ]] && args+=(--group "$grp")
+ivox "${args[@]}" -- "$text" 2>/dev/null 3>&- &
 echo '{"continue": true}' >&3

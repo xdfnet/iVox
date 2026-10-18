@@ -122,6 +122,20 @@ elif write_hook "$CODEX_JSON" "codex" 30; then
 else
   echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
 fi
+
+# Esc 中断的**收尾信号**（不是打断）：按 Esc 时 codex 不走 Stop（那摞永远等不到收尾，
+# 只能干等 2 秒空闲宽限）。InterruptRequest 同样带 session_id + turn_id
+# （`hooks/src/events/interrupt.rs`），所以直接复用 `hook.sh end codex`：
+# 它只送「说完了」这个暗号、不出声、不打断，与 Stop 是同一个动作。
+# 注意别把它跟已废弃的 UserPromptSubmit **打断**混为一谈——那是被明确废除的机制。
+if grep -q 'hook.sh end codex' "$CODEX_JSON" 2>/dev/null; then
+  echo "[i] Codex Interrupt hook（中断收尾信号）已存在"
+elif write_hook "$CODEX_JSON" "codex" 30 Interrupt end; then
+  echo "✓  Codex Interrupt hook（中断收尾信号，不出声）"
+else
+  echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
+fi
+
 write_prompt_hook "$CODEX_JSON" 30 codex
 
 # ── PI coding agent 扩展 ──

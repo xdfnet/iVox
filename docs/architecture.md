@@ -362,9 +362,9 @@ ConnectionHandler.extractVoicePrefix():
 | 工具 | 配置/挂载 | 回复播报 |
 |------|----------|----------|
 | Claude Code（交互会话） | `~/.claude/settings.json` | **MessageDisplay → `hook.sh msgdisplay claude`**（assistant 行批增量，过程逐句播、final 批含完整结尾）＋ **Stop → `hook.sh end claude`**（只发「这一摞说完了」的暗号，不出声） |
-| Codex | `~/.codex/hooks.json` | Stop → hook.sh codex |
+| Codex | `~/.codex/hooks.json` | Stop → `hook.sh speak codex`（带 `turn_id` 分组）<br>Interrupt → `hook.sh end codex`（Esc 中断的收尾信号） |
 | PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_update` 流式（`agent_settled` 兜底） |
 
-由 `install-hooks.sh` 统一安装（Claude 挂 MessageDisplay + Stop 收尾信号，Codex 挂 Stop 整段播报——**两边都用 `Stop` 这个键，但命令不同**，所以脚本里键名与命令是两个参数）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。`hook.sh` 有 `speak` / `msgdisplay` 两模式：`speak` 提取 `last_assistant_message`、`msgdisplay` 提取 `delta` 增量，都经 `ivox speak` 排队入队（不打断）。
+由 `install-hooks.sh` 统一安装（Claude 挂 MessageDisplay + Stop 收尾信号，Codex 挂 Stop 整段播报 + Interrupt 收尾信号——**Claude 与 Codex 共用 `Stop` 这个键但命令不同**，所以脚本里键名与命令是两个参数）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。`hook.sh` 有 `speak` / `msgdisplay` / `end` 三模式（`end` 只送收尾暗号、不出声）：`speak` 提取 `last_assistant_message`、`msgdisplay` 提取 `delta` 增量，都经 `ivox speak` 排队入队（不打断）。
 
 **集成资产随发布包自包含**：release tarball 除 `ivox` 外含整个 `integrations/`（含 `install-hooks.sh`），安装/升级时解包到权威源 `~/.config/ivox/integrations/`，再由分发器幂等铺到各 agent 位置。同步只发生在三个显式时机：`make update`（runtime.sh deploy-bin）、`ivox upgrade`（UpgradeCommand 解包后 Process 调分发器）、`install-binary.sh`（curl|bash 首次安装也补齐集成）；守护进程启动不自动同步。分发器按自身位置探测素材源：脚本在 `integrations/` 内（部署态）用同级目录，在 `scripts/`（源码态）用 `../integrations`。
