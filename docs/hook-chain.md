@@ -59,14 +59,14 @@
 
 > ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文插队 / 手动三档：Ctrl+2 读下一页 · Ctrl+1 跳整摞 · Ctrl+Esc 掀桌）。在 Claude Code 里提交、后台 agent 轮次、pi 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip` 承担）。
 
-Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`）：assistant 消息流式显示时按行批触发、取 `delta` 增量逐句播，final 批含完整结尾，故不再挂 `Stop`（否则与 MessageDisplay 同播重复）。Codex 仍用 `Stop`（payload 自带 `last_assistant_message`，Codex 无 MessageDisplay 事件就只能终了一次）。
+Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`）：assistant 消息流式显示时按行批触发、取 `delta` 增量逐句播，final 批含完整结尾，故不再挂 `Stop`（否则与 MessageDisplay 同播重复）。Codex 仍用 `Stop`（Codex 无 MessageDisplay 等价事件，只能终了一次），**只搬结论**：从 payload 的 `transcript_path` 里按 `turn_id` + `phase == FinalAnswer` 挑出本轮最终答案，**中途解说（`Commentary`）与半截答案（`PartialAnswer`）一律不搬**；挑不到才退回 payload 自带的 `last_assistant_message`（那本来就是结论）。搬来的东西**一摞一页、不带 `--page`**，与 `ivox speak` 完全同形（2026-10-18 裁决：先前一版搬本轮全部消息当多页，听着像在念日志）。
 
 **两家的 `Stop` payload 不一样，`hook.sh` 按此分叉（2026-10-18 核实源码/文档）**：
 
 | | `turn_id`（摞号） | 正文 | `hook.sh` 怎么用 |
 |---|---|---|---|
 | Claude | ❌ 没有（通用字段是 `prompt_id`） | MessageDisplay 送 `delta` | 正文靠 MessageDisplay；Stop 只作收尾，按 `session_id` 反查 msgdisplay 记下的那一摞 |
-| Codex | ✅ 有（`StopRequest.turn_id`） | Stop 带 `last_assistant_message` | 直接拿 `turn_id` 当分组号，正文一次送全 |
+| Codex | ✅ 有（`StopRequest.turn_id`） | Stop 带 `last_assistant_message`；transcript 里按 `phase` 区分 `Commentary` / `PartialAnswer` / `FinalAnswer` | 直接拿 `turn_id` 当分组号，正文**只搬 `FinalAnswer` 那条**，一摞一页不带 `--page`；挑不到才退回 `last_assistant_message` |
 
 Codex 的 `Interrupt`（按 Esc 中断）**不是打断、只作收尾**：那条路不走 `Stop`，那一摞会一直等不到收尾信号，只能干等 2 秒空闲宽限。`InterruptRequest` 同样带 `session_id + turn_id`，所以复用 `hook.sh end codex` —— 与 `Stop` 的收尾是同一个动作，只送「说完了」暗号、不出声。**别把它跟已废弃的 UserPromptSubmit 打断混为一谈。**
 

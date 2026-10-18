@@ -129,32 +129,29 @@ except Exception:
 print(re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('turn_id') or '')))
 " 2>/dev/null)
 
-# **正文取「本轮全部 assistant 消息」，不是只有最后一条。**
-# codex 一次输入会产出一条条消息（「我先看看」→「找到了，改一下」→「改完了」），
-# 而 Stop 只带 `last_assistant_message`——**过程消息压根送不到播报站**，用户听到的
-# 永远只有结尾（2026-10-18 实测：一次输入 941 字送进来，清洗后 704 字 11 块，
-# 但 codex 界面上的过程消息远不止这些）。
-# payload 里的 `transcript_path` 指向 rollout jsonl，每个「完成的 assistant 消息」都有
-# 一条 ItemCompleted 记录且**带 turn_id**；按 turn_id 取本轮全部即可，**不需要游标**
-# （turn 一结束就没人再往里加了）。增量不落盘（AgentMessageContentDelta → None），
-# 所以拿不到「边生成边听」——只能结束时一次补齐，这是 codex 协议的上限。
+# **只搬结论：一摞一页，与 `ivox speak` 同形。**
+# codex 一次输入会产出一条条 assistant 消息，transcript 里靠 `phase` 区分身份：
+#   · `Commentary`    —— 中途解说（「我先看看」「找到了，改一下」）
+#   · `PartialAnswer` —— 正式答案写到一半的中间态
+#   · `FinalAnswer`   —— 本轮最终答案，**通常只有一条**
+# 早先一版把本轮**全部**消息都搬过来当多页，听着「一次输入有回音」；实际听着是
+# 半截结论 + 过程碎片 + 结论重播，且 codex 的增量不落盘（AgentMessageContentDelta
+# → None）也没有流式钩子，Stop 时已经是「迟到一步」——搬得越多，越像在念日志。
+# 2026-10-18 飞哥裁决：**只留 Stop、只搬运结论**，行为对齐 `ivox speak`——
+# 一摞一页，Ctrl+1 掀摞 / Ctrl+2 掀页都还成立（只是这一摞本来就只有一页）。
+# **不带 `--page`**：一页的东西没有页号可编，助理自编一个即可，多传反而添乱。
 #
-# 取不到（无 transcript / 换版本改了包法 / 本轮没记录）时一律退回旧行为，绝不静默丢整轮。
-# 正文走 **base64 每行一段**。这里踩过两个坑：
-#   ① 按行读原文 → 含换行的消息被拆成好几页；
-#   ② `mapfile` 是 bash 4+ 才有的，macOS 自带 /bin/bash 是 3.2，直接报 command not found。
-# NUL 分隔（`read -d ''` + process substitution）也不可靠：命令替换会吞掉 NUL 字节，
-# bash 3.2 的 `read -d ''` 行为又与 4.x 不同，没敢留在正式路径上。
-# base64 纯 ASCII、一段一行、bash 3.2 稳，两端都不需要特殊处理。
-mapfile_parts=()
-while IFS= read -r b64; do
-  [[ -n "$b64" ]] && mapfile_parts+=("$b64")
-done < <(python3 -c "
+# 正文从 payload 的 `transcript_path`（rollout jsonl）里按 turn_id + phase 挑。
+# 挑不到（无 transcript / 换版本改了字段名 / 本轮没落 FinalAnswer）时退回
+# `last_assistant_message`——Stop 自带它，**那本来就是结论**，兜底不会播成过程碎片。
+# 正文走 base64 一段一行：正文可能含换行，按行读原文会被拆错；`mapfile` 是 bash 4+
+# 才有的，macOS /bin/bash 是 3.2 直接报 command not found。
+b64=$(python3 -c "
 import json, os, re, sys
 d = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].strip() else {}
 tid = str(d.get('turn_id') or '')
 tp  = d.get('transcript_path') or ''
-out, seen = [], set()
+finals, seen = [], set()
 if tp and tid and os.path.exists(tp):
     try:
         for line in open(tp, encoding='utf-8', errors='replace'):
@@ -172,38 +169,29 @@ if tp and tid and os.path.exists(tp):
                 iid = str(item.get('id') or '')
                 if iid and iid in seen: break           # 同一条消息落盘两次时只取一次
                 if iid: seen.add(iid)
+                if str(item.get('phase') or '') != 'FinalAnswer': break   # 中途解说/半截答案一律不搬
                 s = ''.join(c['text'] for c in (item.get('content') or [])
                             if isinstance(c, dict) and isinstance(c.get('text'), str) and c['text']).strip()
-                if s: out.append(s)
+                if s: finals.append(s)
                 break
     except Exception:
         pass
-if not out:
+if not finals:
     last = str(d.get('last_assistant_message') or '').strip()
-    if last: out = [last]
+    if last: finals = [last]
 import base64
-for t in out:
+if finals:
+    text = '\n\n'.join(finals).strip()
     # 过短的纯西文确认（如 true/ok/done）不播报
-    if len(t) <= 5 and not re.search(r'[一-鿿]', t): continue
-    sys.stdout.write(base64.b64encode(t.encode('utf-8')).decode('ascii') + chr(10))
+    if len(text) <= 5 and not re.search(r'[一-鿿]', text): raise SystemExit
+    sys.stdout.write(base64.b64encode(text.encode('utf-8')).decode('ascii'))
 " "$payload" 2>/dev/null)
 
-parts=()
-for b64 in "${mapfile_parts[@]}"; do
-  t=$(printf '%s' "$b64" | /usr/bin/base64 -D 2>/dev/null)
-  [[ -n "${t// }" ]] && parts+=("$t")
-done
+[[ -n "$b64" ]] || { echo '{"continue": true}' >&3; exit 0; }
+body=$(printf '%s' "$b64" | /usr/bin/base64 -D 2>/dev/null)
+[[ -n "${body// }" ]] || { echo '{"continue": true}' >&3; exit 0; }
 
-((${#parts[@]})) || { echo '{"continue": true}' >&3; exit 0; }
-# 一条 assistant 消息 = 一页：逐条入队，page 号用序号（**只作同页线索**，
-# 真页号由助理自编）。同 group → 助理认得它们是同一摞，Ctrl+1 能整摞掀。
-#
-# **必须串行，不能 `&` 并发**：并发时各次 socket 到达播报站的先后不确定，
-# 「我先看看」可能排在「改完了」后面——顺序一乱，播出来的东西就自相矛盾。
-# 每条是一次 O(ms) 的 socket 短连，Stop 的 timeout 是 30s，串行完全不构成负担。
-for i in "${!parts[@]}"; do
-  args=(speak --source "$source")
-  [[ -n "$grp" ]] && args+=(--group "$grp" --page "p$i")
-  ivox "${args[@]}" -- "${parts[$i]}" 2>/dev/null 3>&-
-done
+args=(speak --source "$source")
+[[ -n "$grp" ]] && args+=(--group "$grp")
+ivox "${args[@]}" -- "$body" 2>/dev/null 3>&-
 echo '{"continue": true}' >&3

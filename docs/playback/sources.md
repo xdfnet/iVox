@@ -62,7 +62,7 @@ codex 本身支持 12 个 hook 事件（`PreToolUse` / `PostToolUse` / `SessionS
 |---|---|---|---|---|
 | **A. 长连接流式** | 接入方自己开一条连接，边生成边发增量 | pi 扩展 | 接入方**自报** turn；页由翻页信号给（pi 发 `{page}` 帧） | 连接内 `{end}` / EOF，可靠；另有 `{cancel}` 自取消 |
 | **B. hook 增量分批** | 工具渲染时按行批触发 hook，每批带增量 | Claude Code（MessageDisplay） | 每批 payload 里带 `turn_id` + `message_id`（缺失时回落）；Stop 只有 `session_id`，靠 `lastturn/` 反查 | 外部 Stop 钩子（**可能丢**），丢了靠宽限兜底 |
-| **C. hook 终了一次** | 工具结束时触发 hook，payload 带完整回复 | codex，以及**任何能配 stop hook 且 payload 有 `last_assistant_message` 的工具** | 现状**无身份**（hook 面无正文增量）；**语义上是一摞一页**——一次 Stop 就是一次输入的一次回复。协议里其实有 `turn_id`+`item_id`，换接法后才拿得到真身份 | Stop 即完整，无缺口 |
+| **C. hook 终了一次** | 工具结束时触发 hook，payload 带完整回复 | codex，以及**任何能配 stop hook 且 payload 有 `last_assistant_message` 的工具** | 拿 `turn_id` 当摞号（Claude 的 Stop 没有，回落 `session_id` 反查）；正文**只搬 `phase == FinalAnswer` 的结论**，中途解说与半截答案不搬；**一摞一页、不带 `--page`**——与 `ivox speak` 同形 | Stop 即完整，无缺口 |
 | **D. 一次性 speak** | 命令行丢一段文本进来 | `ivox speak`（人工、脚本） | 无 | 发完即完整 |
 | **E. 插队播报** | 用户主动开口，要立刻响 | Cmd+D 划词译文 | 无 | 发完即完整，**插队到队首** |
 

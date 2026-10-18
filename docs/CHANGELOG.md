@@ -1,5 +1,15 @@
 # iVox 开发日志
 
+## 未发布
+
+- **codex 只播结论，一摞一页** — `Stop` 时从 transcript 按 `turn_id` + `phase == FinalAnswer`
+  挑出本轮最终答案，`Commentary`（中途解说）与 `PartialAnswer`（半截答案）一律不搬；
+  挑不到才退回 payload 自带的 `last_assistant_message`。搬来的东西**不带 `--page`**，
+  与 `ivox speak` 同形（助理自编页号，一摞就一页）。前两版曾先后试过「只播 `last_assistant_message`」
+  （丢掉过程）→「搬本轮全部消息当多页」（听着像念日志、又迟到一步），最终定在「只搬结论」。
+  codex 增量不落盘（`AgentMessageContentDelta` → None）且无流式钩子，**拿不到边生成边听**，
+  这是协议上限；`Interrupt` 仍只作收尾信号、不出声。
+
 ## v5.1.0 — 2026-10-18
 
 本版一句话：**播报站自己发号，各端只管把材料递进来。** 起因是「Ctrl+1 掀摞之后后面的内容没播」，
