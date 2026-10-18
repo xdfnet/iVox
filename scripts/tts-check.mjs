@@ -15,7 +15,10 @@
 // 日志级别：断言大量依赖 DEBUG 行（如「队列状态: pending=… turn=…」数入队块数），
 // 而 daemon 默认只留 INFO 及以上（Logger 的级别门限），不特意放出 DEBUG 就会让断言
 // 读不到依据、假红。所以自检一律以 IVOX_LOG_LEVEL=debug 拉起 daemon（见 ensureDebugLogging），
-// 跑完把该变量 unset（daemon 仍在 debug，要回 INFO 需再启一次——自检是排障工具，默认留 debug 更利于追）。
+// 跑完**把它复原**（见 restoreLogEnv）：unset 变量 + 再 kickstart 一次回到 INFO。
+// 早先只 unset 变量、留着 daemon 在 debug 是「凑合」——launchd 的 setenv 是全局的，
+// 之后 `ivox on` 起的进程都会继承，于是正常使用也在写 DEBUG（2026-10-18 实测残留一晚，
+// daemon.log 里 5577 行 DEBUG、占 42%，全是每条回复的全文）。
 
 import net from "node:net";
 import http from "node:http";
@@ -41,6 +44,13 @@ function ensureDebugLogging() {
   try {
     execFileSync("/bin/launchctl", ["setenv", "IVOX_LOG_LEVEL", "debug"]);
     execFileSync("/bin/launchctl", ["kickstart", "-k", `gui/${process.getuid()}/${LABEL}`]);
+    // 复核：设不进去还照样往下跑，用例会因读不到 DEBUG 行而集体假红，
+    // 而那报错指向「产品坏了」——比直接说「设日志级别失败」误导得多。
+    const now = execFileSync("/bin/launchctl", ["getenv", "IVOX_LOG_LEVEL"]).toString().trim();
+    if (now !== "debug") {
+      console.error(`⚠️ 日志级别未切到 debug（当前=[${now}]），依赖 DEBUG 行的断言会假红`);
+      return;
+    }
     console.log("# 日志级别: IVOX_LOG_LEVEL=debug（daemon 已重启）");
   } catch (e) {
     // 设不成不算致命：断言会因读不到 DEBUG 行而失败，但那属于诊断信号、不该让自检无法启动
@@ -48,10 +58,54 @@ function ensureDebugLogging() {
   }
 }
 
-// 跑完撤掉会话级环境变量，否则之后登录/新起的进程都带着 debug。已在跑的 daemon 不受影响
-// （它已把级别读进静态常量），要回到 INFO 需再启一次。
+// 跑完撤掉会话级环境变量，**并把 daemon 重启回 INFO 级**。
+//
+// 只 unset 变量是不够的：级别已被 daemon 读进静态常量，当前进程仍是 debug。更糟的是
+// launchd 的 setenv 是**全局**的，变量留着的话，之后 `ivox on` 起的任何新进程都会继承
+// debug —— 于是「正常使用也在写 DEBUG」，每条回复的全文（原始 + 清洗后各一行）都进日志，
+// 一天能写几 MB（2026-10-18 实测：残留一晚，第二天看 daemon.log 有 5577 行 DEBUG、
+// 占 42%）。所以这里 unset 之后必须再 kickstart 一次。
+//
+// 手动起的 daemon（不在 launchd 下）kickstart 会失败，静默跳过即可 —— 那本来就没有
+// 全局残留问题。
 function restoreLogEnv() {
-  try { execFileSync("/bin/launchctl", ["setenv", "-u", "IVOX_LOG_LEVEL"]); } catch {}
+  // 用 `unsetenv`，**不是** `setenv -u KEY`：后者在本机不生效、退出码非 0，
+  // 而原来的 try/catch 把它吞了——于是脚本一边打印「已复原」，一边 launchctl 里
+  // 变量原封不动，下一个 `ivox on` 起的进程照样继承 debug。假绿就是这么来的（2026-10-18）。
+  let cleared = false;
+  try {
+    execFileSync("/bin/launchctl", ["unsetenv", "IVOX_LOG_LEVEL"]);
+    cleared = true;
+  } catch {}
+  try {
+    execFileSync("/bin/launchctl", ["kickstart", "-k", `gui/${process.getuid()}/${LABEL}`],
+                 { stdio: "ignore" });
+  } catch { return; }  // daemon 不在 launchd 下，无需复原
+
+  // 复核变量真的没了（不复核就等于把上面那个假绿再写一遍），再等 engine ready。
+  try {
+    const left = execFileSync("/bin/launchctl", ["getenv", "IVOX_LOG_LEVEL"]).toString().trim();
+    if (left) cleared = false;
+  } catch { cleared = false; }
+
+  const deadline = Date.now() + 40000;
+  let ready = false;
+  while (Date.now() < deadline) {
+    try {
+      const h = JSON.parse(execFileSync("/usr/bin/curl", ["-s", "--max-time", "2",
+                                                        "http://127.0.0.1:8888/health"]).toString());
+      if (h.status === "ok" && h.engine === "ready") { ready = true; break; }
+    } catch {}
+    execFileSync("/bin/sleep", ["1"]);
+  }
+  if (cleared && ready) {
+    console.log("# 日志级别: 已复原为默认（IVOX_LOG_LEVEL 已清并复核，daemon 已重启回 INFO）");
+  } else {
+    // 不再谎报成功——残留会一路带进之后每次启动。
+    console.error(`⚠️ 日志级别未复原：变量${cleared ? "已清" : "**仍在**"}，` +
+                  `engine ${ready ? "ready" : "**未 ready**"}。之后 ` +
+                  `\`launchctl unsetenv IVOX_LOG_LEVEL\` 再 \`ivox on\` 一次。`);
+  }
 }
 
 // 否定断言：用例窗口内不得出现
