@@ -128,9 +128,14 @@ fi
 # （`hooks/src/events/interrupt.rs`），所以直接复用 `hook.sh end codex`：
 # 它只送「说完了」这个暗号、不出声、不打断，与 Stop 是同一个动作。
 # 注意别把它跟已废弃的 UserPromptSubmit **打断**混为一谈——那是被明确废除的机制。
+#
+# 超时写 **3** 不是随手取的：codex 对 Interrupt / SessionEnd 硬性封顶 3 秒
+# （`hooks/src/engine/discovery.rs` 的 `SESSION_END_MAX_TIMEOUT_SEC`），写更大的值会被
+# clamp，且每一处 clamp 都往 warnings 里塞一句，客户端遂显示成「此源有 1 个钩子加载问题」。
+# 照着 3 写就没有这句提示（行为与被 clamp 后完全一致，纯粹是不给界面假警报）。
 if grep -q 'hook.sh end codex' "$CODEX_JSON" 2>/dev/null; then
   echo "[i] Codex Interrupt hook（中断收尾信号）已存在"
-elif write_hook "$CODEX_JSON" "codex" 30 Interrupt end; then
+elif write_hook "$CODEX_JSON" "codex" 3 Interrupt end; then
   echo "✓  Codex Interrupt hook（中断收尾信号，不出声）"
 else
   echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
