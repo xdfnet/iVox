@@ -486,7 +486,11 @@ actor PlaybackQueue {
                     Log.info("TTS 合成已取消 [\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "自取消")）")
                     throw CancellationError()
                 } catch {
-                    Log.error("TTS 合成失败: \(error)")
+                    // 身份标识必须带全：这是「播到一半没了」最该留线索的一行，
+                    // 而同一循环里成功/取消/作废三条路径都带 [来源-批次号]。
+                    // 以前这里只有一句错误描述，事后无从判断是哪摞的哪一块失败
+                    // （2026-10-18 补）。页号能反查摞，够回溯了（Block 上没有 turnID）。
+                    Log.error("TTS 合成失败 [\(job.source)-\(batchID)] page=\(job.pageID ?? "-") voice=\(job.voiceID) chars=\(job.text.count): \(error)")
                 }
                 // 游标前移：无论合成成功、失败、被取消，这一块都过去了——不前移就是死循环。
                 await session.commit(cursor)

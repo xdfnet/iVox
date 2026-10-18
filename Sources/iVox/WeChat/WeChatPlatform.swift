@@ -111,6 +111,7 @@ actor WeChatPlatform {
 
         while isRunning && !Task.isCancelled {
             cycle += 1
+            let pollStart = Date()
 
             let resp: GetUpdatesResp
             do {
@@ -123,7 +124,6 @@ actor WeChatPlatform {
                 continue
             }
             backoff = 1
-            if cycle % 5 == 0 { Log.debug("微信轮询第 \(cycle) 轮") }
 
             if resp.errcode == sessionExpiredErrcode {
                 Log.warn("Session 过期，尝试重新验证…")
@@ -145,7 +145,15 @@ actor WeChatPlatform {
                 persistSyncBuf()
             }
 
-            guard let msgs = resp.msgs, let handler = handler else { continue }
+            // 长轮询绝大多数时间是空的（35 秒一轮），原先只在 DEBUG 里每 5 轮打一行，
+            // 于是「微信到底还活着吗」在默认日志级别下**无法回答**。改成每轮一条 INFO，
+            // 带耗时与消息数；`handler == nil` 是装配 bug，比空轮询严重得多，单独报 error。
+            Log.info("微信轮询第 \(cycle) 轮: 耗时 \(String(format: "%.1f", -pollStart.timeIntervalSinceNow))s 消息 \(resp.msgs?.count ?? 0)")
+            guard let handler else {
+                Log.error("微信消息处理器未装配，收到 \(resp.msgs?.count ?? 0) 条消息将被丢弃")
+                continue
+            }
+            guard let msgs = resp.msgs else { continue }
 
             for msg in msgs {
                 await handleMessage(msg, handler: handler)

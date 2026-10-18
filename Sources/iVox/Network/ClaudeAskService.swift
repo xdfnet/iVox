@@ -64,6 +64,14 @@ actor ClaudeAskService {
             if let line = try? JSONEncoder().encode(wrapped) {
                 stdinPipe?.fileHandleForWriting.write(line)
                 stdinPipe?.fileHandleForWriting.write(Data("\n".utf8))
+            } else {
+                // 编码失败 = 请求压根没发出去。若还照常起超时表，微信那边「正在输入」
+                // 会转满 300 秒才超时，日志里只剩超时那一句，看不出请求没发（2026-10-18 补）。
+                Log.error("Claude 请求编码失败，放弃本轮 id=\(id)")
+                pending[id] = nil
+                pendingOnSegment[id] = nil
+                continuation.resume()
+                return
             }
             armTimeout(id: id)
         }
@@ -168,7 +176,9 @@ actor ClaudeAskService {
             guard !chunk.isEmpty else { return }
             let text = String(data: chunk, encoding: .utf8)?
                 .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
-            if !text.isEmpty { Log.debug("claude stderr: \(text.prefix(500))") }
+            // 子进程 stderr 是「这条为什么没跑完」的第一手材料（鉴权失败、额度、参数错
+            // 全在里面），藏 DEBUG 等于默认级别下完全查不到（2026-10-18 提为 warn）。
+            if !text.isEmpty { Log.warn("claude stderr: \(text.prefix(500))") }
         }
     }
 
@@ -188,8 +198,13 @@ actor ClaudeAskService {
         while let nl = stdoutBuffer.firstIndex(of: 0x0A) {
             let lineData = stdoutBuffer.subdata(in: 0..<nl)
             stdoutBuffer.removeSubrange(0...nl)
-            guard !lineData.isEmpty,
-                  let o = try? JSONDecoder().decode(ClaudeOutput.self, from: lineData) else { continue }
+            guard !lineData.isEmpty else { continue }
+            guard let o = try? JSONDecoder().decode(ClaudeOutput.self, from: lineData) else {
+                // claude 一改输出格式，这里每帧都被静默跳过，请求一路走到超时，全程零线索——
+                // 而这是外部依赖格式漂移的唯一探针位置（2026-10-18 补）。
+                Log.error("claude 输出帧解析失败，已丢弃 \(lineData.count) 字节: \(lineData.prefix(200))")
+                continue
+            }
 
             // assistant 帧 = 一段完整回复文本 → 当过程段回调吐给最早等待者（最后一条 assistant 即完整结尾）。
             // result 内容与 assistant 重复，不单独取文本；assistant 帧不终结本轮（等 result 收尾）。

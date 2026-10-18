@@ -63,6 +63,7 @@ actor Daemon {
     ///      然后住留直到收到 SIGINT/SIGTERM 调用 cleanup() 退出。
     func run() async throws {
         Log.info("iVox 守护进程启动")
+        CrashTrap.install()
         installSignalSource(SIGINT)
         installSignalSource(SIGTERM)
 

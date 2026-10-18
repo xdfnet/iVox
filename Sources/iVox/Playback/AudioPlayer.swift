@@ -18,6 +18,8 @@ final class AudioPlayer: @unchecked Sendable {
     private var generation = 0      // 世代：cancelPendingPlayback 递增，旧 buffer 回调据此丢弃
     private var lastConsumedAt = DispatchTime.now()   // 上次设备消费回调时刻（断流看门狗用）
     private var started = false
+    /// 播放器未就绪时被丢弃的块数（见 `logNotStartedDrop`）。只在 serialQueue 上读写。
+    private var notStartedDrops = 0
     private var drainedContinuation: CheckedContinuation<Void, Never>?
     private var drainSeq: UInt = 0         // drain 序号：让超时兜底只对自己的那次 drain 生效
     private var drainTailSec: Double = 0   // 本次 drain 入口的快照尾音秒数（正常排空时打日志）
@@ -88,7 +90,10 @@ final class AudioPlayer: @unchecked Sendable {
     /// - Parameter seq: 这批 PCM 属于哪一块（`nil` = 前导静音，没有身份）。
     ///   它被设备读出时经 `onBlockConsumed` 上报，这是「用户在听哪」的权威信号。
     func write(_ pcm: Data, startsSentence: String? = nil, seq: UInt? = nil) async {
-        guard started, !pcm.isEmpty else { return }
+        guard started, !pcm.isEmpty else {
+            if !started { logNotStartedDrop(bytes: pcm.count) }
+            return
+        }
         let frames = AVAudioFrameCount(pcm.count / 2)
         // 进入时所属世代：被 bargeIn（cancelPendingPlayback 递增世代）唤醒后据此判定本 writer
         // 已作废，直接退出、绝不碰 node/prime，避免新旧管道两个 writer 争用同一播放节点。
@@ -204,6 +209,24 @@ final class AudioPlayer: @unchecked Sendable {
                 ws.forEach { $0.resume() }
             }
         }
+    }
+
+    /// 播放器未就绪时的丢弃**必须留痕**：那意味着 TTS 照常「合成完成」而声音一个都没出来——
+    /// 听感是「念了却没声」，而队列那边的日志一切正常，事后完全对不上（2026-10-18 补）。
+    ///
+    /// 触发路径不止启动失败：`started` 在**音频设备断流后的引擎重建**里也会被置回 false
+    /// （见 `recoverFromStall` 与引擎异常处理），重建没成功就是这种情况。
+    ///
+    /// 只在第一次和每 50 块打一条，别刷屏。
+    private func logNotStartedDrop(bytes: Int) {
+        let n: Int = serialQueue.sync {
+            notStartedDrops += 1
+            return notStartedDrops
+        }
+        guard n == 1 || n % 50 == 0 else { return }
+        Log.error(n == 1
+            ? "播放器未就绪，PCM 全部被丢弃（后续同因只每 50 块记一次）: bytes=\(bytes)"
+            : "播放器仍未就绪，已累计丢弃 \(n) 块 PCM")
     }
 
     /// 一块 buffer 被设备消费：更新计数，按需恢复背压等待 / drain 等待。必须在 serialQueue 内。

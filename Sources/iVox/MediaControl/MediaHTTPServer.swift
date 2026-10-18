@@ -196,6 +196,19 @@ final class MediaHTTPServer: @unchecked Sendable {
         "toggle_douyin", "toggle_qishui",
     ]
 
+    /// 媒体动作统一收口：失败**必须如实回给调用方并落日志**。
+    /// 以前这七个动作把 `Result` 用 `_ =` 丢掉后无条件回 success —— 没有设备控制权限时
+    /// MediaController 返回 failure，丢掉之后手机上按了没反应、日志里只有一行
+    /// 「API 动作: volumeup」，事后无从判断是权限还是别的（2026-10-18 补）。
+    private static func settled(_ result: Result<Void, MediaControllerError>,
+                               _ ok: String) -> (result: String, error: String?) {
+        if case .failure(let e) = result {
+            Log.error("媒体动作失败: \(e.errorDescription)")
+            return ("failed", e.errorDescription)
+        }
+        return (ok, nil)
+    }
+
     private static func executeAction(_ action: String) async -> (result: String, error: String?) {
         switch action {
         case "status":
@@ -209,13 +222,13 @@ final class MediaHTTPServer: @unchecked Sendable {
         case "playpause":
             if case .failure(let e) = await MediaController.pressSpace() { return ("failed", e.errorDescription) }
             return ("success", nil)
-        case "next": _ = await MediaController.nextTrack(); return ("success", nil)
-        case "prev": _ = await MediaController.previousTrack(); return ("success", nil)
-        case "volumeup": _ = await MediaController.volumeUp(); return ("success", nil)
-        case "volumedown": _ = await MediaController.volumeDown(); return ("success", nil)
-        case "mute": _ = await MediaController.toggleMute(); return ("success", nil)
-        case "arrowup": _ = await MediaController.arrowUp(); return ("success", nil)
-        case "arrowdown": _ = await MediaController.arrowDown(); return ("success", nil)
+        case "next": return settled(await MediaController.nextTrack(), "success")
+        case "prev": return settled(await MediaController.previousTrack(), "success")
+        case "volumeup": return settled(await MediaController.volumeUp(), "success")
+        case "volumedown": return settled(await MediaController.volumeDown(), "success")
+        case "mute": return settled(await MediaController.toggleMute(), "success")
+        case "arrowup": return settled(await MediaController.arrowUp(), "success")
+        case "arrowdown": return settled(await MediaController.arrowDown(), "success")
         case "lock":
             if MediaController.isScreenLocked() {
                 return ("failed", "屏幕已锁定，无法通过软件唤醒")
