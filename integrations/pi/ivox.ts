@@ -7,7 +7,8 @@ import { join } from "node:path";
 /**
  * iVox TTS extension for pi coding agent — 第二层逐句流式。
  *
- * 模型边生成边把 text_delta 原文帧转发给守护进程（一 turn 一条长连接），
+ * 模型边生成边把 text_delta 原文帧转发给守护进程（**一次输入一条长连接**，
+ * 跨该次输入里的全部 turn，见 agent_start/agent_end 那段注释），
  * 服务端在安全边界（句末/段落、代码围栏配平）切句清洗并立刻开播，
  * 不必等整轮 agent_settled。切句/清洗真源只在服务端一份，这里绝不切句。
  *
@@ -107,14 +108,24 @@ export default function (pi: ExtensionAPI) {
   const hasUI = (ctx: unknown) =>
     (ctx as { hasUI?: boolean } | undefined)?.hasUI !== false;
 
-  pi.on("turn_start", (_e: unknown, ctx: unknown) => {
+  // 流的边界 = **一个 agent run**（= 一次输入），不是 turn。
+  // pi 的结构（`packages/agent/src/agent-loop.ts`）：`agent_start` 之后是 N 个 turn
+  // 循环，每个 turn 恰好一条 assistant 消息，工具调用就再来一轮；
+  // 整摞回复全部落在**同一个 agent_start … agent_end** 之间。
+  // 早先在 `turn_end` 关流，等于把「一次输入」切成 N 摞——Ctrl+1 掀一次只掀掉其中
+  // 一页，后面几页照播（与 codex 那边「多摞被焊成一摞」是同一问题的两面：那边掀过头、
+  // 这边掀不到）。2026-10-18 改为 run 级边界。
+  pi.on("agent_start", (_e: unknown, ctx: unknown) => {
     if (!hasUI(ctx)) return;
     startTurn();
   });
 
-  // 一个 turn 收尾：流贯穿整轮（工具调用会产生多条 assistant 消息，
-  // 不能在 message_end 就关流），只在 turn 真正结束时 flush + 关闭。
-  pi.on("turn_end", (_e: unknown, ctx: unknown) => {
+  // `turn_end` 不关流：它只是「这一页说完了」，run 可能还有下一页（工具调用）。
+  // 页的边界由下面 `message_start`(assistant) 的 `{page}` 帧承担。
+  //
+  // 整个 run 收尾：flush 残尾并优雅半关（end 等内核把尾帧/{end} 发完再 FIN，
+  // 不能 destroy——强杀会随 RST 丢掉最后一两个字）。
+  pi.on("agent_end", (_e: unknown, ctx: unknown) => {
     if (!hasUI(ctx) || !turnId) return;
     endTurn();
   });
@@ -126,9 +137,9 @@ export default function (pi: ExtensionAPI) {
   pi.on("message_start", (event: unknown, ctx: unknown) => {
     if (!hasUI(ctx)) return;
     if ((event as { message?: { role?: string } }).message?.role === "user") {
-      // 只打断上一轮，**不开新流**——新流等 `turn_start` 开（没有则 `message_update`
+      // 只打断上一轮，**不开新流**——新流等 `agent_start` 开（没有则 `message_update`
       // 兜底 `if (!turnId) startTurn()`）。若在这里也 startTurn()，会与紧接的
-      // turn_start 各开一条流，两条轮次互相顶，正在合成的就被掐 =
+      // agent_start 各开一条流，两条轮次互相顶，正在合成的就被掐 =
       // 播报自己打断自己（曾实测日志出现成对的「流式开始」+ 紧跟 {cancel}）。
       if (turnId) cancelTurn();
     } else if ((event as { message?: { role?: string } }).message?.role === "assistant") {

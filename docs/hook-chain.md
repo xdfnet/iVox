@@ -55,7 +55,7 @@
 |------|-------------|----------|
 | Claude Code | MessageDisplay → `hook.sh msgdisplay claude` | `~/.claude/settings.json` |
 | Codex | Stop → `hook.sh speak codex`<br>Interrupt → `hook.sh end codex` | `~/.codex/hooks.json` |
-| pi 扩展 | `message_update` 流式（新轮排队，不打断） | `~/.pi/agent/extensions/ivox.ts` |
+| pi 扩展 | `agent_start`→`agent_end` 一条流跨整次输入，`message_update` 逐 `text_delta` 送（新轮排队，不打断） | `~/.pi/agent/extensions/ivox.ts` |
 
 > ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文插队 / 手动三档：Ctrl+2 读下一页 · Ctrl+1 跳整摞 · Ctrl+Esc 掀桌）。在 Claude Code 里提交、后台 agent 轮次、pi 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip` 承担）。
 

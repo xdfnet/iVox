@@ -26,7 +26,7 @@
 | | 摞（turn） | 页（page） | 页内增量 | 现状 |
 |---|---|---|---|---|
 | **Claude Code** | 每批的 `turn_id`；缺失时回落 `message_id` | 每批的 `message_id` | MessageDisplay 分批带 | ✅ 已是流式 |
-| **pi** | 连接首帧自带的 turn 号 | `{page}` 帧（页号由服务端数） | `text_delta` | ✅ 已是流式 |
+| **pi** | 连接首帧自带的 turn 号（扩展自编，只作线索） | `{page}` 帧（页号由助理数） | `text_delta` | ✅ 已是流式，且一条流跨**一次输入**（run 级，`agent_start`→`agent_end`） |
 | **codex** | `Stop`/`Interrupt` payload 的 `turn_id`（**已接**，2026-10-18） | 协议事件里的 `item_id` | `AgentMessageContentDeltaEvent.delta` | ⚠️ 现状挂 Stop（整段一次，`turn_id` 当分组号）+ Interrupt（Esc 中断的收尾信号）；**流式增量待改** |
 
 三个都应是**有摞有页的纯流式**。粒度差异（谁切得快）不影响结构。

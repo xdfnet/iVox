@@ -277,12 +277,12 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 
 ### pi 流式播报（第二层流式）
 
-pi 扩展（`integrations/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在模型生成中逐 `text_delta` 转发**原文**（TS 侧不切句），经一条长连接按 `\n` 分帧送入 socket：
+pi 扩展（`integrations/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在模型生成中逐 `text_delta` 转发**原文**（TS 侧不切句），经一条长连接按 `\n` 分帧送入 socket。**这条连接的边界是一个 agent run（= 一次输入）**，不是 turn —— pi 的结构是 `agent_start` 之后 N 个 turn 循环、每个 turn 恰好一条 assistant 消息（`packages/agent/src/agent-loop.ts`），整摞回复都落在同一个 `agent_start … agent_end` 之间，页的边界由每条 assistant `message_start` 的 `{page}` 帧给出：
 
 ```
 {type:stream,source:pi,turn:<id>}\n   首帧开流（beginTurn，登记轮次；新轮排队不打断）
 <增量原文行>…                          仅 text_delta，跳过 thinking/toolcall
-{end}\n                                turn_end 收尾      或  {cancel:<id>}\n（Escape）
+{end}\n                                agent_end 收尾      或  {cancel:<id>}\n（Escape）
 ```
 
 `ConnectionHandler.handleStream` 把增量喂给 `StreamBuffer`（iVoxKit）：累积原文，只在**安全边界**（句末/段落、且吐出前缀代码围栏配平、累计 ≥ `minFlushChars`=24）抽出完整前缀 → 复用同一份 `cleanText() → splitSentences()` 切句入队。切句/清洗真源只在 Swift 一份，TS 绝不切句（否则破坏 Markdown AST 块末补句号与跨行规则）。模型写下一句时上一句已在常驻管道里播。

@@ -26,6 +26,21 @@
   「Claude 的 Stop 没有 `turn_id`」经官方 hooks reference 核实**属实**（通用字段是
   `prompt_id`），错的只是原注释笼统断言没区分两家——现按 Claude/Codex 两路分叉写清。
 
+- **pi 流的边界从 turn 改成 run（Ctrl+1 从「掀不到」变「掀得干净」）** — 查 pi 源码
+  （`packages/agent/src/agent-loop.ts`）确认结构是 `agent_start` → N 个 turn 循环 →
+  `agent_end`，每个 turn 恰好一条 assistant 消息、工具调用就再来一轮。按 iVox 的词：
+  **摞 = 一次输入引发的全部回复 = 一个 run；页 = 一条 assistant 消息 = 一个 turn**。
+  而扩展原先在 `turn_end` 关流，等于把「一次输入」切成 N 摞——Ctrl+1 掀一次只掀掉其中
+  一页，后面几页照播。这与 codex 那边的「多摞被焊成一摞」是同一问题的两面：**那边掀过头、
+  这边掀不到**。现改为 `agent_start` 开流 / `agent_end` 关流，页的边界仍由每条 assistant
+  `message_start` 的 `{page}` 帧给出（每个 turn 一页，天然对）。`agent_settled(aborted)`
+  的中断路径不变，它本来就是 run 级的。
+  顺带核实过、**故意没改**的：扩展仍用 `Math.random()` 造摞号。**外部有没有像样的 id 不重要，
+  只要到播报站时能分清是哪一批就行，真号一律由助理自编**——pi 那个随机号在「一轮内稳定」
+  这件事上已经够用。反过来，pi 真正的 turn 号 `turnIndex` 每次 `agent_start` 清零、
+  跨会话会重复，拿它当摞号反而会坐实「一 turn 一摞」的错切分；真正的页号 `messageEntryId`
+  只在 `turn_end` 才有、流式期间拿不到，而页号本来就该由助理自己数。
+
 - **崩溃捕获（`CrashTrap`）** — MLX 后端崩在 C++ 层时系统日志里只有一行
   `mutex lock failed: Invalid argument`，没有调用栈，事后无从判断是哪个路径撞上去的
   （两次「整摞没念完」都查到这里就断了）。现接住 `SIGABRT/SIGSEGV/SIGBUS/SIGILL/SIGFPE`，
