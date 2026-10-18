@@ -120,7 +120,6 @@ payload="$(cat)"
 # 叠加助理侧曾按无编号合并，一次掀摞把几十块一起丢了（2026-10-18 修）。
 # Claude 的 Stop **没有** turn_id（只有 prompt_id），走本分支时 grp 为空，退回无分组入队——
 # Claude 的正文由 MessageDisplay 送、带 turn_id，本分支对它不是主通路。
-# 分组号与正文分两次 python 取：正文可能含换行，一次性读两行会把它截断。
 grp=$(printf '%s' "$payload" | python3 -c "
 import json, sys, re
 try:
@@ -129,18 +128,82 @@ except Exception:
     d = {}
 print(re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('turn_id') or '')))
 " 2>/dev/null)
-text=$(python3 -c "
-import json, sys, re
+
+# **正文取「本轮全部 assistant 消息」，不是只有最后一条。**
+# codex 一次输入会产出一条条消息（「我先看看」→「找到了，改一下」→「改完了」），
+# 而 Stop 只带 `last_assistant_message`——**过程消息压根送不到播报站**，用户听到的
+# 永远只有结尾（2026-10-18 实测：一次输入 941 字送进来，清洗后 704 字 11 块，
+# 但 codex 界面上的过程消息远不止这些）。
+# payload 里的 `transcript_path` 指向 rollout jsonl，每个「完成的 assistant 消息」都有
+# 一条 ItemCompleted 记录且**带 turn_id**；按 turn_id 取本轮全部即可，**不需要游标**
+# （turn 一结束就没人再往里加了）。增量不落盘（AgentMessageContentDelta → None），
+# 所以拿不到「边生成边听」——只能结束时一次补齐，这是 codex 协议的上限。
+#
+# 取不到（无 transcript / 换版本改了包法 / 本轮没记录）时一律退回旧行为，绝不静默丢整轮。
+# 正文走 **base64 每行一段**。这里踩过两个坑：
+#   ① 按行读原文 → 含换行的消息被拆成好几页；
+#   ② `mapfile` 是 bash 4+ 才有的，macOS 自带 /bin/bash 是 3.2，直接报 command not found。
+# NUL 分隔（`read -d ''` + process substitution）也不可靠：命令替换会吞掉 NUL 字节，
+# bash 3.2 的 `read -d ''` 行为又与 4.x 不同，没敢留在正式路径上。
+# base64 纯 ASCII、一段一行、bash 3.2 稳，两端都不需要特殊处理。
+mapfile_parts=()
+while IFS= read -r b64; do
+  [[ -n "$b64" ]] && mapfile_parts+=("$b64")
+done < <(python3 -c "
+import json, os, re, sys
 d = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].strip() else {}
-text = d.get('last_assistant_message', '')
-# 过短的纯西文确认（如 true/ok/done）不播报
-if text and len(text) <= 5 and not re.search(r'[一-鿿]', text):
-    text = ''
-print(text if text else '')
+tid = str(d.get('turn_id') or '')
+tp  = d.get('transcript_path') or ''
+out, seen = [], set()
+if tp and tid and os.path.exists(tp):
+    try:
+        for line in open(tp, encoding='utf-8', errors='replace'):
+            line = line.strip()
+            if not line: continue
+            try: rec = json.loads(line)
+            except Exception: continue
+            if not isinstance(rec, dict): continue
+            for node in (rec.get('payload'), rec):      # 包法随版本变（payload 摊平与否）
+                if not isinstance(node, dict): continue
+                if str(node.get('turn_id') or '') != tid: continue
+                item = node.get('item')
+                if not isinstance(item, dict): break
+                if 'agentmessage' not in str(item.get('type') or '').replace('_','').lower(): break
+                iid = str(item.get('id') or '')
+                if iid and iid in seen: break           # 同一条消息落盘两次时只取一次
+                if iid: seen.add(iid)
+                s = ''.join(c['text'] for c in (item.get('content') or [])
+                            if isinstance(c, dict) and isinstance(c.get('text'), str) and c['text']).strip()
+                if s: out.append(s)
+                break
+    except Exception:
+        pass
+if not out:
+    last = str(d.get('last_assistant_message') or '').strip()
+    if last: out = [last]
+import base64
+for t in out:
+    # 过短的纯西文确认（如 true/ok/done）不播报
+    if len(t) <= 5 and not re.search(r'[一-鿿]', t): continue
+    sys.stdout.write(base64.b64encode(t.encode('utf-8')).decode('ascii') + chr(10))
 " "$payload" 2>/dev/null)
 
-[[ -z "${text// }" ]] && echo '{"continue": true}' >&3 && exit 0
-args=(speak --source "$source")
-[[ -n "$grp" ]] && args+=(--group "$grp")
-ivox "${args[@]}" -- "$text" 2>/dev/null 3>&- &
+parts=()
+for b64 in "${mapfile_parts[@]}"; do
+  t=$(printf '%s' "$b64" | /usr/bin/base64 -D 2>/dev/null)
+  [[ -n "${t// }" ]] && parts+=("$t")
+done
+
+((${#parts[@]})) || { echo '{"continue": true}' >&3; exit 0; }
+# 一条 assistant 消息 = 一页：逐条入队，page 号用序号（**只作同页线索**，
+# 真页号由助理自编）。同 group → 助理认得它们是同一摞，Ctrl+1 能整摞掀。
+#
+# **必须串行，不能 `&` 并发**：并发时各次 socket 到达播报站的先后不确定，
+# 「我先看看」可能排在「改完了」后面——顺序一乱，播出来的东西就自相矛盾。
+# 每条是一次 O(ms) 的 socket 短连，Stop 的 timeout 是 30s，串行完全不构成负担。
+for i in "${!parts[@]}"; do
+  args=(speak --source "$source")
+  [[ -n "$grp" ]] && args+=(--group "$grp" --page "p$i")
+  ivox "${args[@]}" -- "${parts[$i]}" 2>/dev/null 3>&-
+done
 echo '{"continue": true}' >&3
