@@ -484,6 +484,7 @@ const cases = [
   // ───────── E3：轮次隔离，旧轮迟到帧不反杀 ─────────
   {
     name: "E3-turn-isolation",
+    needsDebug: true,
     async run(ctx) {
       const tA = ctx.turn;
       const A = await ctx.openStream(tA);
@@ -716,6 +717,7 @@ const cases = [
   {
     name: "A-tail-audio-not-cut",
     needsAudio: true,
+    needsDebug: true,
     async run(ctx) {
       const sentences = [
         "第一句话用来建立连续播放的节奏和铺垫。",
@@ -971,9 +973,70 @@ const cases = [
       ctx.noBad();
     },
   },
+
+  // ───────── R1：誊清员崩了，这一块作废、队列继续、监督者重拉（v6.0.0 的招牌能力）─────────
+  // 为什么必须有这条：v6.0.0 把 MLX 隔离进子进程的全部理由就是「崩了不带走队列」。
+  // 那次验收是**手工做的一次**——手工验收会腐烂：哪天重构动了 TSPRemote 的泵逻辑，
+  // 或者上游修好 MLX 让同步路径回来了，这块能力悄悄没了都不会有人知道。
+  // 判据三件套，缺一不可：作废（有明确边界，不留半句）、继续（后面的内容照播）、
+  // 自愈（监督者重拉，否则这一次过了、下次崩了就永久哑掉）。
+  // 刻意不调 noBad()：崩溃导致的「这一块作废」正是本用例预期的现象，
+  // 而 CASE_BAD 里的 /TTS 合成失败/ 会把它当成产品缺陷。
+  {
+    name: "R1-scribe-crash-voids-block-queue-continues",
+    async run(ctx) {
+      const g = `rc${ctx.turn}`;
+      // 内容要够长，保证合成进行到一半时还有下手的时间
+      await ctx.speakGrouped(g, "R1P0",
+        "第一段内容，需要足够长，好在合成进行到一半时把誊清员杀掉，看看这一块会不会被作废、后面的内容还能不能接着播出来。".repeat(3));
+      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "未开始合成，没机会动手");
+      await sleep(300);
+      ctx.check(killScribe(), "没找到誊清员进程（它不叫 tts --serve？）");
+
+      const voided = await ctx.log.waitFor(/誊清中断，这一块作废/, { sinceTs: ctx.t0, timeout: 25000 });
+      ctx.check(!!voided, "杀掉誊清员后没出现「这一块作废」——半句可能被当完整送进播报员了");
+
+      // 监督者必须重拉，否则这一次过了、下次崩掉就永久哑
+      const relaunched = await ctx.log.waitFor(/已拉起誊清员/,
+        { sinceTs: voided ? voided.ts : ctx.t0, timeout: 40000 });
+      ctx.check(!!relaunched, "监督者没有重拉誊清员");
+
+      // 队列必须继续：崩溃之后送来的内容还得能播出来
+      await ctx.speakGrouped(g, "R1P1", "崩溃之后送来的内容，必须照常播出来。");
+      const settled = await ctx.settled(90000);
+      ctx.check(!!settled, "崩溃后队列没能收尾");
+
+      const after = ctx.log.grep(/TTS 合成开始/, voided ? voided.ts : ctx.t0);
+      ctx.check(after.length >= 1, `重拉之后没有任何新的合成（队列没恢复，共 ${after.length} 次）`);
+    },
+  },
 ];
 
-// 无音频设备探测：发一短句，出现引擎启动失败/drain 超时即视为无设备
+// 杀掉誊清员：SIGKILL，不给它收尾的机会——模拟的正是 MLX 那次 SIGTRAP。
+// 先 pgrep 确认存在、再 pkill：两者都只靠匹配进程，而自检不知道是谁拉起的它
+// （可能是 LaunchAgent，也可能是上一轮留下的孤儿）。分两步是为了区分
+// 「杀了」与「压根没有」——后者说明环境不对，不该报成产品缺陷。
+function killScribe() {
+  try {
+    execFileSync("/usr/bin/pgrep", ["-f", "tts --serve"], { stdio: "ignore" });
+  } catch {
+    return false;                       // 没有匹配的进程
+  }
+  try {
+    execFileSync("/usr/bin/pkill", ["-9", "-f", "tts --serve"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+// 无音频设备探测：发一短句，出现引擎启动失败/drain 超时即视为无设备。
+// 顺带探 DEBUG 可见性：同一条探针句若在窗口里留下了 DEBUG 行，说明日志门限放行了。
+// 判据不能看 ensureDebugLogging 自己的返回值——那只反映 launchctl 切没切成，
+// 而自检经常**附加到手动起的 daemon** 上（launchctl kickstart 对它无效），
+// 那个 daemon 本来可能就是对的级别。只有实测才算数（2026-10-20 踩过：非 debug 的
+// daemon 上 E3 与 A-tail 假红，报的是「入队块数(0)」这种看着像产品坏了的数）。
 async function probeAudio(log) {
   const t0 = nowMs();
   await speak("probe", "设备探测短句。");
@@ -988,7 +1051,11 @@ async function probeAudio(log) {
   }
   // 等收尾，避免污染后续窗口
   await waitSettled(log, t0, { timeout: 15000 });
-  return settled && !bad;
+  // 判据取 DEBUG-only 的**正文**，不能取「[DEBUG]」这种级别字样：日志的级别标记在行首，
+  // 解析出来就没了，msg 字段里根本没有它——拿它当判据会永远判成 invisible（第一版就栽在这，
+  // debug 级下也把用例全 skip 了）。这些正文只有门限放到 debug 才会出现。
+  const debugVisible = log.grep(/队列状态:|请求原始内容|清洗后内容/, t0).length > 0;
+  return { audio: settled && !bad, debug: debugVisible };
 }
 
 async function main() {
@@ -1013,8 +1080,11 @@ async function main() {
   console.log(`# iVox tts-check  run=${runId} daemon=${h.version} engine=${h.engine} model=${h.model}`);
 
   console.log("# 探测音频设备 ...");
-  const hasAudio = await probeAudio(runnerLog);
+  const probe = await probeAudio(runnerLog);
+  const hasAudio = probe.audio;
+  const debugVisible = probe.debug;
   console.log(`# audio=${hasAudio ? "present" : "absent（播放时序用例将 skip）"}`);
+  console.log(`# debug=${debugVisible ? "visible" : "invisible（依赖 DEBUG 行的用例将 skip）"}`);
 
   const picked = cases.filter((c) => !FILTER || FILTER.test(c.name));
   let n = 0;
@@ -1023,6 +1093,13 @@ async function main() {
     if (c.needsAudio && !hasAudio) {
       results.push({ name: c.name, status: "skip", ms: 0 });
       console.log(`ok ${n} ${c.name} # SKIP needs-audio`);
+      continue;
+    }
+    // 读不到 DEBUG 行就别跑依赖它的用例：假红比 skip 坏得多——skip 会被人看见，
+    // 假红会被当成产品缺陷去查半天。
+    if (c.needsDebug && !debugVisible) {
+      results.push({ name: c.name, status: "skip", ms: 0 });
+      console.log(`ok ${n} ${c.name} # SKIP daemon 未开 DEBUG（以 IVOX_LOG_LEVEL=debug 重启后再跑）`);
       continue;
     }
     const r = await runCase(c);

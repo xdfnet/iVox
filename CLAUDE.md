@@ -176,14 +176,19 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLea
 测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config / Translation / **PlaybackSessionStory**（第 9 个，测摞的分段与墓碑归属）。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
 
 ```bash
-make check-tts                      # 播报黑盒自检：压真实 daemon，20 个用例（需先 ivox on，模型就绪）
+make check-tts                      # 播报黑盒自检：压真实 daemon，21 个用例（需先 ivox on，模型就绪）
 make check-tts ARGS="-f tail"       # 只跑匹配用例；--strict 让 advisory 计入失败；--managed 自行重启守护进程
 touch /tmp/ivox-hook-muted          # ⚠️ 跑之前先落静音闸，见下
 trash /tmp/ivox-hook-muted          # 跑完提起
 ```
 
 `scripts/tts-check.mjs`（零依赖 Node，仅用 `node:` 内置模块）经 Unix socket 发流式帧、`GET /health` 探运行态、增量 tail `daemon.log` 断言：协议正确性、合成时长、轮次隔离、取消丢弃迟到帧、EOF 残尾、并行取消不拖垮在跑的轮（pi 复现）、停止哨兵作废在跑的轮、多轮交错时队首轮等块不得空转（`E8`）、密集打断压测、打断后活性、尾音完整（`needsAudio`，无设备自动 skip）。断言要数「队列状态」等 DEBUG 行，而 daemon 默认只留 INFO 及以上（`Logger` 的级别门限），所以脚本自己 `launchctl setenv IVOX_LOG_LEVEL=debug` + `kickstart` 重启 daemon，跑完 unset 环境变量——**这是它跟普通 `ivox on` 唯一的区别，别把它改回附加到已在跑的 daemon**（2026-10-17：日志门限一落地，`E3`/`A-tail` 两条靠 DEBUG 行吃饭的断言直接假红）。**它是排障工具，不是每次改动都要跑的回归**：日常改动用 `make test` + 单点验证（临时脚本压真实 socket、看 `daemon.log`）；只有正常播报出问题（没声音/卡住/串音/未收尾）时才用它定位。**但改播报队列核心（`PlaybackQueue` / `ConnectionHandler` 的收尾·打断·入队）时必须跑一次全量**——2026-10-16 踩过：三个用例悄悄腐烂成假绿（两条正则与日志格式失配、一条断言过严、一条被自检自己的噪声检测抓成 skip），全靠一次全量才暴露；修完全量 13/13。**2026-10-19 拆成三进程后又跑全量：19 pass / 0 fail / 1 advisory**；
-2026-10-20 审计补两条用例（`F-pcm-duration`、`S3-skip-stack-plain-stacks-are-separate`），现共 **20 条**。
+2026-10-20 审计补两条用例（`F-pcm-duration`、`S3-skip-stack-plain-stacks-are-separate`），同日补
+`R1`（誊清员崩了 → 该块作废 / 队列继续 / 监督者重拉，v6.0.0 的招牌能力，此前只有一次手工验收撑着），
+现共 **21 条**。
+**手动起的 daemon 必须以 `IVOX_LOG_LEVEL=debug` 起**，否则脚本切不动它的日志级别——它认得出
+DEBUG 不可见，会把靠 DEBUG 行吃饭的 `E3`/`A-tail` 降级为 skip 并写明原因（2026-10-20 加这道保护：
+原先只打一行警告就往下跑，那两条直接假红，报「入队块数(0)」这种看着像产品坏了的数）。
 唯一那条 advisory 是 `B-synthesis-leads-playback`（合成领先播放 3.7s ≈ 4s 高水位）——跨进程后
 预取余量变薄的已知代价，**不是回归，别去"修"**。
 
