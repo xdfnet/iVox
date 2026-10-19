@@ -47,6 +47,32 @@ final class GlobalKeyTap: @unchecked Sendable {
     private var shouldStop = false
     private let stateQueue = DispatchQueue(label: "com.user.ivox.keytap.state")
 
+    /// 同一组合键的冷却：窗口内只放行一次，防连点/手抖引发一串重复动作。
+    /// 按键各自的冷却互不相干：Cmd+D 的连点不会连带压住 Ctrl+2。
+    /// 只在 tap 线程读写（handle 独占它），无需加锁。
+    ///
+    /// 分档而非一刀 1 秒，因为**重复一次的意义各键不同**：
+    /// - 划词翻译：抢在 `TranslationCoordinator` 的提交点之前就已后写胜出（连按是
+    ///   「我换了个选区」，本就该让位给最新那次），压太久反而挡路，只留 0.2s 挡连击
+    /// - 三个打断键：翻页/掀摞本来就该能连按，给 0.3s
+    /// - 其余（开终端、复制路径）：一次就是一次，给足 1s
+    private static func cooldown(for hotKey: HotKey) -> TimeInterval {
+        switch hotKey {
+        case .translate: return 0.2
+        case .escInterrupt, .skipBucket, .skipPage: return 0.3
+        default: return 1.0
+        }
+    }
+    private var lastFireAt: [HotKey: TimeInterval] = [:]
+
+    /// 右⌘/⌃ 语音的**长按阈值**：按下不足这么久就松开，判为误触（很多 App 用右⌘，
+    /// 碰一下就打断播报 + 暂停音乐 + 开麦代价太大），什么都不发。
+    /// 到点才按下沿发出 onModifier(true)；阈值内松开的按下沿直接丢弃。
+    private static let modifierHold: TimeInterval = 0.15
+    /// 正被按住的那个修饰键。fired=已过阈值、按下沿已发出。
+    /// tap 线程写、主队列的延时回调也写（阈值到点要记 fired），故走 stateQueue 串一下。
+    private var pendingModifier: (keyCode: UInt16, fired: Bool)?
+
     /// 键盘监听是否真的在跑；等待权限时为 false
     var isMonitoring: Bool { stateQueue.sync { eventTap != nil } }
 
@@ -73,6 +99,7 @@ final class GlobalKeyTap: @unchecked Sendable {
             runLoopSource = nil
             loopToStop = runLoop
             runLoop = nil
+            pendingModifier = nil
             thread?.cancel()
             thread = nil
         }
@@ -155,7 +182,7 @@ final class GlobalKeyTap: @unchecked Sendable {
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             guard keyCode == 0x36 || keyCode == 0x3E else { return false }
             let isDown = event.flags.contains(keyCode == 0x36 ? .maskCommand : .maskControl)
-            onModifier?(UInt16(keyCode), isDown)
+            handleModifier(keyCode: UInt16(keyCode), isDown: isDown)
             return false
 
         case .keyDown:
@@ -168,6 +195,14 @@ final class GlobalKeyTap: @unchecked Sendable {
             guard let binding = Self.bindings.first(where: {
                 $0.keyCode == keyCode && $0.modifiers == flags
             }) else { return false }
+            let now = ProcessInfo.processInfo.systemUptime
+            let cooldown = Self.cooldown(for: binding.hotKey)
+            if let last = lastFireAt[binding.hotKey], now - last < cooldown {
+                Log.debug("热键冷却中，忽略本次重复触发（剩余 "
+                          + String(format: "%.1f", cooldown - (now - last)) + "s）")
+                return true   // 冷却中：仍然吃掉，别漏给目标 app；但不重复执行
+            }
+            lastFireAt[binding.hotKey] = now
             onHotKey?(binding.hotKey, event.location)
             return true
 
@@ -177,6 +212,38 @@ final class GlobalKeyTap: @unchecked Sendable {
     }
 
     // MARK: - 组合热键表（keyCode 用 ANSI 布局）
+
+    /// 右⌘/⌃ 的按下沿延迟到「确实按住了」才发。跑在 tap 线程，逻辑只有两个分支。
+    private func handleModifier(keyCode: UInt16, isDown: Bool) {
+        guard isDown else {
+            // 松开：只有按下沿已经发出去了才通知结束录音；阈值内松开的当没发生过。
+            let pending = stateQueue.sync { () -> (keyCode: UInt16, fired: Bool)? in
+                defer { pendingModifier = nil }
+                guard let p = pendingModifier, p.keyCode == keyCode else { return nil }
+                return p
+            }
+            guard let pending else { return }
+            if pending.fired { onModifier?(keyCode, false) }
+            return
+        }
+        // 已经在按住另一个修饰键（或重复按下沿）：不重复起计时
+        let claimed = stateQueue.sync { () -> Bool in
+            guard pendingModifier == nil else { return false }
+            pendingModifier = (keyCode, false)
+            return true
+        }
+        guard claimed else { return }
+        DispatchQueue.main.asyncAfter(deadline: .now() + Self.modifierHold) { [weak self] in
+            guard let self else { return }
+            let fire = self.stateQueue.sync { () -> Bool in
+                guard let p = self.pendingModifier,
+                      p.keyCode == keyCode, !p.fired else { return false }
+                self.pendingModifier = (keyCode, true)
+                return true
+            }
+            if fire { self.onModifier?(keyCode, true) }
+        }
+    }
 
     /// 精确匹配时只比较这四个标准修饰键位（`CGEventFlags` 没有 macOS 上
     /// `NSModifierFlags.deviceIndependentFlagsMask` 的对应常量，手动取值）

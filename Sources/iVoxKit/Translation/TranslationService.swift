@@ -15,6 +15,10 @@ public actor TranslationService {
     private let proxySession: URLSession?
     /// 一旦确认「直连不通、代理可用」就记住，后续直接走代理（省掉每次十几秒的探测）
     private var preferProxy = false
+    /// **只留最近一次**成功译文。同一段文字反复划、反复试，不该反复花钱。
+    private var lastSuccess: (key: String, result: TranslationResult)?
+    /// 同一段文字**正在进行中**的那一次：后到的直接等它的结果，不另发一条请求。
+    private var inFlight: (key: String, task: Task<TranslationResult, Never>)?
 
     public init(config: TranslationConfig, session: URLSession = .shared) {
         self.config = config
@@ -22,9 +26,37 @@ public actor TranslationService {
         self.proxySession = Self.makeProxySession(config.proxyURL)
     }
 
+    /// 入口：先问缓存、问在途，都不中才真的发请求。
+    ///
+    /// 两层省的是不同的钱：**在途去重**省掉「同一段文字被重复按下时并发的第二次请求」，
+    /// **最近一次缓存**省掉「译完又按一次」的重来。命中缓存照样把译文返回给调用方，
+    /// 朗读照旧——用户想听的是译文，缓存省的是生成，不是他的耳朵。
+    public func translate(_ text: String) async -> TranslationResult {
+        let key = cacheKey(text)
+        if let hit = lastSuccess, hit.key == key {
+            Log.debug("翻译: 命中最近一次缓存（\(text.count) 字，不再发请求）")
+            return hit.result
+        }
+        if let f = inFlight, f.key == key {
+            Log.info("翻译: 同一段文字正在翻，等它这一次的结果（不重复发请求）")
+            return await f.task.value
+        }
+        let task = Task { await self.dispatchWithFallback(text) }
+        inFlight = (key, task)
+        let result = await task.value
+        if case .success = result { lastSuccess = (key, result) }
+        if inFlight?.key == key { inFlight = nil }
+        return result
+    }
+
+    /// 缓存键：原文 + provider/model。配置能切翻译后端，切了就不该拿旧译文顶账。
+    private func cacheKey(_ text: String) -> String {
+        "\(config.provider.rawValue)|\(config.model)|\(text)"
+    }
+
     /// 直连优先；不通且配了兜底代理就走代理，并把结论记住。
     /// 两者都失败时报**直连**的错误（那更能说明问题，代理错误多半只是它的下游症状）。
-    public func translate(_ text: String) async -> TranslationResult {
+    private func dispatchWithFallback(_ text: String) async -> TranslationResult {
         // 上次已确认要走代理：直接上，省一轮探测
         if preferProxy, let proxySession {
             let cached = await dispatch(text, session: proxySession, timeout: config.timeoutSeconds)

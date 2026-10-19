@@ -24,13 +24,14 @@ import iVoxKit
 @MainActor
 final class QuickActionsService {
     private static let ghosttyApp = URL(fileURLWithPath: "/Applications/Ghostty.app")
+    private static let ghosttyBundleID = "com.mitchellh.ghostty"
 
     func handle(_ hotKey: GlobalKeyTap.HotKey, at location: CGPoint) async {
         switch hotKey {
         case .translate:
             break   // 不属于本域；Daemon 分派时已排除，这里只是穷举
         case .openTerminal:
-            await openTerminal(running: nil)
+            await openTerminalOrFocus()
         case .openTerminalClaude:
             await openTerminal(running: "claude")
         case .openTerminalCodex:
@@ -47,6 +48,20 @@ final class QuickActionsService {
     }
 
     // MARK: - 开终端
+
+    /// 不带命令的 Opt+Z：**Ghostty 已经在跑就把它叫到前面，不再开新窗口**。
+    /// 连按五下开五个终端是最明显的「后面干活的压力」，而这一档本来就没命令要执行，
+    /// 复用没有副作用。代价：不再保证落在 Finder 当前目录（已在跑的窗口目录未知，
+    /// 取它要向 Ghostty 要 Automation 授权，不值当）——需要指定目录用 ⌘⇧↩ 新开。
+    private func openTerminalOrFocus() async {
+        if let app = NSRunningApplication.runningApplications(
+            withBundleIdentifier: Self.ghosttyBundleID).first {
+            let ok = app.activate(options: [.activateAllWindows])
+            Log.info("QuickActions: Ghostty 已在运行，\(ok ? "已聚焦" : "聚焦失败")（不再开新窗口）")
+            return
+        }
+        await openTerminal(running: nil)
+    }
 
     private func openTerminal(running command: String?) async {
         guard let dir = finderPath(preferContainer: true), !dir.isEmpty else {

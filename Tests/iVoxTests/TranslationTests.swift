@@ -124,3 +124,76 @@ final class TranslationProxySessionTests: XCTestCase {
         XCTAssertNil(TranslationService.makeProxySession("http://host-without-port"))
     }
 }
+
+// MARK: - 重复翻译不重复干活
+
+/// 数请求数的假服务：主通道回一个固定的合法译文，让「有没有真的发第二次请求」可断言。
+private final class CountingURLProtocol: URLProtocol {
+    nonisolated(unsafe) static var requestCount = 0
+    /// 让第一个请求慢一点，好让「在途去重」那条测试真的撞上并发窗口
+    nonisolated(unsafe) static var delaySeconds: Double = 0
+
+    override class func canInit(with request: URLRequest) -> Bool { true }
+    override class func canonicalRequest(for request: URLRequest) -> URLRequest { request }
+
+    override func startLoading() {
+        Self.requestCount += 1
+        let finish = { [weak self] in
+            let body = Data(#"["译"]"#.utf8)
+            self?.client?.urlProtocol(self!, didReceive: HTTPURLResponse(
+                url: self!.request.url!, statusCode: 200, httpVersion: nil,
+                headerFields: ["Content-Type": "application/json"])!, cacheStoragePolicy: .notAllowed)
+            self?.client?.urlProtocol(self!, didLoad: body)
+            self?.client?.urlProtocolDidFinishLoading(self!)
+        }
+        if Self.delaySeconds > 0 {
+            DispatchQueue.global().asyncAfter(deadline: .now() + Self.delaySeconds, execute: finish)
+        } else {
+            finish()
+        }
+    }
+
+    override func stopLoading() {}
+}
+
+final class TranslationCacheTests: XCTestCase {
+    override func setUp() {
+        super.setUp()
+        CountingURLProtocol.requestCount = 0
+        CountingURLProtocol.delaySeconds = 0
+    }
+
+    private func makeService() -> TranslationService {
+        let cfg = URLSessionConfiguration.ephemeral
+        cfg.protocolClasses = [CountingURLProtocol.self]
+        return TranslationService(config: .init(), session: URLSession(configuration: cfg))
+    }
+
+    /// 同一段文字译两次，只该发一次请求；换一段就该再发一次（缓存只留最后一次）。
+    func testSameTextTwiceSendsOneRequest() async {
+        let service = makeService()
+        let a = await service.translate("你好")
+        let b = await service.translate("你好")
+        XCTAssertEqual(a.text, "译")
+        XCTAssertEqual(b.text, "译")
+        XCTAssertEqual(CountingURLProtocol.requestCount, 1)
+
+        _ = await service.translate("另一段")
+        XCTAssertEqual(CountingURLProtocol.requestCount, 2)
+        // 换回第一段：缓存里已经只剩「另一段」了，该重发
+        _ = await service.translate("你好")
+        XCTAssertEqual(CountingURLProtocol.requestCount, 3)
+    }
+
+    /// 同一段文字在途时再按一次 → 等同一次的结果，不另发请求。
+    func testConcurrentSameTextSharesOneRequest() async {
+        CountingURLProtocol.delaySeconds = 0.3
+        let service = makeService()
+        async let first = service.translate("同时按下")
+        async let second = service.translate("同时按下")
+        let (r1, r2) = await (first, second)
+        XCTAssertEqual(r1.text, "译")
+        XCTAssertEqual(r2.text, "译")
+        XCTAssertEqual(CountingURLProtocol.requestCount, 1)
+    }
+}
