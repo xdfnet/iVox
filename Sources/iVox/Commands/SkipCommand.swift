@@ -6,23 +6,23 @@ import iVoxKit
 
 /// 手动打断三档的命令行入口，与三个热键落到完全相同的那几个方法（热键只多一层按键识别）。
 /// 存在的理由：不按热键也能验证与压测打断，也给排查留一个"从外面喊停"的开关。
-/// 三个参数与三个快捷键一一对应；一个都不给按「轻」那档，即与 Ctrl+2 同义。
+/// 三个参数与三个快捷键一一对应；一个都不给按「轻」那档，即与 Ctrl+Esc 同义。
 struct SkipCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "skip",
-        abstract: "手动打断三档：--page 读下一页（Ctrl+2）/ --stack 跳整摞（Ctrl+1）/ --all 全场闭嘴（Ctrl+Esc）"
+        abstract: "手动打断三档：--page 读下一页（Ctrl+Esc）/ --stack 跳整摞（Ctrl+1）/ --all 全场闭嘴（Ctrl+2）"
     )
 
-    /// 读下一页，对应 Ctrl+2
-    @Flag(name: .long, help: "读下一页：丢掉当前页剩下的块（Ctrl+2；缺省档）")
+    /// 读下一页，对应 Ctrl+Esc
+    @Flag(name: .long, help: "读下一页：丢掉当前页剩下的块（Ctrl+Esc；缺省档）")
     var page = false
 
     /// 跳整摞，对应 Ctrl+1
     @Flag(name: .long, help: "跳整摞：丢掉正在播的这一摞（含其后各页）（Ctrl+1）")
     var stack = false
 
-    /// 全场闭嘴，对应 Ctrl+Esc
-    @Flag(name: .long, help: "全场闭嘴：停当前 + 清空排队（Ctrl+Esc）")
+    /// 全场闭嘴，对应 Ctrl+2
+    @Flag(name: .long, help: "全场闭嘴：停当前 + 清空排队（Ctrl+2）")
     var all = false
 
     func validate() throws {

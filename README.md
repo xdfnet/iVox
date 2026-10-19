@@ -24,7 +24,7 @@
 | 🎙️ | **语音输入** | 按住说话，松开识别粘贴，浮窗实时显示波形 | 右 ⌘ / 右 ⌃ |
 | 📖 | **划词翻译** | 选中即译，屏幕下方歌词式浮窗出译文并可朗读 | `Cmd+D` |
 | ⚡ | **快速操作** | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制路径 | `Opt+Z` · `Opt+A` `Opt+X` `Opt+Q` · `Opt+C` |
-| 💬 | **微信桥接** | 微信消息直通常驻 Claude，回复自动播报并转发回微信 | `ivox wechat setup` |
+| 💬 | **微信桥接** | 微信消息直通常驻 Claude，回复以文字转发回微信（**不念**） | `ivox wechat setup` |
 
 ---
 
@@ -41,7 +41,7 @@
 curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-binary.sh | bash
 ```
 
-需要编译？克隆后 `make` 即可（需 Swift 6.4 开发快照 + Xcode 26+）。
+需要编译？克隆后 `make` 即可（需 Xcode 26+，自带 Swift 6.4）。
 
 ## 使用
 
@@ -63,10 +63,11 @@ ivox update                 # 检查 GitHub 最新版并自动升级（备份旧
 
 ```bash
 curl -s 127.0.0.1:8888/health
-# {"status":"ok","version":"4.0.0","model":"Qwen3-TTS-…","engine":"ready","queued":0,"playing":false}
+# {"status":"ok","version":"5.3.0","model":"Qwen3-TTS-…","engine":"ready","queued":0,"playing":false}
 ```
 
-**微信**：配置后微信消息自动注入 Claude Code，AI 回复通过 TTS 播报并转发回微信。
+**微信**：配置后微信消息自动注入 Claude Code，AI 回复以**文字**转发回微信，不经 TTS 播报——
+聊天窗口里已经有文字了，再念一遍是打扰（裁决见 `docs/playback/purpose.md`）。
 
 ```bash
 ivox wechat setup              # 扫码登录微信机器人的 ilink bot
@@ -87,7 +88,7 @@ ivox wechat status             # 查看配置状态
 ## 开发
 
 ```bash
-make build     # release 编译（自动使用 Swift 6.4 开发快照）
+make build     # release 编译（自动使用 Xcode 26 自带的 Swift 6.4）
 make run       # 编译 + 前台调试
 make update    # 停服 + 编译 + 部署 + 启动守护进程
 make test      # 运行测试（iVoxKit 纯逻辑，秒级）
@@ -95,9 +96,11 @@ make check-tts # 播报黑盒自检（压真实 daemon，发版前手动跑）
 make clean     # 清除 .build
 ```
 
-> `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **13 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
+> `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **20 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
 
-> 需要 Swift 6.4 开发快照（`swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`）。早期快照的编译器崩溃已在该版本修复，详见 [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)。
+> 构建用 `xcrun --toolchain swift-latest swift`，该 toolchain 即 Xcode 26 自带的 Swift 6.4。
+> 曾需要 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`（早期快照的编译器崩溃，见
+> [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)），现已不需要。
 
 ## 配置
 
@@ -156,7 +159,7 @@ pi 扩展（逐句流式）──────────┴→ Unix Socket → 
 ## 依赖
 
 - macOS 14+ / Apple Silicon
-- Swift 6.4 开发快照 / Xcode 26+
+- Xcode 26+（自带 Swift 6.4）
 - [Claude Code](https://claude.com/claude-code) CLI — 微信常驻 Agent（Swift 经 stdio 直连）
 - [Ghostty](https://ghostty.org) — 终端模拟器；快速操作的「开终端跑 `claude`/`codex`/`pi`」（`Opt+A`/`Opt+X`/`Opt+Q`）用它（`brew install --cask ghostty`）
 - [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) — 本地 MLX 推理

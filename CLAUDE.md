@@ -163,7 +163,7 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLea
 测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
 
 ```bash
-make check-tts                      # 播报黑盒自检：压真实 daemon，19 个用例（需先 ivox on，模型就绪）
+make check-tts                      # 播报黑盒自检：压真实 daemon，20 个用例（需先 ivox on，模型就绪）
 make check-tts ARGS="-f tail"       # 只跑匹配用例；--strict 让 advisory 计入失败；--managed 自行重启守护进程
 touch /tmp/ivox-hook-muted          # ⚠️ 跑之前先落静音闸，见下
 trash /tmp/ivox-hook-muted          # 跑完提起

@@ -52,14 +52,18 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     case speech
     /// Cmd+D 划词翻译（用户主动朗读，speakUserInitiated）
     case dict
-    /// Ctrl+Esc 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，静音播报即可。
+    /// Ctrl+2 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，静音播报即可。
     /// **不碰背景音乐**——借还音乐是右⌘ 录音那条的事（见文件头）
     case esc
     /// Ctrl+1 掀摞：丢正在播的这一**摞**（一次回复，连同后来的页），从下一摞接着播。
     /// 与 `.esc` 的分工——那个全场闭嘴，这个只掀当前、后面的照播。
     case skip
-    /// Ctrl+2 掀页：丢掉当前这一**页**剩下的块，从下一页接着念。
+    /// Ctrl+Esc 掀页：丢掉当前这一**页**剩下的块，从下一页接着念。
     /// 手动打断三档里的「轻」（`.skip` = 中：掀整摞；`.esc`/`.speech` = 掀桌：全掀）。
+    ///
+    /// ⚠️ 键位对照以 `GlobalKeyTap.bindings` 与 `Daemon.setUpHotKeys()` 为准：
+    /// Ctrl+Esc 掀页 · Ctrl+1 掀摞 · Ctrl+2 全掀。本枚举曾把前两者写反，
+    /// 文档跟着抄错了两份（`requirements.md` / `queue.md`），照错注释抄会再漂回去。
     case skipPage
     /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
     case shutdown
