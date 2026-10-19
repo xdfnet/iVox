@@ -446,8 +446,9 @@ actor PlaybackSession {
         lastActiveSource = source
     }
 
-    /// 这一摞说完了（Stop 钩子 / `{end}`）：盖印，**不立墓碑**——
-    /// 「说完了」不等于「该轮已死」，同一摞的页可能还在路上。
+    /// 这一摞说完了（Stop 钩子 / `{end}`）：盖印 + **立墓碑**。
+    /// Stop 之后不会有新增量（Claude 已回复完毕），墓碑只拦「后续不该再来的增量」，
+    /// 不丢在播的块（墓碑命中的是入口的 `appendToStack`/`appendPlain`，跟当前播放无关）。
     @discardableResult
     func sealTurn(_ id: String) -> Bool {
         var hit = false
@@ -457,6 +458,7 @@ actor PlaybackSession {
         for i in front.indices where front[i].turnID == id {
             front[i].sealed = true; hit = true
         }
+        if hit { bury(id) }
         if hit { signal() }
         return hit
     }

@@ -248,7 +248,7 @@ actor PlaybackQueue {
 
     /// 收尾指定的那一摞（Stop 钩子按 `session_id` 反查出的 `turn_id`）。**日常收尾的主力就是它**——
     /// Claude 一说"这轮完了"，字幕立刻归还，不必等空闲宽限。
-    /// 只盖印、**不立墓碑**：Stop 说"我说完了"不等于该轮已死（同一摞的页可能还在路上）。
+    /// 盖印 + 立墓碑：Stop 之后无增量，墓碑拦住该摞后续再来（实际不会来，是兜底）。
     func finishTurn(_ id: String) async {
         Log.info("收尾信号（这一摞说完了）: turn=\(id)")
         await session.sealTurn(id)
