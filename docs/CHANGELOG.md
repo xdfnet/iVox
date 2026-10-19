@@ -1,6 +1,11 @@
 # iVox 开发日志
 
-## 未发布 — 2026-10-19
+## v6.0.0 — 2026-10-20
+
+**破坏性变更**：播报合成从「主进程内 MLX」改为「独立誊清员子进程」——`ivox serve` 不再自己
+加载模型，多出一个由它 spawn 的 `ivox tts --serve` 进程；日志从 1 份变 3 份；codex 播报链路删除。
+升级若靠 `install-binary.sh` / `ivox upgrade`，新版本会带起子进程，无需手工操作。
+
 
 - **删掉 codex 的播报链路，只留 Claude 与 pi** — codex 自身不能分页，一次输入只能整段搬一次
   （`Stop` 时从 rollout jsonl 按 `turn_id` + `phase == FinalAnswer` 挑一条），听着像念日志而不
