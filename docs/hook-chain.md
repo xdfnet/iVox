@@ -160,14 +160,20 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - 不需要媒体控制时可设置 `mediaControl.enabled = false`
 - 只有 play/pause/next/prev 免权限；音量 / 静音 / 方向键 / 锁屏要「设备控制与数据访问」（`MediaHTTPServer` 对这几个动作会做权限校验）
 
-### 8. TTSEngine
+### 8. 誊清员 — 合成引擎（跨进程）
 
-`Sources/iVox/Playback/TTSEngine.swift`
+主进程侧 `Sources/iVox/Playback/TSPRemote.swift`，子进程侧 `TTSServer.swift` +
+`TTSEngine.swift`（`ivox tts --serve`）。
 
-- 调用 MLX 本地模型：Qwen3-TTS-12Hz-1.7B-Base-8bit
-- **纯本地推理，不上传任何数据**
-- 流式生成 PCM chunk，间隔由 `tts.streamingInterval` 控制
-- 按模型采样率重采样到 `tts.outputSampleRate`，再转为 int16 PCM
+- 模型：Qwen3-TTS-12Hz-1.7B-Base-8bit，**纯本地推理，不上传任何数据**
+- **默认是另一个 iVox 进程**（Unix socket + `StreamFrame` 长度帧）——因为 MLX 崩了修不动，
+  把会炸的那一层圈出去；`IVOX_TTS=local` 可退回进程内 `TTSEngine`，仅供调试对照
+- `TSPRemote` 兼监督者：先问 socket 再问 child，断了自动重拉；崩溃验收见
+  [`docs/playback/queue.md`](playback/queue.md)
+- 流式生成 PCM chunk，间隔由 `tts.streamingInterval` 控制；按模型采样率重采样到
+  `tts.outputSampleRate`，再转为 int16 PCM
+- **块号 `seq` 是跨进程归因的主键**——两侧日志都打它，`~/.config/ivox/tts.log` 与
+  `daemon.log` 用它对时间线
 
 Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义和标点控制。
 
@@ -184,7 +190,18 @@ Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义
 
 ### 10. 日志
 
-`~/.config/ivox/daemon.log`
+**三份，各归各的角色**（分家是有意的：出事时「哪个文件里有现场，就是哪个角色的错」）：
+
+| 文件 | 谁写 | 看什么 |
+|---|---|---|
+| `~/.config/ivox/daemon.log` | 主进程 | 队列状态、打断、播放收尾（>5M 轮转） |
+| `~/.config/ivox/tts.log` | 誊清员 | 合成侧；某一块怎么没出来先看它 |
+| `~/.config/ivox/hook.log` | `hook.sh` | 每批增量的审计行（截前 40 字）。⚠️ 只增不减、无轮转 |
+
+崩溃现场：`crash.log`（主）/ `tts-crash.log`（誊清员），累计次数 `crash.count` /
+`tts-crash.count`。`daemon.log` 的关键行：
+
+> ⚠️ 段落里这些追踪点需要 `IVOX_LOG_LEVEL=debug` 才留得下（`Logger` 的级别门限）。
 
 关键追踪点：
 
@@ -201,7 +218,9 @@ TTS 合成作废（MLX 不响应中途取消…）[…]（打断来源=esc）  #
 播放收尾完成: 尾音=0.8s                    # 整轮播完
 ```
 
-打断来源与播报来源成对地出现在日志里：`TTS 合成开始 [<source>-<batch>]` 回答「谁在说」，`打断（来源=<origin>）` 与 `TTS 合成已取消/作废（打断来源=<origin>）` 回答「这次谁掐的」。`<origin>` 只可能是 `speech` / `esc` / `dict`（用户快捷键）——`stop:…` 停止帧与 `turn:…` 新轮已不再是打断来源，前者收到即忽略、后者只排队。
+打断来源与播报来源成对地出现在日志里：`TTS 合成开始 [<source>-<batch>]` 回答「谁在说」，`打断（来源=<origin>）` 与 `TTS 合成已取消/作废（打断来源=<origin>）` 回答「这次谁掐的」。`<origin>` 只可能是 `speech` / `esc` / `dict` / `skip` / `skipPage`（全来自用户快捷键或其
+命令行等价物 `ivox skip --page|--stack|--all`）——`stop:…` 停止帧与 `turn:…` 新轮已不再是打断来源，
+前者收到即忽略、后者只排队。键位对照**以 `GlobalKeyTap.bindings` 与 `Daemon.setUpHotKeys` 为准**。
 
 ## 代码签名
 

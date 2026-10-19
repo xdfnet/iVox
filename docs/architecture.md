@@ -49,7 +49,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
 
 | 能力域 | 目录 | 子系统 |
 |---|---|---|
-| 自动播报 | `Sources/iVox/Playback/` | TTSEngine、PlaybackQueue、AudioPlayer |
+| 自动播报 | `Sources/iVox/Playback/` | PlaybackQueue、PlaybackSession、AudioPlayer、CaptionPanel、**TTSProviding（契约）/ TSPRemote（远程引擎）/ TTSServer（誊清员）/ TTSTrace**、TTSEngine（仅 `IVOX_TTS=local`） |
 | 语音输入 | `Sources/iVox/SpeechInput/` | SpeechInput |
 | 划词翻译 | `Sources/iVox/Translation/` | Translation |
 | 快速操作 | `Sources/iVox/QuickActions/` | QuickActions |
@@ -144,7 +144,25 @@ Daemon (actor)
 - 支持 TTS 播报（`{source:claude,voice:wanwan}` 前缀）和 ASR 识别
 - 详见 [`docs/socket-api.md`](socket-api.md)
 
-### TTSEngine — 本地语音合成
+### 合成引擎 — `TTSProviding` 契约 + 两种实现
+
+**契约**：`Sources/iVox/Playback/TTSProviding.swift`（成员一律声明 `async`——按同步写会报
+"conformance crosses into actor-isolated code"）。队列与 `ConnectionHandler` 只认这个协议，
+不知道背后是进程内还是跨进程。
+
+| 实现 | 落点 | 谁在用 |
+|---|---|---|
+| `TSPRemote` | `Playback/TSPRemote.swift` | **默认**。Unix socket + `StreamFrame` 长度帧，兼**监督者**：先问 socket 再问 child，断了重拉 |
+| `TTSEngine` | `Playback/TTSEngine.swift` | `IVOX_TTS=local` 时退回进程内，仅供调试对照 |
+
+装点在 `Daemon.init`；`Daemon.cleanup` 显式 `stopChild()`，不留孤儿。子进程入口是
+`ivox tts --serve`（`Commands/TTSCommand.swift`），日志落 `~/.config/ivox/tts.log`。
+
+> **为什么默认走远程**：MLX 的 Metal 命令编码器析构时重复释放 GPU 命令队列 → SIGTRAP。
+> 上游未修、Swift 侧拿不到 encoder 引用，无从拦截。裁决与判据见
+> [`docs/playback/purpose.md`](playback/purpose.md) 2026-10-19 那条。
+
+### TTSEngine — 进程内 MLX 合成（`IVOX_TTS=local`）
 
 `Sources/iVox/Playback/TTSEngine.swift`
 
@@ -303,7 +321,8 @@ Daemon (actor)
 ```
 Daemon (actor)
   ├── WeChatPlatform (actor)   ← await 调用 WeChatClient (actor)
-  ├── PlaybackQueue (actor)    ← await 调度 TTSEngine / AudioPlayer（音频回调走 AudioPlayer 的 serialQueue）
+  ├── PlaybackQueue (actor)    ← await 调度 `any TTSProviding`（默认 TSPRemote，跨进程）
+  │                              与 AudioPlayer（音频回调走 AudioPlayer 的 serialQueue）
   ├── SocketServer (非 actor)  → 回调 Daemon 的 actor 隔离方法
   ├── SpeechInputService       → CGEvent 回调 → actor 方法
   └── CaptionPanel (@MainActor)→ 队列的音频回调 → Task { @MainActor } 更新浮窗
@@ -327,7 +346,8 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
    - cleanText() 清洗 Markdown + 行内噪音
 4. PlaybackQueue.enqueue(job) → PlaybackSession.appendPlain / appendGrouped
    → 追加到队尾；由收敛点 `pumpOrSettle()` 判断要不要起管道（**不是这里判断**）
-5. TTSEngine.synthesizeStream() → AsyncThrowingStream<Data>
+5. `engine.synthesizeStream()`（`any TTSProviding`，默认 TSPRemote 走 socket 到誊清员）
+   → AsyncThrowingStream<Data>；块号 `seq` 是跨进程归因的主键，两侧日志都打它
 6. AudioPlayer.write(chunk) → scheduleBuffer 连续排队（超高水位背压）；跨块不 drain。
    块带「句首」标记（`AudioChunk.sentenceText`）时，被设备读出即回报字幕（`onCaption`，见上节）
 7. 每块播完（或失败/取消）都 `session.commit(cursor)` **无条件前移**——不前移就会卡在同一块上死循环

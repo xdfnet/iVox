@@ -225,14 +225,14 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 
 权限状态由 daemon 进程自查，反映 daemon 自身授权（非调用方终端）。`ivox status` 即此接口的中文渲染。
 
-### 5. 跳过 — 手动打断三档
+### 5. 打断三档 — 掐 + 掀
 
 请求头，无 body：
 
 ```
-{type:skip,mode:page}    # 读下一页（同 Ctrl+Esc）：丢掉正在播的那一页剩下的块
-{type:skip,mode:stack}   # 跳整摞（同 Ctrl+1）：丢掉正在播的那一摞（含其后各页）
-{type:skip,mode:all}     # 全场闭嘴（同 Ctrl+2）：停当前 + 清空排队
+{type:skip,mode:page}    # 掐 + 掀页（同 Ctrl+Esc）：掐断在播的，丢掉这一页剩下的块
+{type:skip,mode:stack}   # 掐 + 掀摞（同 Ctrl+1）：掐断在播的，丢掉这一摞全部段并立墓碑拦后续增量
+{type:skip,mode:all}     # 掐 + 全掀（同 Ctrl+2）：停当前 + 清空排队
 ```
 
 无回复。`mode` 缺省按 `page`。**头的尾随 `\n` 是必需的路由依据**——没有它，服务端会把整条请求当传统整段播报体交给 `handleTTS`（`{type:stop}` 正踩在这条边界上：它现在发无换行裸串，走的就是 handleTTS 分支）。
@@ -247,7 +247,27 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 `ivox speak` 这类不带 `pageID` 的来源照样掀得掉整页，只是掀在同一摞内（它们通常一摞一页，
 于是掀页与掀摞等价）。
 
-### 6. CLI 工具
+### 6. 快速操作 — 五个快捷键的第二扇门
+
+请求头，无 body，**无回复**：
+
+```
+{type:quick,action:terminal}    # 开终端（Opt+Z）
+{type:quick,action:claude}      # 开终端跑 claude（Opt+A）
+{type:quick,action:codex}       # 开终端跑 codex（Opt+X）
+{type:quick,action:pi}          # 开终端跑 pi（Opt+Q）
+{type:quick,action:copy-path}   # 复制 Finder 选中路径（Opt=C）
+```
+
+动作**由 daemon 执行**，不在客户端做——它们要摸主线程。CLI 侧 `ivox quick <action>`：
+daemon 没在跑就**静默返回**（随手按的快捷键不该因为服务不在而报错）。
+`copy-path` 会调 AppleScript，与合成并发时曾把 MLX 撞崩过（2026-10-18 实测两次
+`mutex lock failed`）——有这条命令就能自动复现，不必手按热键。
+
+> ⚠️ 这里的 `codex` 是**开终端跑 codex**（QuickActions 能力域），与播报链路无关；
+> codex 的**播报**链路 2026-10-19 已整条删除。
+
+### 7. CLI 工具
 
 ```bash
 # TTS
@@ -260,11 +280,22 @@ ivox listen < 录音.wav                     # stdin
 ivox listen -f 录音.wav                    # 文件
 ivox listen -l en < english.wav           # 英文
 
-# 打断三档（三个参数对应三个快捷键，缺省 --page）
-ivox skip --page                           # 读下一页（Ctrl+Esc）
-ivox skip --stack                          # 跳过整摞（Ctrl+1）
-ivox skip --all                            # 全场闭嘴（Ctrl+2）
+# 打断三档（掐 + 掀；三个参数对应三个快捷键，缺省 --page）
+ivox skip --page                           # 掀页（Ctrl+Esc）
+ivox skip --stack                          # 掀摞（Ctrl+1）
+ivox skip --all                            # 全掀（Ctrl+2）
+
+# 快速操作（= {type:quick}，daemon 不在则静默返回）
+ivox quick terminal                        # Opt+Z
+ivox quick copy-path                       # Opt=C
+
+# 誊清员（一般由主进程 spawn，不用手敲）
+ivox tts --serve                           # 起合成子进程，监听 ~/.config/ivox/ivox-tts.sock
 ```
+
+**跨进程免责**：主进程与誊清员之间**不走本文件的接口**，走的是
+`[4B 小端 UInt32 N][N 字节 PCM]` 的长度帧（`iVoxKit/StreamFrame`），带一个自己的 socket
+`ivox-tts.sock`。本文件描述的是**跑腿的 → 主进程**这一段。
 
 ## 错误处理
 
