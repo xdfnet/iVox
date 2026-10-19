@@ -1,5 +1,34 @@
 # iVox 开发日志
 
+## v5.2.1 — 2026-10-19
+
+本版一句话：**止住一天 5 次的 MLX/Metal 崩溃，顺带把一直写不下来的崩溃栈修好。**
+
+### 崩溃本身（两个根因，都在 C++/Metal 层）
+
+- **打断后不再半途丢弃 MLX 流（治一天 5 次的崩溃）** — 2026-10-19 一天崩 5 次，两张脸：
+  `SIGABRT` 报 `IOGPUMetalCommandBuffer validate: failed assertion 'commit command buffer
+  with uncommitted encoder'`，`SIGSEGV` 崩在 AGXMetal `computeCommandEncoder` →
+  mlx `copy_gpu_inplace`，stderr 侧还有 `std::system_error: mutex lock failed`。
+  根因不是模型并发（世代闸门早就在），而是**取消时直接把 MLX 生成器扔掉**：encoder 里还压着
+  未 commit 的命令，析构即触发 GPU 断言。现在取消后停止 yield 但**继续把流读完**，等 GPU 自然
+  收口再抛 `CancellationError`，闸门时序不变。
+- **退出时不再撞 GPU 析构** — 另有一类崩在**进程退出**路上：栈底 `__cxa_finalize_ranges` →
+  mlx 全局 `CommandEncoder` 哈希表析构 → `end_encoding`，撞上未收口的 encoder 即 SIGSEGV。
+  现场是 `ivox restart` 恰好在合成进行中，整进程被这一下带崩（自检里连着几个用例 ECONNREFUSED）。
+  收尾完成后刷盘 `_exit(0)`，跳过静态析构。
+- **`crash.log` 从此不再恒为 0 字节** — 处理器用 `String.write(toFile:)` 清空记录，那是
+  「写临时文件 + rename」，换掉了 inode；而 fd 在此之前就已打开，指向的是一个已经没人看见的
+  孤儿 inode，于是**每次崩溃的完整调用栈都写进了虚空**（日志里那句「完整栈见 crash.log」
+  指了个空文件）。现在顺序倒过来：先报走上次记录、用 `ftruncate` 原地截断，再打开 fd。
+- **崩溃编号跨重启累计** — 计数记在 `~/.config/ivox/crash.count`，不再每次重启都从 `#1` 开始。
+
+### 已实测
+
+- 单测 130/130
+- 黑盒自检 `make check-tts` **19/19**（修复前同一套压测跑到一半崩、E1~E6 连红），
+  366 秒密集打断全程零崩溃
+
 ## v5.2.0 — 2026-10-19
 
 本版一句话：**自升级这条路自己走通**——名字对齐 `make update`、GitHub 认证自带、
@@ -25,7 +54,7 @@
   codex 增量不落盘（`AgentMessageContentDelta` → None）且无流式钩子，**拿不到边生成边听**，
   这是协议上限；`Interrupt` 仍只作收尾信号、不出声。
 
-### v5.2.0 修订 — 2026-10-19
+### 修订
 
 - **`Stop` 盖印顺带立墓碑** — 此前 `sealTurn` 只盖印不立墓碑（怕「同一摞的页还在路上」），但
   Stop 是 Claude 回复完毕的终点，**之后不会有该摞的增量了**，墓碑拦的「迟到增量」其实不会来。
@@ -33,21 +62,6 @@
   旧摞还在播，新摞直接顶到队首，用户按 Ctrl+1 跳过的就是新摞（旧摞的墓碑要等下一轮才立，永远迟一步）。
   `sealTurn` 现在内部调 `bury(id)`，墓碑只拦入队口 `appendToStack`/`appendPlain` 的同 turn_id
   增量，对在播/已合成的块没影响——放心。`finishTurn` 路径不变，只是它现在能更早立碑。
-
-### v5.2.0 修订二 — 2026-10-19
-
-- **打断后不再半途丢弃 MLX 流（治一天 5 次的崩溃）** — 2026-10-19 一天崩 5 次，两张脸：
-  `SIGABRT` 报 `IOGPUMetalCommandBuffer validate: failed assertion 'commit command buffer
-  with uncommitted encoder'`，`SIGSEGV` 崩在 AGXMetal `computeCommandEncoder` →
-  mlx `copy_gpu_inplace`，stderr 侧还有 `std::system_error: mutex lock failed`。
-  根因不是模型并发（世代闸门早就在），而是**取消时直接把 MLX 生成器扔掉**：encoder 里还压着
-  未 commit 的命令，析构即触发 GPU 断言。现在取消后停止 yield 但**继续把流读完**，等 GPU 自然
-  收口再抛 `CancellationError`，闸门时序不变。
-- **`crash.log` 从此不再恒为 0 字节** — 处理器用 `String.write(toFile:)` 清空记录，那是
-  「写临时文件 + rename」，换掉了 inode；而 fd 在此之前就已打开，指向的是一个已经没人看见的
-  孤儿 inode，于是**每次崩溃的完整调用栈都写进了虚空**（日志里那句「完整栈见 crash.log」
-  指了个空文件）。现在顺序倒过来：先报走上次记录、用 `ftruncate` 原地截断，再打开 fd。
-- **崩溃编号跨重启累计** — 计数记在 `~/.config/ivox/crash.count`，不再每次重启都从 `#1` 开始。
 
 ## v5.1.0 — 2026-10-18
 
