@@ -29,34 +29,53 @@ import json, sys, re
 s = sys.stdin.read()
 d = json.loads(s) if s.strip() else {}
 delta = d.get('delta', '') or ''
-# 过短纯西文确认（true/ok/done）不播；空/纯空白不播
-if isinstance(delta, str):
-    if len(delta) <= 5 and not re.search(r'[一-鿿]', delta):
-        delta = ''
-# 分组号用 turn_id（一次回复 = 一**摞**）；页号用 message_id（一**页**）。
-# 两者都要：摞给「跳整摞」用，页给 Ctrl+2「读下一页」用。
-# turn_id 缺失时回落 message_id（至少能分组）；都缺就不带这两个字段（退回普通播报）。
+final = d.get('final', False)
 san = lambda v: re.sub(r'[^A-Za-z0-9_.-]', '', str(v or ''))   # header 按 , 和 : 切分，脏字符会切坏 meta
 grp = san(d.get('turn_id','') or d.get('message_id',''))
 pg  = san(d.get('message_id',''))
 from pathlib import Path
 from datetime import datetime
-Path.home().joinpath('.config/ivox/hook.log').open('a').write(
+home = Path.home()
+home.joinpath('.config/ivox/hook.log').open('a').write(
     '%s hook.sh msgdisplay source=%s turn=%s mid=%s index=%s final=%s delta=%s\n' % (
     datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], '$2',
-    d.get('turn_id',''), d.get('message_id',''), d.get('index',''), d.get('final',''), delta[:40]))
+    d.get('turn_id',''), d.get('message_id',''), d.get('index',''), final, delta[:40]))
+
+# **整页搬运**：MessageDisplay 会把一页拆成十几批增量送来，这里先攒着，
+# 等 final=True（这一页说完了）再把整页一次性交给播报助理，由它自己切句排队。
+# 早先每批都立刻发，一页会涌进十几个碎片，队列顺序被切碎、也不像「一页」。
+bufdir = home/'.config/ivox/pagebuf'
+if pg:
+    bufdir.mkdir(parents=True, exist_ok=True)
+    f = bufdir/pg
+    if delta:
+        with f.open('a') as fh:
+            fh.write(delta)
+    if final:
+        page = f.read_text() if f.exists() else ''
+        f.unlink(missing_ok=True)
+    else:
+        page = ''
+else:
+    page = ''
+
+# 过短纯西文确认（true/ok/done）不播；空/纯空白不播
+if isinstance(page, str):
+    if len(page) <= 5 and not re.search(r'[一-鿿]', page):
+        page = ''
+
 # 按 session_id 记下「这条会话最后一次是哪一摞」——**Claude 的** Stop payload 里没有 turn_id
 # （只有 prompt_id 与 last_assistant_message，见官方 hooks reference），收尾信号要靠这一笔
 # 反查才能精确指认。Codex 的 Stop 自带 turn_id，不走这条反查（见 end 分支）。
 # 分文件存是为了两个会话并行时互不覆盖（一个文件按 session 一键）。
 sid = san(d.get('session_id',''))
 if sid and grp:
-    _d = Path.home()/'.config/ivox/lastturn'
+    _d = home/'.config/ivox/lastturn'
     _d.mkdir(parents=True, exist_ok=True)
     (_d/sid).write_text(grp)
 print(grp)
 print(pg)
-print(delta)
+print(page)
 " 2>/dev/null)
   grp="$(printf '%s' "$meta" | sed -n 1p)"
   pg="$(printf '%s' "$meta" | sed -n 2p)"
