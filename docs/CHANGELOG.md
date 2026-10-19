@@ -2,6 +2,44 @@
 
 ## 未发布 — 2026-10-19
 
+- **删掉 codex 的播报链路，只留 Claude 与 pi** — codex 自身不能分页，一次输入只能整段搬一次
+  （`Stop` 时从 rollout jsonl 按 `turn_id` + `phase == FinalAnswer` 挑一条），听着像念日志而不
+  是听回复；它有 12 个 hook 事件但**没有一个带 assistant 正文增量**，hook 拿不到流。更重要的是
+  **留着它会污染概念**——它那套「按 turn 分组、Stop 整段播」的描述与另两家完全不同，看文档的人
+  会以为「打断粒度由身份决定」，而代码里身份早已改由助理自编。删掉 `hook.sh` 的 speak 分支
+  （209 → 137 行）、`install-hooks.sh` 的 Codex 段、`sourceVoices` 的 `"codex": "wanwan"` 映射，
+  以及文档里的「两家分叉」「三方对齐表」。
+  **边界**：`Opt+X` 开终端跑 codex 属 QuickActions 能力域，与播报无关，保留。
+  `wanwan` 音色本身留着（它只是可用音色，不再绑死某个来源）。
+
+- **播报拆成三进程：MLX 隔离进誊清员** — MLX 的 Metal 命令编码器析构时重复释放 GPU 命令队列
+  → SIGTRAP。同一根因此前已露过两次脸（取消时 commit 未收口、copy_gpu SIGSEGV），每次都只给
+  **特定路径**打补丁，第三次照旧炸；上游（mlx-audio-swift 244458d / mlx-swift 0.32.3）本地即
+  最新、encoder 由 `generateStream` 内部创建、Swift 侧拿不到引用，**无从拦截**。所以把会炸的
+  那一层整个圈出去：主进程经 Unix socket + `StreamFrame` 长度帧驱动子进程 `ivox tts --serve`
+  （誊清员），`TSPRemote` 兼**监督者**（先问 socket 再问 child，断了自动重拉）。新契约
+  `TTSProviding` 成员一律声明 `async`，队列与 `ConnectionHandler` 只认契约、不知道背后跨不跨进程；
+  `IVOX_TTS=local` 可退回进程内 `TTSEngine` 供调试对照。三条纪律写进 `docs/playback/queue.md`：
+  **进度只存主进程**（发声点永不过 IPC）、**不重发已送出 PCM**（重发得到「前半截 + 从头再来」
+  的接缝，比直接作废更糟）、**半句必须能认出来**（`StreamFrame.parseChunks` 增 `sawEnd`，
+  没读到结束标记就报 `truncated` 并作废这一块）。
+  **崩溃验收**：合成中途 `kill -9` 誊清员 → `誊中断，这一块作废：truncated seq=N` → 块作废、
+  队列继续、播报员全程没被打断，下一条正常播，自动重拉。顺带把日志分家（daemon / tts / tts-crash），
+  「哪个文件里有现场就是哪个角色的错」。已知代价：跨进程后预取余量变薄，
+  `B-synthesis-leads-playback` 报 advisory（3.7s ≈ 4s 高水位），**不是回归**。
+
+- **修三档键位在 help 文本与两份文档里全是反的** — `Ctrl+Esc` 掀页 / `Ctrl+1` 掀摞 / `Ctrl+2`
+  全掀，这三处在 `GlobalKeyTap.bindings` 与 `Daemon.setUpHotKeys` 里**是对的**，
+  `PlaybackQueue.swift` 的枚举注释是反的，文档抄了错的那份两遍。改代码 + `--help` + 两份文档；
+  并在注释里加警示：**键位对照以 `GlobalKeyTap.bindings` 与 `setUpHotKeys` 为准**。
+  另配 CLI `ivox skip --page|--stack|--all`，与热键同一条代码路径，供自检与远程排查。
+
+- **文档全面按现状对齐** — 删净 codex 残留概念；`playback/` 五层补 2026-10-19 隔离裁决；
+  术语表身份列由外部 `turn_id`/`message_id` 改为助理自编的 `localID`/`seq`；`architecture.md`
+  合成引擎小节改写为「契约 + 两种实现」、能力域表补 5 个漏掉的文件；`socket-api.md` 补整节缺失的
+  `{type:quick}`；`native-bridge.md` 加「实施后纠偏表」（`--model` 已被推翻、闲置回收未实现、
+  assistant 帧才是主力）；`~/.config/ivox/README.md` 新建（家当说明书，不进版本库）。
+
 - **右⌘/⌃：副作用挪到「真的在录」之后** — 原先一按下就 `cancelAll`（打断播报）+ `pause`（暂停
   音乐），然后才去建 recorder。于是没插麦克风时按一下的代价是**白打断一次播报、白暂停一次
   音乐，然后静默失败**。现在顺序反过来：**先试录，试活了才去让路**。

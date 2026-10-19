@@ -30,7 +30,8 @@ Sources/iVox/          — 主程序 target
   EntryPoint.swift     — @main, ArgumentParser 子命令
 
   ── 六个能力域（目录与 README 功能表、ivox status 一一对应）──
-  Playback/            — 自动播报：TTSEngine（mlx-audio-swift 流式合成）+ PlaybackQueue + AudioPlayer + CaptionPanel（播报字幕，config 可开关）
+  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（播报字幕，config 可开关）
+                          合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
   SpeechInput/         — 语音输入：右⌘/右⌃ 录音 + ASR + 浮窗（事件由 HotKey 层送来）
   Translation/         — 划词翻译（Cmd+D）：复制 → 翻译 → 浮窗 + 朗读
   QuickActions/        — 快速操作：Finder/终端快捷（Opt+Z/A/Q/X/C）
@@ -39,10 +40,10 @@ Sources/iVox/          — 主程序 target
 
   ── 基础设施（跨能力域）──
   HotKey/              — GlobalKeyTap：键盘事件层（独占 tap，按归属路由给上面几家）
-  Network/             — SocketServer（Unix domain socket IPC）
+  Network/             — SocketServer（Unix domain socket IPC）+ ConnectionHandler（帧解析与分派）
   Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop；装配与热键分派
   Commands/            — ServeCommand, SpeakCommand, TranslateCommand 等
-  Utilities/           — Version, 日志工具
+  Utilities/           — 只有 Version.swift（日志工具 Logger.swift 在 iVoxKit/，不在这里）
   Resources/           — assets, 默认音色, Info.plist, 配置模板（编进二进制 bundle）
 
 Sources/iVoxKit/       — 共享库（无 MLX 依赖）
@@ -57,14 +58,14 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   AudioPipeline.swift  — 重采样
   Translation/         — 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗
 
-Tests/iVoxTests/       — 测试（仅依赖 iVoxKit）
+Tests/iVoxTests/       — 测试（仅依赖 iVoxKit，共 9 个文件：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config ×2 / Translation / PlaybackSessionStory）
 
 integrations/          — 各外部 agent 的对接适配层（安装时由脚本 cp，不编进二进制）
   hook.sh              — Claude Code 的播报 hook（msgdisplay 送整页 / end 送收尾暗号）
   pi/ivox.ts           — pi coding agent 流式扩展
 
-docs/                  — architecture.md, socket-api.md, hook-chain.md, native-bridge.md（微信链路实测依据）；playback/ 放播报四层：purpose.md（目的/取舍，**有分歧先翻它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研
-scripts/               — runtime.sh, download-models.sh, install-*.sh（构建/安装工具脚本）
+docs/                  — README.md（索引 + 分类规则）· architecture.md · hook-chain.md · socket-api.md · native-bridge.md（微信链路实测依据）；playback/ 放播报五层：paper.md（比喻，**建立直觉但不裁决**）· purpose.md（取舍，**有分歧听它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研
+scripts/               — runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）
 ```
 
 ## 架构
@@ -77,7 +78,7 @@ scripts/               — runtime.sh, download-models.sh, install-*.sh（构建
 Claude Code → hook.sh                   ┐
 pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬─ PlaybackQueue (actor)
 微信 ilink 长轮询 → WeChatPlatform（**只发消息，不发声**，不进本图这条线）
-                                           │   ├─ TTSEngine (mlx-audio-swift)
+                                           │   ├─ TSPRemote ─→ 誊清员子进程 `ivox tts --serve`（mlx-audio-swift）
                                                                    │   └─ AudioPlayer (AVAudioEngine)
                                                                    │        └─ CaptionPanel (播报字幕，可选)
                                                                    ├─ GlobalKeyTap (键盘事件层，一个 tap)
@@ -96,8 +97,8 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
   - *第二层（连续播放管道）*：`PlaybackQueue.processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，**句间不 drain**；`AudioPlayer` 用单个常驻 `AVAudioPlayerNode` 连续 `scheduleBuffer`，4s/2s 高低水位背压（`pendingFrames` 随 `dataConsumed` 核减），prime 静音仅在设备播空/取消后补一次，`drain()` 只在整轮末端调一次。改这里务必读 `docs/playback/requirements.md`（需求）与 `docs/playback/queue.md`（实现），不要重新引入逐句 drain（会导致逐字卡顿）。
 - **流式 turn 协议**：pi 扩展经一条长连接按 `\n` 分帧：首帧 `{type:stream,source,turn}` → 原文增量帧（仅 text_delta）→ `{end}`/`{cancel}`，EOF=end。**这条连接的边界是「用户的一次输入」（pi 的一个 agent run），不是它内部的 turn** —— pi 一次输入会拆成 N 个 turn（每个 turn 恰好一条 assistant 消息、工具调用就再来一轮），所以 `agent_start` 开流、`agent_end` 关流，中途每条 assistant `message_start` 发一个 `{page}` 帧分页。早先按 turn 开合等于把一次输入切成 N 摞、Ctrl+1 只掀得掉一页（2026-10-18 修）。`turn` 号本身是接入方自编的接力棒（只管「这批跟刚才那批是一伙的」），**外部有没有像样的 id 不重要，摞/页/块的内部号一律由助理自编**。服务端 `StreamBuffer`（iVoxKit 纯逻辑）累积原文，只在安全边界（句末/段落、代码围栏配平、≥`minFlushChars`=24）抽出整段复用同一套 cleanText→splitSentences。`PlaybackJob.turnID`：**队列按轮排队，播全播完**——同一 `turnID` 分块并入同一段顺序追加，新 turn 在队尾追加新段、**不打断**在播旧轮（这一摞播完才前移）；无 turn 的普通播报（`ivox speak`/hook.sh）同上排队。**打断的准星**：动手的只有用户，机器最多「借道」—— 队列的长期顺序只由到达顺序决定，谁都不永久插队；Cmd+D 译文是唯一的机器开口，也只是临时插队（念完即走，原顺序原样）。**打断权只归用户快捷键**，手动打断三档全是「掐 + 掀」——**掐** = 断在播的那一块，**掀** = 丢弃某一层的全部内容：**Ctrl+Esc** = 掐 + 掀当前页（`skipCurrentPage`：掀掉当前页的剩余块；还没来的页不拦）、**Ctrl+1** = 掐 + 掀当前摞（`skipCurrentBucket`：掀掉这一摞的全部段 + 立墓碑拦它的后续增量，下一摞接着播）、**Ctrl+2** = 掐 + 全掀（`cancelAll`）/ 右⌘ 说话。Cmd+D 译文是**插队**——`speakUserInitiated` 只掐在播、译文段插到队首（加急位），其余段全保留（播完译文接着播）。`{type:stop}` 停止帧与流式新轮**不再打断**（ConnectionHandler 对 stop 帧仅记日志忽略）。某段 sealed 才允许空段前移；流动中空段保活等下一批。连接内这四类操作经 `ConnectionHandler.StreamOpChain` **按帧序执行**（乱序会让 `{end}` 之后到达的同轮分块把已关轮次重新打开、管道永久挂起）。详见 `docs/socket-api.md`。
 - **播报的词只用这三个**，其它说法一律作废；完整术语表见 `docs/playback/requirements.md`）：
-  **摞** = **你发一条信息之后 AI 为此产生的全部回复**（夹工具调用时它会回答很多次，全算这一摞；由你按回车划分，身份是 `turn_id`）；
-  **页** = 一摞里的**一次回复**（一条 assistant 消息，身份是 `message_id`；实测一个 turn 底下最多见过 19 页）；
+  **摞** = **你发一条信息之后 AI 为此产生的全部回复**（夹工具调用时它会回答很多次，全算这一摞；由你按回车划分；身份是助理自编的 `PlaybackSegment.localID`，外部 `turn_id` 只作备注）；
+  **页** = 一摞里的**一次回复**（一条 assistant 消息；身份同样是助理自编的 `PlaybackPage.localID`，实测一个 turn 底下最多见过 19 页）；
   **块** = 1～80 字的合成单位（**服务拿去播报用的，不是给用户看的**；`PlaybackBlock`，页上的文字被切开送去合成的那些条）。
   读法：捏着队首那一摞 → 翻到当前页 → 撕下一个块去合成播放 → 这页撕完翻下一页 → 这一摞说完（下一条回复到来把它盖上）→ 换下一摞。
   按键对应（三档都是掐 + 掀）：**Ctrl+Esc = 掀页**、**Ctrl+1 = 掀摞**、**Ctrl+2 = 全掀**。
@@ -109,9 +110,20 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
 - **防误触也在 tap 层判，一处判完**：① **同键冷却，按键分档**——`Cmd+D` 0.2s（它靠后写胜出连按，冷却只挡连击）、三个打断键 0.3s（翻页掀摞本就该能连按）、其余 1s；冷却中**仍然吃掉事件**只是不执行（漏给目标 app 更糟），走 `systemUptime`，只在 tap 线程读写。② **右⌘/右⌃ 有 150ms 长按阈值**——按下不足就松开判为误触，按下沿直接丢弃（很多 App 用右⌘，碰一下就打断播报+暂停音乐+开麦代价太大）。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」的第二句吃掉。
 - **右⌘/右⌃ 语音：副作用发生在「真的在录」之后**——按下经阈值与授权检查后**先试录**，`record()` 成功了才 `cancelAll`（打断播报）→ `pause`（暂停音乐）→ 浮窗「聆听中…」+ Tink + 波形。**不做设备预检**：耳机类麦克风按需唤醒，预检「设备在不在」会误判、把本来能用的设备焊死；按下就试这一下、试活了算数。失败时播报不中断、音乐不停，只在日志写清原因（**授权层与设备层分开报**：TCC 状态 vs CoreAudio 的默认输入设备名，`AVAudioSession` 是 iOS 独有的、macOS 走 CoreAudio）。失败路径的 recorder 进**隔离区**延迟 1 秒释放——`record()` 返回 false 时 audio queue 的回调线程已经起来了，立刻析构会 `objc_loadWeak` 野指针（2026-10-19 实测 SIGSEGV）。**全项目借还背景音乐只此一家**：播报链路完全不碰音乐，只有说话时才借（按下 pause、松开 resume）。
 
-- **配置**：`~/.config/ivox/config.json`，所有运行时文件在 `~/.config/ivox/` 下。
+- **合成引擎有两个实现，装点在 `Daemon.init`**：`any TTSProviding` 默认是 `TSPRemote`（跨进程到
+  誊清员 `ivox tts --serve`）；设环境变量 `IVOX_TTS=local` 退回进程内 `TTSEngine`，仅供调试期对照。
+  **为什么默认远程**：MLX 的 Metal 命令编码器析构重复释放 GPU 命令队列 → SIGTRAP，上游未修、
+  Swift 侧拿不到 encoder 引用，无从拦截，所以把它圈出去（裁决见 `docs/playback/purpose.md`）。
+  `Daemon.cleanup` 会显式 `stopChild()`，不留孤儿（`kill -9` 主进程时它不会跟着死）。
 
-- **日志**：`~/.config/ivox/daemon.log`（nohup 的 stdout/stderr）。使用 `Log.{info,debug,warn,error}`。崩溃捕获见 `CrashTrap`：MLX 后端崩在 C++ 层时系统日志只有一行、没调用栈，故自己接信号往 `~/.config/ivox/crash.log` 写带栈的记录，下次启动打进 daemon.log 并原地 `ftruncate` 清空（**不能**用 `String.write(toFile:)`，那是「临时文件+rename」，换掉 inode 会让 handler 已开的 fd 写进无人可见的孤儿文件）；累计次数记 `~/.config/ivox/crash.count`（`crash.log` 每次启动就清空，光靠它编号永远是 #1）。
+- **配置**：`~/.config/ivox/config.json`，所有运行时文件在 `~/.config/ivox/` 下（家当说明见
+  机器上的 `~/.config/ivox/README.md`，那份不进版本库）。
+
+- **日志分三份，各归各的角色**（分家是有意的：出事时「哪个文件里有现场，就是哪个角色的错」）：
+  `daemon.log`（主进程：队列/打断/播放收尾，>5M 轮转）· `tts.log`（誊清员：合成侧）·
+  `hook.log`（hook.sh 审计行，⚠️ 只增不减、无轮转）。靠 `IVOX_LOG_FILE` + `IVOX_ROLE` 分流。
+  使用 `Log.{info,debug,warn,error}`。排查某一块怎么没出声：拿 `seq`（助理自编的块号，
+  两侧日志都打）去 `daemon.log` 与 `tts.log` 对时间线。崩溃捕获见 `CrashTrap`：MLX 后端崩在 C++ 层时系统日志只有一行、没调用栈，故自己接信号往 `~/.config/ivox/crash.log` 写带栈的记录，下次启动打进 daemon.log 并原地 `ftruncate` 清空（**不能**用 `String.write(toFile:)`，那是「临时文件+rename」，换掉 inode 会让 handler 已开的 fd 写进无人可见的孤儿文件）；累计次数记 `~/.config/ivox/crash.count`（`crash.log` 每次启动就清空，光靠它编号永远是 #1）。
 
 ## 注释约定
 
@@ -132,7 +144,8 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
 ## 已知问题
 
 ### Swift 6.4 快照版编译器崩溃（已修复）
-此问题已在 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a` 中修复。详见 `docs/archive/incident-swift-compiler-crash.md`。
+见上面的「编译」节（用的是 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`，崩溃在该版本已修复）；
+复盘见 `docs/archive/incident-swift-compiler-crash.md`。
 
 ### 代码签名变更导致 TCC 权限失效
 Ad-hoc 签名每次构建都会变化 → TCC 权限（麦克风、辅助功能）丢失。`deploy-bin`（`make update`）会自动重新签名。部署后如权限丢失，需在系统设置中重新勾选。
@@ -160,7 +173,7 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests
 xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLeadInGetsNoPseudoPeriod
 ```
 
-测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
+测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config / Translation / **PlaybackSessionStory**（第 9 个，测摞的分段与墓碑归属）。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
 
 ```bash
 make check-tts                      # 播报黑盒自检：压真实 daemon，20 个用例（需先 ivox on，模型就绪）
@@ -169,7 +182,10 @@ touch /tmp/ivox-hook-muted          # ⚠️ 跑之前先落静音闸，见下
 trash /tmp/ivox-hook-muted          # 跑完提起
 ```
 
-`scripts/tts-check.mjs`（零依赖 Node，仅用 `node:` 内置模块）经 Unix socket 发流式帧、`GET /health` 探运行态、增量 tail `daemon.log` 断言：协议正确性、合成时长、轮次隔离、取消丢弃迟到帧、EOF 残尾、并行取消不拖垮在跑的轮（pi 复现）、停止哨兵作废在跑的轮、多轮交错时队首轮等块不得空转（`E8`）、密集打断压测、打断后活性、尾音完整（`needsAudio`，无设备自动 skip）。断言要数「队列状态」等 DEBUG 行，而 daemon 默认只留 INFO 及以上（`Logger` 的级别门限），所以脚本自己 `launchctl setenv IVOX_LOG_LEVEL=debug` + `kickstart` 重启 daemon，跑完 unset 环境变量——**这是它跟普通 `ivox on` 唯一的区别，别把它改回附加到已在跑的 daemon**（2026-10-17：日志门限一落地，`E3`/`A-tail` 两条靠 DEBUG 行吃饭的断言直接假红）。**它是排障工具，不是每次改动都要跑的回归**：日常改动用 `make test` + 单点验证（临时脚本压真实 socket、看 `daemon.log`）；只有正常播报出问题（没声音/卡住/串音/未收尾）时才用它定位。**但改播报队列核心（`PlaybackQueue` / `ConnectionHandler` 的收尾·打断·入队）时必须跑一次全量**——2026-10-16 踩过：三个用例悄悄腐烂成假绿（两条正则与日志格式失配、一条断言过严、一条被自检自己的噪声检测抓成 skip），全靠一次全量才暴露；修完全量 13/13。
+`scripts/tts-check.mjs`（零依赖 Node，仅用 `node:` 内置模块）经 Unix socket 发流式帧、`GET /health` 探运行态、增量 tail `daemon.log` 断言：协议正确性、合成时长、轮次隔离、取消丢弃迟到帧、EOF 残尾、并行取消不拖垮在跑的轮（pi 复现）、停止哨兵作废在跑的轮、多轮交错时队首轮等块不得空转（`E8`）、密集打断压测、打断后活性、尾音完整（`needsAudio`，无设备自动 skip）。断言要数「队列状态」等 DEBUG 行，而 daemon 默认只留 INFO 及以上（`Logger` 的级别门限），所以脚本自己 `launchctl setenv IVOX_LOG_LEVEL=debug` + `kickstart` 重启 daemon，跑完 unset 环境变量——**这是它跟普通 `ivox on` 唯一的区别，别把它改回附加到已在跑的 daemon**（2026-10-17：日志门限一落地，`E3`/`A-tail` 两条靠 DEBUG 行吃饭的断言直接假红）。**它是排障工具，不是每次改动都要跑的回归**：日常改动用 `make test` + 单点验证（临时脚本压真实 socket、看 `daemon.log`）；只有正常播报出问题（没声音/卡住/串音/未收尾）时才用它定位。**但改播报队列核心（`PlaybackQueue` / `ConnectionHandler` 的收尾·打断·入队）时必须跑一次全量**——2026-10-16 踩过：三个用例悄悄腐烂成假绿（两条正则与日志格式失配、一条断言过严、一条被自检自己的噪声检测抓成 skip），全靠一次全量才暴露；修完全量 13/13。**2026-10-19 拆成三进程后又跑全量：19 pass / 0 fail / 1 advisory**；
+2026-10-20 审计补两条用例（`F-pcm-duration`、`S3-skip-stack-plain-stacks-are-separate`），现共 **20 条**。
+唯一那条 advisory 是 `B-synthesis-leads-playback`（合成领先播放 3.7s ≈ 4s 高水位）——跨进程后
+预取余量变薄的已知代价，**不是回归，别去"修"**。
 
 **跑之前必须落静音闸**：`touch /tmp/ivox-hook-muted`（跑完 `trash` 提起）。自检压的是真实 daemon，而**真人对话的播报走同一个队列**——你一边跟我聊，队列就被我的回复占满，用例要么被噪声检测 skip，要么因合成被挤成欠载而假红。2026-10-17 实测：有对话 `pass=14 fail=1 skip=4`，落闸后 `pass=19 fail=0 skip=0`。这个闸在 `integrations/hook.sh` 里，走**哨兵文件而不是环境变量**：hook 由 Claude Code 的 harness 拉起，环境在它启动时定死，改不动；文件每次执行都重新判断。闸在手上可见（`ls /tmp/ivox-hook-muted`），不怕忘。
 
