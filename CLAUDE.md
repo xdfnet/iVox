@@ -107,10 +107,11 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
 
 - **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者：右⌘/右⌃ → `SpeechInputService`，`Cmd+D` → `TranslationService`，`Opt+Z/A/Q/X/C` → `QuickActionsService`，`Ctrl+2`/`Ctrl+1`/`Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掐+全掀 / 掐+掀摞 / 掐+掀页）（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `GlobalKeyTap.bindings` 加一条 + 在 `setUpHotKeys` 加一个消费者。** 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Cmd+D 毫无反应"。
 - **防误触也在 tap 层判，一处判完**：① **同键冷却，按键分档**——`Cmd+D` 0.2s（它靠后写胜出连按，冷却只挡连击）、三个打断键 0.3s（翻页掀摞本就该能连按）、其余 1s；冷却中**仍然吃掉事件**只是不执行（漏给目标 app 更糟），走 `systemUptime`，只在 tap 线程读写。② **右⌘/右⌃ 有 150ms 长按阈值**——按下不足就松开判为误触，按下沿直接丢弃（很多 App 用右⌘，碰一下就打断播报+暂停音乐+开麦代价太大）。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」的第二句吃掉。
+- **右⌘/右⌃ 语音：副作用发生在「真的在录」之后**——按下经阈值与授权检查后**先试录**，`record()` 成功了才 `cancelAll`（打断播报）→ `pause`（暂停音乐）→ 浮窗「聆听中…」+ Tink + 波形。**不做设备预检**：耳机类麦克风按需唤醒，预检「设备在不在」会误判、把本来能用的设备焊死；按下就试这一下、试活了算数。失败时播报不中断、音乐不停，只在日志写清原因（**授权层与设备层分开报**：TCC 状态 vs CoreAudio 的默认输入设备名，`AVAudioSession` 是 iOS 独有的、macOS 走 CoreAudio）。失败路径的 recorder 进**隔离区**延迟 1 秒释放——`record()` 返回 false 时 audio queue 的回调线程已经起来了，立刻析构会 `objc_loadWeak` 野指针（2026-10-19 实测 SIGSEGV）。**全项目借还背景音乐只此一家**：播报链路完全不碰音乐，只有说话时才借（按下 pause、松开 resume）。
 
 - **配置**：`~/.config/ivox/config.json`，所有运行时文件在 `~/.config/ivox/` 下。
 
-- **日志**：`~/.config/ivox/daemon.log`（nohup 的 stdout/stderr）。使用 `Log.{info,debug,warn,error}`。
+- **日志**：`~/.config/ivox/daemon.log`（nohup 的 stdout/stderr）。使用 `Log.{info,debug,warn,error}`。崩溃捕获见 `CrashTrap`：MLX 后端崩在 C++ 层时系统日志只有一行、没调用栈，故自己接信号往 `~/.config/ivox/crash.log` 写带栈的记录，下次启动打进 daemon.log 并原地 `ftruncate` 清空（**不能**用 `String.write(toFile:)`，那是「临时文件+rename」，换掉 inode 会让 handler 已开的 fd 写进无人可见的孤儿文件）；累计次数记 `~/.config/ivox/crash.count`（`crash.log` 每次启动就清空，光靠它编号永远是 #1）。
 
 ## 注释约定
 
