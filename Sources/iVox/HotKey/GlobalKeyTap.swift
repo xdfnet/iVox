@@ -192,6 +192,19 @@ final class GlobalKeyTap: @unchecked Sendable {
             // 只看四个标准修饰键位，忽略 AlphaShift / Fn / NumericPad 等杂项，
             // 这样 Cmd+Shift+D、CapsLock 开着按 Cmd+D 都不会误触
             let flags = event.flags.intersection(Self.modifierMask)
+            // [临时探针 2026-10-19] Esc 是「幽灵翻页」事故的争议键：翻页日志只写
+            // 「打断来源=skip-page」，看不出是物理按键还是别的进程合成的 CGEvent。
+            // 这里在匹配之前把每个 Esc 的真实 flags 与命中与否落盘，等复现一次即可定案。
+            // 排查完请连同「热键触发补日志」一起决定去留。
+            if keyCode == 0x35 {
+                let raw = event.flags.rawValue
+                let hit = Self.bindings.first { $0.keyCode == 0x35 && $0.modifiers == flags }
+                let hitName = (hit?.hotKey == .skipPage) ? "skipPage(翻页)" : "无"
+                Log.info("[探针] Esc keyDown: rawFlags=0x\(String(raw, radix: 16)) "
+                       + "stdFlags=0x\(String(flags.rawValue, radix: 16)) "
+                       + "命中=\(hitName) "
+                       + "tapUptime=\(String(format: "%.2f", ProcessInfo.processInfo.systemUptime))")
+            }
             guard let binding = Self.bindings.first(where: {
                 $0.keyCode == keyCode && $0.modifiers == flags
             }) else { return false }
