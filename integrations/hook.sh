@@ -13,6 +13,19 @@
 # 起因：`make check-tts` 压的是真实 daemon，而真人对话的播报走同一个队列，会挤掉自检用例。
 [[ -f /tmp/ivox-hook-muted ]] && exit 0
 
+# hook.log 的轮转：只增不减是没有上限的，而 daemon.log 有 5M 阈值——用久了这里会涨到几百 M。
+# 规则与 Logger.swift 的 rotateIfNeeded 一致（超阈值就把主文件改名成 .old，旧的被覆盖）。
+# 用 mv 覆盖而不是先 rm 再 mv：省一步，也不用在 hook 里做删除。
+HOOK_LOG_MAX=$((5 * 1024 * 1024))
+rotate_hook_log() {
+  local f="$HOME/.config/ivox/hook.log"
+  [[ -f "$f" ]] || return 0
+  local sz; sz=$(stat -f%z "$f" 2>/dev/null) || return 0
+  (( sz > HOOK_LOG_MAX )) && mv "$f" "$f.old"
+  return 0
+}
+rotate_hook_log
+
 # 必须两个参数：动作（msgdisplay|end）+ 来源。来源与动作一个都不能猜，宁缺毋滥。
 # 注：interrupt 分支已移除——打断权只归快捷键（右⌘/Cmd+D/Ctrl+Esc）与命令行 `ivox skip`，
 # 不再经 hook.sh 自动打断。（`ivox quiet` 已随停止帧一起删除。）
@@ -138,5 +151,6 @@ fi
 # 认不得的动作：不处理、不出声（Claude Code 收到空输出 + exit 0 当作「hook 无话可说」，
 # 不会阻塞它），但**留一行痕**。旧版配置可能还挂着已删的 `speak`，那会静默地不播报——
 # 没有这行日志时，用户看到的现象与「hook 没触发」一模一样，既不念也查不出是谁的锅。
+rotate_hook_log
 echo "$(date '+%F %T') hook.sh 未知动作 action=$1 source=$2" >> "$HOME/.config/ivox/hook.log"
 exit 0
