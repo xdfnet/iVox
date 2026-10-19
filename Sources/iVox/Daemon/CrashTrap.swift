@@ -73,13 +73,13 @@ enum CrashTrap {
     /// crash.log 腾空。不清空的话它会一直躺在那儿，下次真崩了日志会混在一起。
     /// 截断用 `ftruncate` 对文件本身做，不换 inode——见 install() 的注释。
     private static func reportPreviousCrash() {
-        let path = crashLogPath()
-        if let prev = try? String(contentsOfFile: crashCountPath(), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+        let path = crashLogPathName
+        if let prev = try? String(contentsOfFile: crashCountPathName, encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
            let n = Int(prev) {
             crashCount = n
         }
         guard let text = try? String(contentsOfFile: path, encoding: .utf8), !text.isEmpty else {
-            try? String(crashCount).write(toFile: crashCountPath(), atomically: true, encoding: .utf8)
+            try? String(crashCount).write(toFile: crashCountPathName, atomically: true, encoding: .utf8)
             return
         }
         let records = text.components(separatedBy: "--- 崩溃结束 ---")
@@ -95,7 +95,7 @@ enum CrashTrap {
         let fd = open(path, O_WRONLY)
         if fd >= 0 { ftruncate(fd, 0); close(fd) }
         crashCount += records.count
-        try? String(crashCount).write(toFile: crashCountPath(), atomically: true, encoding: .utf8)
+        try? String(crashCount).write(toFile: crashCountPathName, atomically: true, encoding: .utf8)
     }
 
     static func signalName(_ sig: Int32) -> String {
@@ -108,8 +108,4 @@ enum CrashTrap {
         default: "信号 \(sig)"
         }
     }
-
-    private static func crashLogPath() -> String { crashLogPathName }
-
-    private static func crashCountPath() -> String { crashCountPathName }
 }

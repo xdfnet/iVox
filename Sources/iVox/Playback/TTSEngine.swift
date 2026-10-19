@@ -6,14 +6,11 @@ import iVoxKit
 
 // 本地 TTS 引擎（mlx-audio-swift）。
 
-actor TTSEngine {
-    /// 与远程引擎（TSPRemote）共用同一套就绪状态，调用方 switch 它时不必分两份
-    typealias LoadState = TTSLoadState
-
+actor TTSEngine: TTSProviding {
     private var model: (any SpeechGenerationModel)?
     private var config: Config
     private let ttsConfig: TTSConfig
-    private var loadState: LoadState = .notStarted
+    private var loadState: TTSLoadState = .notStarted
     private var stateContinuations: [CheckedContinuation<Void, Never>] = []
 
     // 合成串行闸门：MLX 模型非并发安全，bargeIn 取消旧推理是协作式的（要等下一个
@@ -61,7 +58,7 @@ actor TTSEngine {
 
     var isLoaded: Bool { model != nil }
 
-    var state: LoadState { loadState }
+    var state: TTSLoadState { loadState }
 
     func loadModel() async throws {
         if model != nil {
@@ -86,7 +83,7 @@ actor TTSEngine {
     func warmup(voiceID: String) async {
         do {
             Log.debug("TTS 预热 [\(voiceID)]...")
-            let stream = synthesizeStream(text: "你好，模型预热完成。", voiceID: voiceID)
+            let stream = synthesizeStream(text: "你好，模型预热完成。", voiceID: voiceID, trace: nil)
             for try await _ in stream { }
             Log.debug("TTS 预热完成 [\(voiceID)]")
         } catch {
@@ -114,7 +111,7 @@ actor TTSEngine {
 
     /// - Parameter trace: 摞/页/块三个号。进程内引擎用不上（自家日志在同一份文件里），
     ///   但保留同名参数，让 `TSPRemote` 能顶替本类而不动调用方 —— 见 TTSTrace。
-    func synthesizeStream(text: String, voiceID: String, trace: TTSTrace? = nil) -> AsyncThrowingStream<Data, Error> {
+    func synthesizeStream(text: String, voiceID: String, trace: TTSTrace?) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {

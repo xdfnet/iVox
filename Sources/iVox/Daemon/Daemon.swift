@@ -7,7 +7,7 @@ import iVoxKit
 
 actor Daemon {
     private let config: Config
-    private let engine: TTSEngine
+    private let engine: any TTSProviding
     private let asrEngine: ASREngine
     private let queue: PlaybackQueue
     private let server = SocketServer()
@@ -30,7 +30,19 @@ actor Daemon {
         self.config = config
         let asrPath = config.models?.asrPath ?? NSHomeDirectory() + "/.config/ivox/model/Qwen3-ASR-1.7B-8bit"
 
-        let ttsEngine = TTSEngine(config: config)
+        // 引擎选谁：**默认远程**——MLX 的 Metal 命令编码器析构时会重复释放 GPU 命令
+        // 队列（SIGTRAP），上游未修且拿不到 encoder 引用无从拦截。把它隔离进誊清员
+        // 进程，它炸了主进程的队列与字幕安然无恙，由 `TSPRemote` 监督着重拉。
+        // `IVOX_TTS=local` 退回进程内合成 —— 调试期用它对照排障（同一段文本，
+        // 一边走 socket 一边不过），不是给日常用的。
+        let ttsEngine: any TTSProviding
+        if ProcessInfo.processInfo.environment["IVOX_TTS"] == "local" {
+            ttsEngine = TTSEngine(config: config)
+            Log.info("TTS 引擎: 进程内合成（IVOX_TTS=local）")
+        } else {
+            ttsEngine = TSPRemote()
+            Log.info("TTS 引擎: 远程誊清员进程")
+        }
         self.engine = ttsEngine
         self.asrEngine = ASREngine(modelPath: asrPath)
         self.mediaController = MediaController(config: config.resolvedMediaControl)
@@ -389,6 +401,9 @@ actor Daemon {
         mediaHTTPServer?.stop()
         await server.stop()
         await queue.shutdown()
+        // 子进程是 spawn 出来的，`_exit(0)` 不跑析构，不显式收就是孤儿：
+        // 它自己 `while true` 常驻，会一路抱着 GPU 跑到下次开机。
+        await (engine as? TSPRemote)?.stopChild()
         Log.info("守护进程已退出")
         exit(0)
     }

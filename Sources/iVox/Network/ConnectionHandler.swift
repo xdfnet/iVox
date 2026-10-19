@@ -34,10 +34,10 @@ actor ConnectionHandler: SocketConnectionHandler {
     }
     private let config: Config
     private let asrEngine: ASREngine
-    private let engine: TTSEngine
+    private let engine: any TTSProviding
     private let statusProvider: @Sendable () async -> Data?
 
-    init(queue: PlaybackQueue, config: Config, asrEngine: ASREngine, engine: TTSEngine,
+    init(queue: PlaybackQueue, config: Config, asrEngine: ASREngine, engine: any TTSProviding,
          statusProvider: @escaping @Sendable () async -> Data?) {
         self.queue = queue
         self.config = config
@@ -440,7 +440,7 @@ actor ConnectionHandler: SocketConnectionHandler {
         Task {
             defer { Darwin.close(fd) }
             do {
-                let stream = await engine.synthesizeStream(text: cleaned, voiceID: voiceID)
+                let stream = await engine.synthesizeStream(text: cleaned, voiceID: voiceID, trace: nil)
                 var total = 0
                 var ok = true
                 for try await pcm in stream {
@@ -463,33 +463,9 @@ actor ConnectionHandler: SocketConnectionHandler {
     }
 
     /// 循环写入直到全部写完，处理短写
-    private nonisolated func writeAll(_ data: Data, to fd: Int32) -> Bool {
-        data.withUnsafeBytes { raw in
-            var offset = 0
-            while offset < raw.count {
-                let n = Darwin.write(fd, raw.baseAddress!.advanced(by: offset), raw.count - offset)
-                if n <= 0 { return false }
-                offset += n
-            }
-            return true
-        }
-    }
-
     /// 原始字节的十六进制（截前 40）：排查哨兵等特殊指令的来源时，看 hex 就能比对
     private nonisolated static func hex(_ data: Data) -> String {
         data.prefix(40).map { String(format: "%02x", $0) }.joined()
-    }
-
-    private nonisolated func parseMetaKV(_ header: String) -> [String: String] {
-        guard header.hasPrefix("{"),
-              let end = header.firstIndex(of: "}") else { return [:] }
-        let inner = String(header[header.index(after: header.startIndex)..<end])
-        var dict: [String: String] = [:]
-        for pair in inner.split(separator: ",") {
-            let kv = pair.split(separator: ":", maxSplits: 1)
-            if kv.count == 2 { dict[String(kv[0])] = String(kv[1]) }
-        }
-        return dict
     }
 
     nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, group: String?, isFinal: Bool, page: String?, isNow: Bool) {

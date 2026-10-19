@@ -12,6 +12,37 @@ protocol SocketConnectionHandler: Sendable {
     func handle(fd: Int32)
 }
 
+/// 两个处理者都要用的两件事：往 fd 上写干净、解析 `{k:v,k:v}` 形式的 meta。
+///
+/// 上提到这里而不是各写一份：主 daemon 与誊清员进程在**同一个 target**，
+/// `writeAll`/`parseMetaKV` 又都是纯 POSIX 活、各 15 行，抄两遍只会各自漂移。
+extension SocketConnectionHandler {
+    /// 循环写入直到全部写完，处理短写
+    func writeAll(_ data: Data, to fd: Int32) -> Bool {
+        data.withUnsafeBytes { raw in
+            var offset = 0
+            while offset < raw.count {
+                let n = Darwin.write(fd, raw.baseAddress!.advanced(by: offset), raw.count - offset)
+                if n <= 0 { return false }
+                offset += n
+            }
+            return true
+        }
+    }
+
+    /// 解析 `{k:v,k:v}`。**值里不能有 `,` 与 `:`** —— 分不开就是坏 header，丢进字典
+    /// 的值是截断过的，比没有更坏，所以调用方要 sanitize 后再拼（见 TTSTrace.headerFields）。
+    func parseMetaKV(_ header: String) -> [String: String] {
+        guard header.hasPrefix("{"), let end = header.firstIndex(of: "}") else { return [:] }
+        var dict: [String: String] = [:]
+        for pair in header[header.index(after: header.startIndex)..<end].split(separator: ",") {
+            let kv = pair.split(separator: ":", maxSplits: 1)
+            if kv.count == 2 { dict[String(kv[0])] = String(kv[1]) }
+        }
+        return dict
+    }
+}
+
 actor SocketServer {
     private var socketFD: Int32 = -1
     private var source: DispatchSourceRead?

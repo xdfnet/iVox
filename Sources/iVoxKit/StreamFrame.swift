@@ -30,6 +30,18 @@ public enum StreamFrame {
     ///   - remaining: 上次未消费完的剩余缓冲（inout，消费后可回写）
     /// - Returns: 完整帧列表
     public static func parseChunks(from data: Data, into remaining: inout [UInt8]) -> [Data] {
+        var sawEnd = false
+        return parseChunks(from: data, into: &remaining, sawEnd: &sawEnd)
+    }
+
+    /// 同上，但额外报告**是否见到了结束标志**。
+    ///
+    /// 为什么需要：结束标志是被「吃掉」的，调用方只看到帧列表，拿不到这一条。
+    /// 而对面进程若在合成中途崩掉，读端只会拿到 EOF —— 与「正常念完」的表象**完全一样**。
+    /// 没有这个标志，半句话就会被当成完整的一句交出去：用户听到半句被掐断，
+    /// 而日志里一行异常都没有，正是这次拆进程要消灭的那种「静默」。
+    /// - Parameter sawEnd: 一旦见到 4 字节 0 的结束标志即置 true（只置不清）
+    public static func parseChunks(from data: Data, into remaining: inout [UInt8], sawEnd: inout Bool) -> [Data] {
         remaining.append(contentsOf: data)
         var frames: [Data] = []
         var offset = 0
@@ -40,6 +52,7 @@ public enum StreamFrame {
                 | (UInt32(remaining[offset + 3]) << 24)
             if len == 0 {
                 offset += 4
+                sawEnd = true
                 break
             }
             guard Int(len) <= maxFrameBytes else {

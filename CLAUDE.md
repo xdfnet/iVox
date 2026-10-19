@@ -74,7 +74,7 @@ scripts/               — runtime.sh, download-models.sh, install-*.sh（构建
 基于守护进程的 actor 架构（LaunchAgent 托管，`ivox on/off` 控制启停）：
 
 ```
-Claude Code/Codex → hook.sh               ┐
+Claude Code → hook.sh                   ┐
 pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬─ PlaybackQueue (actor)
 微信 ilink 长轮询 → WeChatPlatform（**只发消息，不发声**，不进本图这条线）
                                            │   ├─ TTSEngine (mlx-audio-swift)

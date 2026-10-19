@@ -108,9 +108,9 @@ actor PlaybackQueue {
     /// 在**本 actor 上**被调用，实现方自己切回主线程再碰 UI。
     private var onCaption: (@Sendable (String?) -> Void)?
     private let player: AudioPlayer
-    private let engine: TTSEngine
+    private let engine: any TTSProviding
     private let media: MediaController
-    init(engine: TTSEngine, mediaController: MediaController) {
+    init(engine: any TTSProviding, mediaController: MediaController) {
         self.engine = engine
         self.player = AudioPlayer()
         self.media = mediaController
@@ -519,7 +519,7 @@ actor PlaybackQueue {
                 try Task.checkCancellation()
 
                 let batchID = String(UUID().uuidString.prefix(6))
-                Log.info("TTS 合成开始 [\(job.source)-\(batchID)] chars=\(job.text.count)")
+                Log.info("TTS 合成开始 [\(job.source)-\(batchID)] seq=\(job.seq) chars=\(job.text.count)")
                 let startedAt = Date()
                 var claimed = false
                 do {
@@ -570,7 +570,7 @@ actor PlaybackQueue {
                     // 普通「完成」（打断后紧邻的完成会被人误读成「没掐住」）。
                     Log.info("TTS 合成作废（MLX 不响应中途取消，这句跑完才停）[\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "自取消")） \(elapsed)s")
                 } else if claimed {
-                    Log.info("TTS 合成完成 [\(job.source)-\(batchID)] \(elapsed)s")
+                    Log.info("TTS 合成完成 [\(job.source)-\(batchID)] seq=\(job.seq) \(elapsed)s")
                 }
             }
         }

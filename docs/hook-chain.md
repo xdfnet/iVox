@@ -5,46 +5,34 @@
 ## 总览
 
 ```
-┌─ Claude Code ────┐    ┌─ Codex ────────┐
-│ Stop event       │    │ Stop event     │
-│ settings.json    │    │ hooks.json     │
-└─────┬────────────┘    └─────┬──────────┘
-      │                       │
-      │    hook.sh <source> <text>   │
-      │                       │
-      └──────────┬────────────┘
-                 │
-                 ▼
+┌─ Claude Code ─┐   ┌─ pi 扩展 ─┐
+│ MessageDisplay│   │ 长连接流式 │
+│ Stop（收尾暗号）│   │  agent_start→agent_end │
+└──────┬────────┘   └─────┬──────┘
+       │  hook.sh          │  TS 扩展直连
+       │ msgdisplay/end    │
+       └────────┬──────────┘
+                │
+                ▼
        ┌─────────────────────┐
        │   ivox speak -s X  │
        │   Unix Socket 写入   │
        └─────────┬───────────┘
-                              │
-                              ▼
-                    ┌─────────────────────┐
-                    │   iVox Daemon      │
-                    │   (手动守护)         │
-                    │                     │
-                    │   ┌───────────────┐ │
-                    │   │ TextCleaner   │ │  ← 去代码噪音
-                    │   │ cleanText()   │ │
-                    │   └───────┬───────┘ │
-                    │           ▼         │
-                    │   ┌───────────────┐ │
-                    │   │ PlaybackQueue │ │  ← 连续管道 / turn 打断
-                    │   │   (actor)     │ │
-                    │   └───────┬───────┘ │
-                    │           ▼         │
-                    │   ┌───────────────┐ │
-                    │   │  TTSEngine    │ │  ← MLX GPU 推理
-                    │   │ synthesize()  │ │     Qwen3-TTS
-                    │   └───────┬───────┘ │
-                    │           ▼         │
-                    │   ┌───────────────┐ │
-                    │   │  AudioPlayer  │ │  ← 扬声器输出
-                    │   │  scheduleBuffer│ │
-                    │   └───────────────┘ │
-                    └─────────────────────┘
+                 │
+                 ▼
+       ┌─────────────────────┐
+       │   iVox Daemon      │
+       │                     │
+       │   TextCleaner       │  ← 去代码噪音 + 切句（真源只此一份）
+       │        ▼            │
+       │   PlaybackQueue     │  ← 归拢成摞 / 调度 / 打断三档
+       │        ▼            │
+       │   TSPRemote ───────┼──→ ┌──────────────────┐
+       │   AudioPlayer       │    │ 誊清员进程        │
+       │   scheduleBuffer    │    │ (ivox tts --serve)│
+       └─────────────────────┘    │  MLX 推理 + PCM  │
+            ↑                     └──────────────────┘
+            └── 扬声器               崩了由 TSPRemote 重拉
 ```
 
 ## 各环节详解
@@ -58,13 +46,11 @@
 
 > ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文插队 / 手动三档：Ctrl+Esc 读下一页 · Ctrl+1 跳整摞 · Ctrl+2 掀桌）。在 Claude Code 里提交、后台 agent 轮次、pi 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip` 承担）。
 
-Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`）：assistant 消息流式显示时按行批触发、取 `delta` 增量逐句播，final 批含完整结尾，故不再挂 `Stop`（否则与 MessageDisplay 同播重复）。Codex 仍用 `Stop`（Codex 无 MessageDisplay 等价事件，只能终了一次），**只搬结论**：从 payload 的 `transcript_path` 里按 `turn_id` + `phase == FinalAnswer` 挑出本轮最终答案，**中途解说（`Commentary`）与半截答案（`PartialAnswer`）一律不搬**；挑不到才退回 payload 自带的 `last_assistant_message`（那本来就是结论）。搬来的东西**一摞一页、不带 `--page`**，与 `ivox speak` 完全同形（2026-10-18 裁决：先前一版搬本轮全部消息当多页，听着像在念日志）。
+Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`）：assistant 消息流式显示时按行批触发，**攒成整页**（final=True 那一批到齐才交出去），交由助理自己切句排队。一页早先被拆成十几批碎片依次入队，听着不像一页，队列顺序也被切碎（2026-10-19 改）。
 
-**两家的 `Stop` payload 不一样，`hook.sh` 按此分叉（2026-10-18 核实源码/文档）**：
+正文之外另挂 **`Stop` → `hook.sh end claude`**，只送「说完了」这个暗号、不出声——当年摘掉的是**连正文一起送**的那条 Stop（与 MessageDisplay 重复播两遍），不是「不许挂 Stop」。
 
-| | `turn_id`（摞号） | 正文 | `hook.sh` 怎么用 |
-|---|---|---|---|
-| Claude | ❌ 没有（通用字段是 `prompt_id`） | MessageDisplay 送 `delta` | 正文靠 MessageDisplay；Stop 只作收尾，按 `session_id` 反查 msgdisplay 记下的那一摞 |
+**Claude 的 `Stop` payload 没有 `turn_id`**（2026-10-18 核实官方 hooks reference）：Stop 事件专属字段只有 `stop_hook_active` / `last_assistant_message` / `background_tasks` / `session_crons`，通用字段里是 `prompt_id` 不是 `turn_id`。所以收尾信号只能按 `session_id` 反查 msgdisplay 记下的那一摞；反查不到就不带 group，服务端退化成「收最后打开的那摞」。
 
 ### 2. Hook 脚本
 
@@ -73,8 +59,7 @@ Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`�
 播报模式：
 
 - **`hook.sh msgdisplay <source>`（MessageDisplay，Claude Code 交互会话主路径）**：assistant 消息流式显示时按行批触发，`delta` = 自上一批以来新完成的整行文本。**必须极快返回**（Claude Code 等本钩子返回才渲染该批），故 delta 提取 + 审计用单个 python、播报用后台 `&`。走 `ivox speak --source <source> <text>` 排队入队，过程内容（分步/工具多段）逐句播报；最后一条 assistant 即完整结尾。空/过短纯西文 delta 不播。
-- **`hook.sh speak <source>`（Stop / ivox speak 场景）**：从 stdin JSON 提取 `last_assistant_message`。调用 `ivox speak` 后台运行，不阻塞 AI 工具。
-  - 注：Claude Code 交互会话现有配置**只挂 `MessageDisplay`**（不再挂 Stop），因 MessageDisplay 的 final 批已含完整结尾、与 Stop 同播会重复；`speak` 模式保留给其他工具/手动 `ivox speak`。
+- **`hook.sh end <source>`（Stop 收尾信号）**：只送「这一摞说完了」的暗号，**不带正文、不出声**。作用是让队列立刻判收尾（字幕立刻回来），不必等空闲宽限那 2 秒。没有它也不会错，只是最后那 2 秒要等满。
 
 > **`interrupt` 分支已从 hook.sh 移除**——打断权只归 ivox 快捷键（右⌘/Cmd+D/Ctrl+2/Ctrl+1/Ctrl+Esc）与命令行 `ivox skip`（同三档），不再经 hook.sh 自动打断（UserPromptSubmit 亦不挂）。
 
@@ -248,7 +233,7 @@ codesign -dv ~/.local/share/ivox/runtime/iVox 2>&1 | grep -E 'flags|Signature|Te
 | 日志有收到但没播放 | 代码签名失效？`codesign -dv ~/.local/share/ivox/runtime/iVox` |
 | 日志有播放但没声音 | AudioPlayer 引擎异常？音量设置？扬声器？ |
 | 播完字幕不收 / 队列不判收尾 | 日志里有没有「播报收尾: 队列已空，字幕收起」；Web 服务在不在 `curl http://127.0.0.1:8888/health` |
-| Hook 不触发 | settings.json / hooks.json 配置是否正确？Shell 权限？ |
+| Hook 不触发 | `~/.claude/settings.json` 配置是否正确？Shell 权限？ |
 
 ## 参考
 

@@ -5,13 +5,17 @@ import iVoxKit
 // 远程 TTS 引擎：主进程不再自己跑 MLX，而是找誊清员进程要音频。
 //
 // 它同时是那个子进程的**监督者**：誊清员崩了（MLX 会崩，这是已知的），
-// 这里重新拉起它，并把断掉的那一句**重发给新进程**接着誊——调用方（PlaybackQueue
-// 的 producer 循环）全程无感，它只看见 PCM 流还在出。
+// 这里重新拉起它，**崩溃的那一块作废**，调用方（PlaybackQueue 的 producer 循环）
+// 记下错误继续念下一块。
+//
+// 为什么不「重发同一句接着誊」：崩之前已经送出的 PCM 帧都进了播报员，重发会得到
+// 「前半截 + 从头再来一遍」——播出来是一句话中间断掉又重复，比直接作废更糟。
+// 纸上写的「从没誊清的那张接着誊」说的是**还没开始合成的那一块**，正是这里做的事。
 //
 // 这么做的前提是「进度存在主进程」：这里只知道自己发到第几句、收到第几帧，
 // 「合到第几块」这个数从不落在子进程里。子进程是无状态的，崩了不带走任何东西。
 
-actor TSPRemote {
+actor TSPRemote: TTSProviding {
     /// 子进程 socket 路径
     private let socketPath: String
     /// 拉起子进程用的可执行文件路径
@@ -30,9 +34,6 @@ actor TSPRemote {
 
     // MARK: - 与本地引擎同名的接口
 
-    var isLoaded: Bool { _isLoaded }
-    private var _isLoaded = false
-
     /// 主进程自己不加载模型，模型在誊清员那边。问它好了没。
     var state: TTSLoadState {
         get async {
@@ -40,7 +41,6 @@ actor TSPRemote {
             guard let s = await Self.queryState(socketPath: socketPath) else {
                 return .failed("誊清员无响应")
             }
-            if s == .ready { _isLoaded = true }
             return s
         }
     }
@@ -50,10 +50,11 @@ actor TSPRemote {
             throw TTSRemoteError.unavailable
         }
         await waitUntilReady()
-        guard _isLoaded else { throw TTSRemoteError.unavailable }
+        guard case .ready = await state else { throw TTSRemoteError.unavailable }
     }
 
-    /// 预热在子进程侧自己做了（它加载完就跑一次），主进程这边无事可做。
+    /// 协议要求，实现是空操作：预热在誊清员进程内自己做了（它加载完就跑一次）。
+    /// 这边只需要把「启动」这件事完成，等的就是 `state`。
     func warmup(voiceID: String) async {
         _ = await state
     }
@@ -82,28 +83,25 @@ actor TSPRemote {
 
     // MARK: - 合成
 
-    func synthesizeStream(text: String, voiceID: String, trace: TTSTrace? = nil)
+    func synthesizeStream(text: String, voiceID: String, trace: TTSTrace?)
         -> AsyncThrowingStream<Data, Error> {
-        AsyncThrowingStream { continuation in
+        // 打断纪元在**入口**快照。若等到 pump 里连完、写完再取，这中间来的一次打断
+        // 会取到推进后的值，比对恒等成立 —— 被打断的那一句照合成照送。
+        let epoch = cancelToken.epoch
+        return AsyncThrowingStream { continuation in
             let task = Task {
-                // 最多重试一次：连接失败说明誊清员刚崩（或还没起来），
-                // 拉起它之后把**同一句**重发过去，调用方那侧无需回退进度。
-                for attempt in 0..<2 {
-                    do {
-                        try await Self.pump(
-                            text: text, voiceID: voiceID, trace: trace,
-                            socketPath: self.socketPath, token: self.cancelToken,
-                            onFrame: { continuation.yield($0) }
-                        )
-                        continuation.finish()
-                        return
-                    } catch {
-                        guard attempt == 0, await self.recoverIfChildGone(error) else {
-                            continuation.finish(throwing: error)
-                            return
-                        }
-                        Log.warn("誊清员断线（\(error)），已重启，重发这一句接着誊\(trace?.logSuffix ?? "")")
-                    }
+                do {
+                    try await Self.pump(
+                        text: text, voiceID: voiceID, trace: trace,
+                        socketPath: self.socketPath, token: self.cancelToken, epoch: epoch,
+                        onFrame: { continuation.yield($0) }
+                    )
+                    continuation.finish()
+                } catch {
+                    // 崩了就记一笔、重启它，这一句作废。不重发（见文件头）。
+                    await self.recoverIfChildGone(error)
+                    Log.error("誊清中断，这一块作废：\(error)\(trace?.logSuffix ?? "")")
+                    continuation.finish(throwing: error)
                 }
             }
             continuation.onTermination = { @Sendable _ in task.cancel() }
@@ -121,10 +119,16 @@ actor TSPRemote {
     // MARK: - 监督
 
     /// 确认誊清员活着；死了就拉起来并等它把 socket 挂上。
+    ///
+    /// **先问 socket、再问 child**：socket 上已经有人在听就复用，哪怕那个进程不是我拉起的。
+    /// 反过来（只看 `child`）会在两种情况下闯祸——
+    /// 调试期手工跑了 `ivox tts --serve`，主进程一起来就把它的 socket 路径 unlink 掉
+    /// 抢走（`SocketServer.start` 开头就 unlink），那个手工进程变没人连的僵尸；
+    /// 主进程上次崩掉留下的孤儿同理。
     private func ensureChildRunning() async -> Bool {
+        if SocketClient.isRunning(path: socketPath) { return true }
         if let child, child.isRunning {
-            if SocketClient.isRunning(path: socketPath) { return true }
-            // 进程在但 socket 没起来：刚起或还没绑，等一下
+            // 进程在但 socket 还没起来：刚拉起，等它绑
             return await waitForSocket(seconds: 60)
         }
         startChild()
@@ -149,6 +153,18 @@ actor TSPRemote {
         }
     }
 
+    /// 主进程退出时带走誊清员。**必须显式杀**：`_exit(0)` 不跑析构，父进程一走，
+    /// 誊清员就成了孤儿——它自己不会退出（`while true` 常驻），会一路抱着 GPU
+    /// 跑到下次开机，调试期反复重启就攒出一串僵尸。
+    func stopChild() {
+        guard let child else { return }
+        child.terminate()          // SIGTERM：它自己装信号处理，走优雅退出
+        child.waitUntilExit()
+        Log.info("誊清员已收: pid=\(child.processIdentifier)")
+        self.child = nil
+        // socket 文件不删：`SocketServer.start` 开头就 unlink，下次 bind 会覆盖
+    }
+
     private func waitForSocket(seconds: Double) async -> Bool {
         let deadline = Date().addingTimeInterval(seconds)
         while Date() < deadline {
@@ -159,14 +175,14 @@ actor TSPRemote {
         return false
     }
 
-    /// 只有「连接类」故障才值得重启子进程。合成本身的错（模型没就绪等）重试没有意义。
-    private func recoverIfChildGone(_ error: Error) async -> Bool {
+    /// 只有「连接类」故障才值得重启子进程。合成本身的错（模型没就绪、半句）重试没有意义。
+    private func recoverIfChildGone(_ error: Error) async {
         guard let posix = error as? POSIXError,
               posix.code == .ECONNREFUSED || posix.code == .ECONNRESET || posix.code == .ENOENT
-        else { return false }
+        else { return }
         Log.warn("誊清员不可达，重启它")
         startChild()
-        return await waitForSocket(seconds: 90)
+        _ = await waitForSocket(seconds: 90)
     }
 
     // MARK: - 传输
@@ -174,7 +190,7 @@ actor TSPRemote {
     /// 发一句、等它的 PCM 逐帧回来。阻塞读跑在全局队列上，不占 actor。
     private static func pump(
         text: String, voiceID: String, trace: TTSTrace?,
-        socketPath: String, token: CancelToken,
+        socketPath: String, token: CancelToken, epoch: UInt,
         onFrame: @escaping @Sendable (Data) -> Void
     ) async throws {
         let fd = try SocketClient.connect(to: socketPath)
@@ -197,18 +213,22 @@ actor TSPRemote {
         // 写端关闭：子进程读完这个 socket 才知道正文结束
         Darwin.shutdown(fd, 1)
 
-        let myEpoch = token.epoch
         var remaining: [UInt8] = []
+        var sawEnd = false
         var buf = [UInt8](repeating: 0, count: 65536)
         while true {
             let n = Darwin.read(fd, &buf, buf.count)
             if n <= 0 { break }
-            // 已被打断：不再往调用方送帧，但仍要把 socket 读完，让子进程那边收口
-            guard token.epoch == myEpoch else { continue }
-            for frame in StreamFrame.parseChunks(from: Data(buf[0..<n]), into: &remaining) {
-                onFrame(frame)
+            let cancelled = token.epoch != epoch
+            // 打断后仍要**解析**，只是不再送帧：解析顺带把缓冲消费掉，不解析的话
+            // remaining 一路涨到本次合成的字节数；而且不读干净会把誊清员堵死。
+            for frame in StreamFrame.parseChunks(from: Data(buf[0..<n]), into: &remaining, sawEnd: &sawEnd) {
+                if !cancelled { onFrame(frame) }
             }
         }
+        // 读干净了却没见过结束标志 = 誊清员崩在这一句中途。EOF 本身不能作数：
+        // 正常念完也是 EOF，不带这个标志就分不出「念完了」和「半句就没了」。
+        guard sawEnd else { throw TTSRemoteError.truncated }
     }
 
     /// 问一句「好了没」，读一行回复就走
@@ -245,4 +265,6 @@ actor TSPRemote {
 
 enum TTSRemoteError: Error {
     case unavailable
+    /// 读到了 EOF 却没见过结束标志：对面在这一句中途没了，只送出了半句
+    case truncated
 }

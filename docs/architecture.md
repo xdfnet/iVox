@@ -2,7 +2,7 @@
 
 ## 概览
 
-macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、Codex、PI coding agent）、微信与全局热键，输出侧走本地 MLX TTS/ASR + 系统媒体控制；另有划词翻译（`Cmd+D`）与 Finder/终端快捷（QuickActions）。
+macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、PI coding agent）、微信与全局热键，输出侧走本地 MLX TTS/ASR + 系统媒体控制；另有划词翻译（`Cmd+D`）与 Finder/终端快捷（QuickActions）。
 
 ```
                           用户
@@ -11,7 +11,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
                        └──┬──┘
                ┌──────────┤
           ilink 长轮询     │ hook.sh
-               │          │ (Claude Code / Codex Stop Hook)
+               │          │ (Claude Code hook)
                ▼          │
          WeChatPlatform   │
          ───────────────  │
@@ -29,12 +29,18 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
               │         ▼          │
               │  PlaybackQueue     │
               │  (actor)           │
-              │   ├─ TTSEngine     │  mlx-audio-swift 流式推理
+              │   ├─ TSPRemote ───┼──→ Unix Socket → 誊清员进程（独立，mlx-audio-swift）
               │   └─ AudioPlayer   │  AVAudioEngine 播放
               │         │          │
               │  MediaController   │  MRMediaRemoteSendCommand
               │  (只给麦克风让路)   │
               └─────────────────────┘
+
+   誊清员进程（`ivox tts --serve`，独立进程）
+   ┌─────────────────────┐
+   │ TTSEngine + TTSServer│  MLX 推理 + PCM 写回
+   │ 崩溃由 TSPRemote 重拉 │  日志 ~/.config/ivox/tts.log
+   └─────────────────────┘
 ```
 
 ## 子系统
@@ -387,7 +393,7 @@ ConnectionHandler.extractVoicePrefix():
 ~/.local/share/ivox/runtime/iVox          # 实际二进制
 ~/.config/ivox/config.json                 # 配置
 ~/.config/ivox/integrations/               # 集成资产权威源（随发布包解包，分发器读这里）
-~/.config/ivox/hook.sh                     # 分发后的 hook（Claude/Codex 挂载引用它）
+~/.config/ivox/hook.sh                     # 分发后的 hook（Claude 挂载引用它）
 ~/.config/ivox/model/                      # TTS/ASR MLX 模型
 ~/.config/ivox/voices/                     # 参考音频
 ~/.config/ivox/wechat/                     # 微信轮询状态

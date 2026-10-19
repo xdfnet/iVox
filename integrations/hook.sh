@@ -135,3 +135,8 @@ except Exception:
   exit 0
 fi
 
+# 认不得的动作：不处理、不出声（Claude Code 收到空输出 + exit 0 当作「hook 无话可说」，
+# 不会阻塞它），但**留一行痕**。旧版配置可能还挂着已删的 `speak`，那会静默地不播报——
+# 没有这行日志时，用户看到的现象与「hook 没触发」一模一样，既不念也查不出是谁的锅。
+echo "$(date '+%F %T') hook.sh 未知动作 action=$1 source=$2" >> "$HOME/.config/ivox/hook.log"
+exit 0

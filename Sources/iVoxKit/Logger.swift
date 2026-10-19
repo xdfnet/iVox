@@ -31,7 +31,7 @@ public enum Log {
     /// 本进程的角色（daemon / queue / tts / …）。写进每一行，是「谁犯的错」的
     /// 第一现场判据：即使哪天几个文件又合到一起，逐行看角色仍分得清。
     /// 由子进程启动时用 IVOX_ROLE 指定。
-    public static let role: String = {
+    static let role: String = {
         let r = ProcessInfo.processInfo.environment["IVOX_ROLE"] ?? ""
         return r.isEmpty ? "daemon" : r
     }()
@@ -79,7 +79,7 @@ public enum Log {
     private static func writeFile(_ level: String, _ message: String) {
         fileQueue.async {
             // 行首固定四段：时间 / 级别 / 角色 / 正文。
-            // 角色是给 `ivox logs` 归因用的——它按列切这三段即可还原「哪个角色、
+            // 角色是给未来的归因工具（`ivox logs`，还没做）用的——它按列切这三段即可还原「哪个角色、
             // 什么时刻、干了什么」，不必依赖文件各自分开。
             let line = "\(timestamp()) [\(level)] [\(role)] \(message)\n"
             let data = Data(line.utf8)

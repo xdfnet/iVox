@@ -78,7 +78,7 @@ ivox wechat status             # 查看配置状态
 | 音色 | 说明 |
 |------|------|
 | 甜妹桃子 taozi | 活泼甜美，默认 |
-| 湾湾小何 wanwan | 温柔知性，Codex 默认 |
+| 湾湾小何 wanwan | 温柔知性 |
 | 米仔 mizai | 温暖自然 |
 | 大易 dayi | 沉稳可靠 |
 
@@ -120,9 +120,9 @@ make clean     # 清除 .build
 ## 架构
 
 ```
-Claude Code / Codex → hook ─┐
+Claude Code → hook ─┐
 pi 扩展（逐句流式）──────────┴→ Unix Socket → Daemon
-                                            ├── TTSEngine (本地 MLX)
+                                            ├── TSPRemote ─→ 誊清员进程 (独立, MLX 合成)
                                             ├── WeChatPlatform (ilink 长轮询)
                                             │       └─ 常驻 Claude Agent (Swift 直连 claude)
                                             ├── GlobalKeyTap (键盘事件层：一个 tap，按归属路由)
