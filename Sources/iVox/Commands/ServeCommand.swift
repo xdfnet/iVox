@@ -33,5 +33,12 @@ struct ServeCommand: AsyncParsableCommand {
 
         let daemon = Daemon(config: config)
         try await daemon.run()
+        // 正常收尾后**不走静态析构**：mlx 全局持有一张 `CommandEncoder` 哈希表，进程退出时
+        // `__cxa_finalize_ranges` → 表析构 → `CommandEncoder::~CommandEncoder` →
+        // `end_encoding` 在仍挂着未收口的 encoder 时 SIGSEGV（2026-10-19 15:20 实测：
+        // `ivox restart` 恰好在合成进行中，整进程被这一下带崩，自检里连着几个用例 ECONNREFUSED）。
+        // 收尾已完成、日志已落盘，直接刷盘退场，不给析构函数碰 GPU 的机会。
+        fflush(nil)
+        _exit(0)
     }
 }

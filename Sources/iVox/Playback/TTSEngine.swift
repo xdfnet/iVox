@@ -172,9 +172,16 @@ actor TTSEngine {
         )
 
         var chunkIdx = 0
+        // 被打断后**不能直接抛掉**：此时 MLX 的 encoder 里还压着未 commit 的命令，
+        // 生成器随作用域结束析构 → AGX Metal 在 commit 时报
+        // "failed assertion `commit command buffer with uncommitted encoder`" 直接 SIGABRT，
+        // 或者在 copy_gpu 里 SIGSEGV（2026-10-19 一天 5 次崩溃全是这两张脸）。
+        // 故取消后停止 yield 但继续把流读完，等 GPU 自然收口再退出。
+        var cancelled = false
         for try await event in stream {
-            try Task.checkCancellation()
+            if Task.isCancelled { cancelled = true }
             if case .audio(let chunk) = event {
+                if cancelled { continue }
                 let samples: [Float] = chunk.asArray(Float.self)
                 let pcm = audioToPCM(
                     samples,
@@ -188,6 +195,7 @@ actor TTSEngine {
                 chunkIdx += 1
             }
         }
+        if cancelled { throw CancellationError() }
         try Task.checkCancellation()
         Log.info("TTS 流式完成: chunks=\(chunkIdx)")
         continuation.finish()

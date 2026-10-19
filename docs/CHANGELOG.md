@@ -34,6 +34,21 @@
   `sealTurn` 现在内部调 `bury(id)`，墓碑只拦入队口 `appendToStack`/`appendPlain` 的同 turn_id
   增量，对在播/已合成的块没影响——放心。`finishTurn` 路径不变，只是它现在能更早立碑。
 
+### v5.2.0 修订二 — 2026-10-19
+
+- **打断后不再半途丢弃 MLX 流（治一天 5 次的崩溃）** — 2026-10-19 一天崩 5 次，两张脸：
+  `SIGABRT` 报 `IOGPUMetalCommandBuffer validate: failed assertion 'commit command buffer
+  with uncommitted encoder'`，`SIGSEGV` 崩在 AGXMetal `computeCommandEncoder` →
+  mlx `copy_gpu_inplace`，stderr 侧还有 `std::system_error: mutex lock failed`。
+  根因不是模型并发（世代闸门早就在），而是**取消时直接把 MLX 生成器扔掉**：encoder 里还压着
+  未 commit 的命令，析构即触发 GPU 断言。现在取消后停止 yield 但**继续把流读完**，等 GPU 自然
+  收口再抛 `CancellationError`，闸门时序不变。
+- **`crash.log` 从此不再恒为 0 字节** — 处理器用 `String.write(toFile:)` 清空记录，那是
+  「写临时文件 + rename」，换掉了 inode；而 fd 在此之前就已打开，指向的是一个已经没人看见的
+  孤儿 inode，于是**每次崩溃的完整调用栈都写进了虚空**（日志里那句「完整栈见 crash.log」
+  指了个空文件）。现在顺序倒过来：先报走上次记录、用 `ftruncate` 原地截断，再打开 fd。
+- **崩溃编号跨重启累计** — 计数记在 `~/.config/ivox/crash.count`，不再每次重启都从 `#1` 开始。
+
 ## v5.1.0 — 2026-10-18
 
 本版一句话：**播报站自己发号，各端只管把材料递进来。** 起因是「Ctrl+1 掀摞之后后面的内容没播」，

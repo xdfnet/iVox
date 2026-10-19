@@ -16,6 +16,10 @@ import iVoxKit
 /// 写一次，之后全是只读。
 private nonisolated(unsafe) var crashLogFD: Int32 = -1
 
+/// 历史崩溃累计次数，跨重启累计：crash.log 每次启动就被清空，单靠它编号永远是 #1。
+/// 单独落一个小文件存，只在启动期读写一次。
+private nonisolated(unsafe) var crashCount: Int = 0
+
 /// 崩溃后由系统调进来：不返回，把现场写盘再退掉，让 launchd 拉起新进程。
 /// 队列是纯内存的，进程一换全丢——所以这几行是「那一摞为什么没念完」的唯一线索。
 /// 必须是顶层函数：Swift 只允许把顶层 `func` 的引用转成 C 函数指针。
@@ -38,6 +42,11 @@ enum CrashTrap {
         let path = crashLogPath()
         try? FileManager.default.createDirectory(
             atPath: AppPaths.configDir, withIntermediateDirectories: true)
+        // 顺序要紧：先把上次崩溃的记录报走并**原地截断**这份文件，再打开 fd。
+        // 反过来做会毁掉记录——`String.write(toFile:)` 是「写临时文件 + rename」，
+        // 换掉了 inode；随后 open 拿到的 fd 指向的旧 inode 已无人可见，
+        // 本次崩溃的调用栈就写进了一个看不见的孤儿文件（crash.log 恒为 0 字节）。
+        reportPreviousCrash()
         crashLogFD = open(path, O_WRONLY | O_CREAT | O_APPEND, 0o600)
         guard crashLogFD >= 0 else {
             Log.warn("崩溃捕获：打不开 \(path)，本次崩溃将没有调用栈")
@@ -46,24 +55,35 @@ enum CrashTrap {
         for sig in [SIGABRT, SIGSEGV, SIGBUS, SIGILL, SIGFPE] {
             signal(sig, ivoxCrashHandler)
         }
-        reportPreviousCrash()
     }
 
-    /// 上次崩溃留下的记录在 daemon.log 里报一声，并把 crash.log 腾空。
-    /// 不清空的话它会一直躺在那儿，下次真崩了日志会混在一起。
+    /// 上次崩溃留下的记录在 daemon.log 里报一声（编号接着上次往后排），并把
+    /// crash.log 腾空。不清空的话它会一直躺在那儿，下次真崩了日志会混在一起。
+    /// 截断用 `ftruncate` 对文件本身做，不换 inode——见 install() 的注释。
     private static func reportPreviousCrash() {
         let path = crashLogPath()
-        guard let text = try? String(contentsOfFile: path, encoding: .utf8), !text.isEmpty else { return }
-        for (i, r) in text.components(separatedBy: "--- 崩溃结束 ---").enumerated()
-        where !r.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+        if let prev = try? String(contentsOfFile: crashCountPath(), encoding: .utf8).trimmingCharacters(in: .whitespacesAndNewlines),
+           let n = Int(prev) {
+            crashCount = n
+        }
+        guard let text = try? String(contentsOfFile: path, encoding: .utf8), !text.isEmpty else {
+            try? String(crashCount).write(toFile: crashCountPath(), atomically: true, encoding: .utf8)
+            return
+        }
+        let records = text.components(separatedBy: "--- 崩溃结束 ---")
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+        for (i, r) in records.enumerated() {
             let head = r.split(separator: "\n").first.map(String.init) ?? "?"
-            Log.warn("崩溃记录 #\(i + 1)：\(head)｜完整栈见 \(path)")
+            Log.warn("崩溃记录 #\(i + crashCount + 1)：\(head)｜完整栈见 \(path)")
             // 栈也进 daemon.log：只看 crash.log 容易忘，而多行日志不便 grep
             for line in r.split(separator: "\n").dropFirst().prefix(12) {
                 Log.warn("  \(line)")
             }
         }
-        try? "".write(toFile: path, atomically: true, encoding: .utf8)
+        let fd = open(path, O_WRONLY)
+        if fd >= 0 { ftruncate(fd, 0); close(fd) }
+        crashCount += records.count
+        try? String(crashCount).write(toFile: crashCountPath(), atomically: true, encoding: .utf8)
     }
 
     static func signalName(_ sig: Int32) -> String {
@@ -79,5 +99,9 @@ enum CrashTrap {
 
     private static func crashLogPath() -> String {
         (AppPaths.configDir as NSString).appendingPathComponent("crash.log")
+    }
+
+    private static func crashCountPath() -> String {
+        (AppPaths.configDir as NSString).appendingPathComponent("crash.count")
     }
 }
