@@ -96,7 +96,7 @@ struct OnCommand: ParsableCommand {
         //    没法从报错区分，只能把 enable 放在前面兜住。
         LaunchAgent.launchctl(["enable", LaunchAgent.guiTarget + "/" + LaunchAgent.label])
         // 3) 起或重启：未加载则 bootstrap（首次），已加载则 kickstart -k 重载新二进制。
-        //    做成幂等是必须的——`ivox upgrade` 与微信授权后都靠本命令重启，
+        //    做成幂等是必须的——`ivox update` 与微信授权后都靠本命令重启，
         //    而那时 job 通常已加载（bootstrap 会报 EEXIST）。
         var status = LaunchAgent.launchctl(["bootstrap", LaunchAgent.guiTarget, LaunchAgent.plistPath])
         if status != 0 {

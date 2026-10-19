@@ -51,7 +51,7 @@ ivox status                 # 版本、各功能健康状态、权限、模型/�
 ivox listen -f 录音.wav     # 语音识别
 ivox on                     # 启动（并配置登录自启 + 崩溃自动重启）
 ivox off                    # 停止并关闭自启（卸下 job + disable；plist 保留，ivox on 恢复）
-ivox upgrade                # 检查 GitHub 最新版并自动升级（备份旧版、重签、重启）
+ivox update                 # 检查 GitHub 最新版并自动升级（备份旧版、重签、重启）
 ```
 
 **健康检查**（Web UI 端口，默认 8888）：

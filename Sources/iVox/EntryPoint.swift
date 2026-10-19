@@ -20,7 +20,7 @@ struct iVox: AsyncParsableCommand {
             WeChatCommand.self,
             TranslateCommand.self,
             VersionCommand.self,
-            UpgradeCommand.self,
+            UpdateCommand.self,
             ServeCommand.self,
         ],
         defaultSubcommand: ServeCommand.self

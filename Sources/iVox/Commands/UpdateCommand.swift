@@ -2,13 +2,13 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
-// CLI 子命令 ivox upgrade：从 GitHub Release 自升级。
+// CLI 子命令 ivox update：从 GitHub Release 自升级。
 
 /// 检查 GitHub 最新 release 并自动升级：下载适配 macos-arm64 的 tarball →
 /// 停守护进程 → 备份旧版 → 解包替换 → ad-hoc 重签 → （原本在运行则）重启。
-struct UpgradeCommand: AsyncParsableCommand {
+struct UpdateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
-        commandName: "upgrade",
+        commandName: "update",
         abstract: "升级到 GitHub 最新版本（自动备份旧版并重启守护进程）"
     )
 
@@ -33,15 +33,18 @@ struct UpgradeCommand: AsyncParsableCommand {
     }
 
     func run() async throws {
+        // 先报当前版本，**已是最新时也照报**——参照 `claude update` 的节奏：
+        // 当前版本 → 检查 → 目标版本 → 结果。上来就给版本号，升级前后的差别一眼可见。
+        print("当前版本: v\(iVoxVersion)")
         // 1. 拉取最新 release
         print("正在检查最新版本…")
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(Self.repo)/releases/latest")!)
-        request.setValue("iVox-Upgrade", forHTTPHeaderField: "User-Agent")  // GitHub API 要求 UA
+        request.setValue("iVox-Update", forHTTPHeaderField: "User-Agent")  // GitHub API 要求 UA
         request.timeoutInterval = 20
         // 未认证的 GitHub API 只有 **60 次/小时、按出口 IP 算**——路由器透明代理下全机共用一个 IP，
         // 配额被别人用完就轮到自己遭殃，返回 `{"message":"API rate limit exceeded…"}`，
         // 而那里面**没有 tag_name**，于是 Swift 报「解析 release 信息失败」，把限流说成了代码坏了
-        // （2026-10-19 实测：飞哥机器上配额耗尽，upgrade 直接崩在这个坑上）。
+        // （2026-10-19 实测：飞哥机器上配额耗尽，update 直接崩在这个坑上）。
         // 认证后是 5000 次/小时。token 只进请求头，**绝不打印、不写日志**。
         if let token = Self.authToken() {
             request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
@@ -101,7 +104,7 @@ struct UpgradeCommand: AsyncParsableCommand {
             print("错误: 最新版 v\(latest) 未提供适配本机（macos-arm64）的 .tar.gz 安装包")
             throw ExitCode.failure
         }
-        print("发现新版本 v\(latest)（当前 v\(iVoxVersion)），开始下载 \(asset.name)")
+        print("正在更新到 v\(latest)…（下载 \(asset.name)）")
 
         // 3. 下载到临时文件
         guard let downloadURL = URL(string: asset.browserDownloadUrl) else {
@@ -115,7 +118,7 @@ struct UpgradeCommand: AsyncParsableCommand {
         let tarURL: URL
         do {
             let (tmpURL, _) = try await URLSession.shared.download(for: URLRequest(url: downloadURL))
-            let dest = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ivox-upgrade-\(safeTag).tar.gz")
+            let dest = URL(fileURLWithPath: NSTemporaryDirectory()).appendingPathComponent("ivox-update-\(safeTag).tar.gz")
             try? FileManager.default.removeItem(at: dest)
             try FileManager.default.moveItem(at: tmpURL, to: dest)
             tarURL = dest
@@ -206,7 +209,7 @@ struct UpgradeCommand: AsyncParsableCommand {
             try? FileManager.default.removeItem(atPath: socketPath)
             try OnCommand().run()
         }
-        print("✓ 已升级到 v\(latest)")
+        print("✓ 已从 v\(iVoxVersion) 更新到 v\(latest)")
         if !wasRunning {
             print("守护进程此前未运行，需要时执行 ivox on 启动")
         }
