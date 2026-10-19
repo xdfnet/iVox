@@ -1,8 +1,15 @@
 # iVox 开发日志
 
-## 未发布
+## v5.2.0 — 2026-10-19
 
-- **`ivox upgrade` 支持 GitHub 认证，报错不再误导** — 未认证的 GitHub API 只有
+本版一句话：**自升级这条路自己走通**——名字对齐 `make update`、GitHub 认证自带、
+输出照 `claude update` 的节奏，让人一眼看出升级前后差在哪。
+
+- **`ivox upgrade` 改名 `ivox update`**，与 `make update` 说法一致（少一个记法）
+- **输出照 `claude update` 的四段式**：当前版本 → 检查 → 目标版本 → 结果。
+  关键是**开头就报当前版本、已是最新时也照报**——原先「已是最新版本 v5.1.0」是唯一
+  一行输出，看不出它查了什么
+- **支持 GitHub 认证，报错不再误导** — 未认证的 GitHub API 只有
   **60 次/小时、按出口 IP 算**（路由器透明代理下全机共用一个 IP，别人用完你就遭殃）。
   配额耗尽时 GitHub 返回 `{"message":"API rate limit exceeded…"}`——**合法 JSON，但没有
   `tag_name`**，于是解 JSON 崩掉、报成「解析 release 信息失败」，把人引向「代码坏了」
