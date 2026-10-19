@@ -154,7 +154,7 @@ final class SpeechInputService: @unchecked Sendable {
         }
         recorder.isMeteringEnabled = true
         guard recorder.record(forDuration: config.maxRecordingSeconds) else {
-            Log.error("语音输入: 录音启动失败")
+            Log.error("语音输入: 录音启动失败 —— \(Self.describeInputSituation())")
             // **不能在这里直接析构**：`record()` 返回 false 的那一瞬，audio queue 的
             // 输入回调线程已经起来了，它下一拍仍会进来访问这个 recorder。此时让
             // 它失去最后一个强引用 → 回调里 `objc_loadWeak` 拿到已释放对象 → SIGSEGV
@@ -169,6 +169,46 @@ final class SpeechInputService: @unchecked Sendable {
     }
 
     // MARK: - 失败路径的隔离区
+
+    /// 起不来时把「**为什么**」写进日志：只写「失败」没法查，两天后再看只会重新猜一遍。
+    ///
+    /// 关键是**授权层与设备层分开**：TCC 给了 `authorized` 不等于插着麦克风，最常见的
+    /// 恰恰是「授权已给、设备层空的」——这时去系统设置里翻是白找（那里本来就勾上了）。
+    /// 设备层空还有第二种：耳机/某些 USB 麦克风**按需唤醒**，没唤醒时枚举里就是空的，
+    /// 所以这里只描述、不据此拒绝——正是这个「按需唤醒」让「提前预检设备」不可行。
+    private static func describeInputSituation() -> String {
+        let auth = AVCaptureDevice.authorizationStatus(for: .audio)
+        let authText = auth == .authorized ? "授权已给" : "授权未给(raw=\(auth.rawValue))"
+        guard let name = defaultInputDeviceName() else {
+            return "\(authText)，但**设备层没有默认输入设备**（没插？或耳机类设备尚未被唤醒）"
+        }
+        return "\(authText)，设备层默认输入=「\(name)」"
+    }
+
+    /// 系统当前认定的默认输入设备名；`nil` = 一个都没有。
+    /// 走 CoreAudio——`AVAudioSession` 是 iOS 独有的，macOS 上没有这回事。
+    /// **只用来写日志、不据此拒绝**：耳机与某些 USB 麦克风按需唤醒，没被唤醒时这里就是 nil，
+    /// 拿它当门禁会把本来能用的设备焊死（这是本条存在的理由，也是它不加判断的理由）。
+    private static func defaultInputDeviceName() -> String? {
+        var deviceID = AudioDeviceID(0)
+        var size = UInt32(MemoryLayout<AudioDeviceID>.size)
+        var address = AudioObjectPropertyAddress(
+            mSelector: kAudioHardwarePropertyDefaultInputDevice,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let status = AudioObjectGetPropertyData(
+            AudioObjectID(kAudioObjectSystemObject), &address, 0, nil, &size, &deviceID)
+        guard status == noErr, deviceID != AudioDeviceID(kAudioObjectUnknown) else { return nil }
+
+        var name: CFString = "" as CFString
+        var nameSize = UInt32(MemoryLayout<CFString>.size)
+        var nameAddress = AudioObjectPropertyAddress(
+            mSelector: kAudioObjectPropertyName,
+            mScope: kAudioObjectPropertyScopeGlobal,
+            mElement: kAudioObjectPropertyElementMain)
+        let nameStatus = AudioObjectGetPropertyData(deviceID, &nameAddress, 0, nil, &nameSize, &name)
+        return nameStatus == noErr ? (name as String) : nil
+    }
 
     /// 启动失败的 recorder 在这里多活一会儿再释放。1 秒：`stop()` 之后回调线程通常
     /// 一两拍就退了，1 秒足够宽；再长也只是白占内存（一个 recorder 几 MB）。
