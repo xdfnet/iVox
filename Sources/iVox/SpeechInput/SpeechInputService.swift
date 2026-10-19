@@ -155,9 +155,39 @@ final class SpeechInputService: @unchecked Sendable {
         recorder.isMeteringEnabled = true
         guard recorder.record(forDuration: config.maxRecordingSeconds) else {
             Log.error("语音输入: 录音启动失败")
+            // **不能在这里直接析构**：`record()` 返回 false 的那一瞬，audio queue 的
+            // 输入回调线程已经起来了，它下一拍仍会进来访问这个 recorder。此时让
+            // 它失去最后一个强引用 → 回调里 `objc_loadWeak` 拿到已释放对象 → SIGSEGV
+            // （2026-10-19 16:17 实测：AVFAudio `AudioRecorderAQInputCallback` → 野指针）。
+            // 先 stop 让队列停下，再延迟释放给回调线程留出退出时间——和 TTS 那侧
+            // 「取消后排空 MLX 流再放行」是同一个思路。
+            recorder.stop()
+            Self.quarantine(recorder)
             return nil
         }
         return (recorder, url)
+    }
+
+    // MARK: - 失败路径的隔离区
+
+    /// 启动失败的 recorder 在这里多活一会儿再释放。1 秒：`stop()` 之后回调线程通常
+    /// 一两拍就退了，1 秒足够宽；再长也只是白占内存（一个 recorder 几 MB）。
+    private static let quarantineSeconds = 1.0
+    private static let quarantineLock = NSLock()
+    /// `nonisolated(unsafe)`：访问全在 `quarantineLock` 保护下，Swift 6 只是看不见锁。
+    private nonisolated(unsafe) static var quarantine: [AVAudioRecorder] = []
+
+    private static func quarantine(_ recorder: AVAudioRecorder) {
+        quarantineLock.withLock { quarantine.append(recorder) }
+        Task {
+            try? await Task.sleep(for: .seconds(quarantineSeconds))
+            releaseFromQuarantine(recorder)
+        }
+    }
+
+    /// 单独拆出来：锁只能在同步上下文里拿，Swift 6 不许在 `Task` 里直接 lock。
+    private static func releaseFromQuarantine(_ recorder: AVAudioRecorder) {
+        quarantineLock.withLock { quarantine.removeAll { $0 === recorder } }
     }
 
     private func finishRecording(recorder: AVAudioRecorder, audioURL: URL) {

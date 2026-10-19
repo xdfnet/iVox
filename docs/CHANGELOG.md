@@ -51,6 +51,17 @@
   库要靠 `ObjectIdentifier(refAudio)` 复用输入准备上下文，必须交同一个实例，造新的每块
   多花 1~2 秒（实测 4~5s 涨到 5~7s）。是必要的难看，不是冗余。
 
+### 录音启动失败不再野指针崩溃
+
+- **`record()` 失败不再直接析构 recorder** — 2026-10-19 16:17 实测的新崩溃线，与 MLX 那条
+  **同病同源**：`recorder.record(forDuration:)` 返回 false 的那一瞬，audio queue 的输入回调
+  线程**已经起来了**，而代码直接 `return nil` 让 recorder 失去最后一个强引用；回调线程下一拍
+  进来访问已释放对象 → `objc_loadWeak` 野指针 → SIGSEGV（栈底 AVFAudio
+  `AudioRecorderAQInputCallback`）。现场日志 `Weak reference ... not in the weak references
+  table` 就是「弱引用指向的对象已死」。现在失败时先 `stop()` 让队列停下，再进**隔离区**
+  延迟 1 秒释放——和 TTS 那侧「取消后排空 MLX 流再放行」是同一个思路：**底层线程已经在跑，
+  就不能把对象扔了**。这条线此前一直存在，只是今天才第一次留下「录音启动失败」的日志、被抓到。
+
 ## v5.2.1 — 2026-10-19
 
 本版一句话：**止住一天 5 次的 MLX/Metal 崩溃，顺带把一直写不下来的崩溃栈修好。**
