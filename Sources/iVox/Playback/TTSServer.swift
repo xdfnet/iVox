@@ -53,8 +53,27 @@ final class TTSServer: SocketConnectionHandler {
 
         let body = data
         let meta = Self.parseMetaKV(header)
+
+        // 状态查询：主进程靠它判断模型好了没、还能不能派活。不碰模型，只回一行字。
+        if meta["type"] == "status" {
+            Task {
+                let reply: String
+                switch await engine.state {
+                case .ready: reply = "{state:ready}"
+                case .failed(let msg): reply = "{state:failed:\(msg)}"
+                case .notStarted, .loading: reply = "{state:loading}"
+                }
+                _ = writeAll(Data(reply.utf8), to: fd)
+                Darwin.close(fd)
+            }
+            return
+        }
+
         let sourceID = meta["source"] ?? "default"
         let voiceID = meta["voice"] ?? config.sourceVoices[sourceID] ?? config.defaultVoice
+        // 块号：主进程递过来的助理自编流水号，块的唯一身份。带在每行日志上，
+        // 这一块在本进程的经历才能被 `ivox logs` 跨文件串起来，而不是靠时间戳猜。
+        let trace = TTSTrace(seq: meta["seq"].flatMap(UInt.init), source: meta["source"])
         let text = String(decoding: body, as: UTF8.self)
             .trimmingCharacters(in: .whitespacesAndNewlines)
 
@@ -66,6 +85,7 @@ final class TTSServer: SocketConnectionHandler {
             return
         }
 
+        Log.info("誊清开始 voice=\(voiceID) chars=\(cleaned.count)\(trace.logSuffix)")
         Task {
             defer { Darwin.close(fd) }
             do {
@@ -73,15 +93,15 @@ final class TTSServer: SocketConnectionHandler {
                 var total = 0
                 for try await pcm in stream {
                     if !writeAll(StreamFrame.chunk(pcm), to: fd) {
-                        Log.warn("誊清员: 写入失败（主进程断开），终止本次合成")
+                        Log.warn("誊清: 写入失败（主进程断开），终止本次合成\(trace.logSuffix)")
                         break
                     }
                     total += pcm.count
                 }
                 _ = writeAll(StreamFrame.end, to: fd)
-                Log.info("誊清: voice=\(voiceID) bytes=\(total) chars=\(cleaned.count)")
+                Log.info("誊清完成 voice=\(voiceID) bytes=\(total)\(trace.logSuffix)")
             } catch {
-                Log.error("誊清失败: \(error)")
+                Log.error("誊清失败: \(error)\(trace.logSuffix)")
                 _ = writeAll(StreamFrame.end, to: fd)
             }
         }

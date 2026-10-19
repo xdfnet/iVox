@@ -160,7 +160,7 @@ actor PlaybackQueue {
     /// **这是打断起点的对外只读投影**：三档打断取的就是它（`session.takeHead*`），
     /// 所以黑盒脚本按压前后各读一次，就能量出「掀掉的是不是正在听的那一摞」。
     /// nil = 还没出声（冷启动）或设备已播空。
-    /// `audibleTurn` 是**外部** turn_id——无分组来源（codex / `ivox speak`）没有这个号，
+    /// `audibleTurn` 是**外部** turn_id——无分组来源（如 `ivox speak`）没有这个号，
     /// 报 null 是如实反映，不是缺数据；`audiblePage` 是资料室自编的页号，任何来源都报得出。
     var audibleTurn: String? { get async { await session.headStackTarget()?.turnID } }
     var audiblePage: Int? { get async { await session.headPageNo } }
@@ -190,8 +190,8 @@ actor PlaybackQueue {
     /// 常规入队（无分组整段播报）。
     /// **不抢麦**：回复到达时的播报若去抢，两个后台会话收尾就会互相掐掉对方的内容
     /// （实测 868 字长回复被 199ms 后的 84 字短回复整条掐掉）。按到达序排队、播全播完。
-    /// - Returns: 助理自编的摞号；`turnID` 为 nil 时每次调用都自开新摞（`ivox speak` /
-    ///   codex 的形态：一次调用一摞、一摞一页）。
+    /// - Returns: 助理自编的摞号；`turnID` 为 nil 时每次调用都自开新摞（`ivox speak` 的形态：
+    ///   一次调用一摞、一摞一页）。
     @discardableResult
     func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async -> Int? {
         guard !newJobs.isEmpty else { return nil }
@@ -328,7 +328,7 @@ actor PlaybackQueue {
         await preemptCurrent(origin)
         onCaption?(nil)   // 被掀掉的那一摞立刻从字幕撤下；下一摞开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移
-        // 摞号与页号都是资料室自编的，所以**不论来的是 claude / codex / pi / ivox speak，
+        // 摞号与页号都是资料室自编的，所以**不论来的是 claude / pi / ivox speak，
         // 日志里都报得出「第几摞」**——早先这里打外部 turn_id，无编号的来源只能打「无分组」，
         // 事后无从判断掀掉的到底是哪一摞（18:11 那次 34 块就是这么看糊涂的）。
         let no = taken.map { "\($0.localID)" } ?? "-"
@@ -534,7 +534,11 @@ actor PlaybackQueue {
                     // 只要确认这一块还在（在播）就合成；不在了（掀掉了）就跳过它、游标照常前移。
                     if await session.nextCursor()?.seq != cursor.seq { continue }
                     claimed = true
-                    let stream = await engine.synthesizeStream(text: job.text, voiceID: job.voiceID)
+                    // 块号（助理自编、块的唯一身份）跟着这次合成递到引擎，远程时是
+                    // 誊清员进程——它那边的日志据此认领是哪一块，跨文件串得起来。
+                    let stream = await engine.synthesizeStream(
+                        text: job.text, voiceID: job.voiceID,
+                        trace: TTSTrace(seq: job.seq, source: job.source))
 
                     // 句首块捎上这句的文本：播放器在它被设备读出时报字幕（跟随声音，而非合成）
                     var isFirstBlock = true

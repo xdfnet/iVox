@@ -7,12 +7,8 @@ import iVoxKit
 // 本地 TTS 引擎（mlx-audio-swift）。
 
 actor TTSEngine {
-    enum LoadState: Sendable {
-        case notStarted
-        case loading
-        case ready
-        case failed(String)
-    }
+    /// 与远程引擎（TSPRemote）共用同一套就绪状态，调用方 switch 它时不必分两份
+    typealias LoadState = TTSLoadState
 
     private var model: (any SpeechGenerationModel)?
     private var config: Config
@@ -116,7 +112,9 @@ actor TTSEngine {
         for cont in waiters { cont.resume() }
     }
 
-    func synthesizeStream(text: String, voiceID: String) -> AsyncThrowingStream<Data, Error> {
+    /// - Parameter trace: 摞/页/块三个号。进程内引擎用不上（自家日志在同一份文件里），
+    ///   但保留同名参数，让 `TSPRemote` 能顶替本类而不动调用方 —— 见 TTSTrace。
+    func synthesizeStream(text: String, voiceID: String, trace: TTSTrace? = nil) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {

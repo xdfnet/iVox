@@ -30,6 +30,7 @@ struct TTSCommand: AsyncParsableCommand {
         // 猜是谁干的 —— 2026-10-19 晚上从「pi 没出声」查到「MLX 崩了」翻了三轮，
         // 根子就在那儿。拆开的收益之一是：哪个文件里有现场，就是哪个角色的错。
         setenv("IVOX_LOG_FILE", "~/.config/ivox/tts.log", 1)
+        setenv("IVOX_ROLE", "tts", 1)
 
         let socketPath = AppPaths.ttsSocketPath
         if SocketClient.isRunning(path: socketPath) {
