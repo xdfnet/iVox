@@ -15,10 +15,16 @@ public actor TranslationService {
     private let proxySession: URLSession?
     /// 一旦确认「直连不通、代理可用」就记住，后续直接走代理（省掉每次十几秒的探测）
     private var preferProxy = false
-    /// **只留最近一次**成功译文。同一段文字反复划、反复试，不该反复花钱。
-    private var lastSuccess: (key: String, result: TranslationResult)?
-    /// 同一段文字**正在进行中**的那一次：后到的直接等它的结果，不另发一条请求。
+    /// 已完成的历史，**先进先出**，只留最近 `capacity` 条。
+    /// 一条就够挡住「刚译完又按一次」，但真实用法是「反复对比几段」——来回切就得靠它。
+    /// 每条存原文（键里）+ 译文，`validateSelectionText` 把原文卡在 5000 字以内，
+    /// 所以极端情况 16 条也只有几百 KB，相对 10G 的模型可以忽略。
+    private var history: [(key: String, result: TranslationResult)] = []
+    /// 正在飞的那一次。**只有一个槽位**：它是「还没落进 history 的那次」，
+    /// 和历史不是一回事（键可以重合但生命周期不同），故单独一个字段而非塞进历史。
     private var inFlight: (key: String, task: Task<TranslationResult, Never>)?
+
+    private static let capacity = 16
 
     public init(config: TranslationConfig, session: URLSession = .shared) {
         self.config = config
@@ -29,12 +35,12 @@ public actor TranslationService {
     /// 入口：先问缓存、问在途，都不中才真的发请求。
     ///
     /// 两层省的是不同的钱：**在途去重**省掉「同一段文字被重复按下时并发的第二次请求」，
-    /// **最近一次缓存**省掉「译完又按一次」的重来。命中缓存照样把译文返回给调用方，
+    /// **历史缓存**省掉「译完又按一次」的重来。命中缓存照样把译文返回给调用方，
     /// 朗读照旧——用户想听的是译文，缓存省的是生成，不是他的耳朵。
     public func translate(_ text: String) async -> TranslationResult {
         let key = cacheKey(text)
-        if let hit = lastSuccess, hit.key == key {
-            Log.debug("翻译: 命中最近一次缓存（\(text.count) 字，不再发请求）")
+        if let hit = history.first(where: { $0.key == key }) {
+            Log.debug("翻译: 命中历史缓存（\(text.count) 字，不再发请求）")
             return hit.result
         }
         if let f = inFlight, f.key == key {
@@ -44,7 +50,11 @@ public actor TranslationService {
         let task = Task { await self.dispatchWithFallback(text) }
         inFlight = (key, task)
         let result = await task.value
-        if case .success = result { lastSuccess = (key, result) }
+        if case .success = result {
+            history.removeAll { $0.key == key }
+            history.append((key, result))
+            if history.count > Self.capacity { history.removeFirst(history.count - Self.capacity) }
+        }
         if inFlight?.key == key { inFlight = nil }
         return result
     }

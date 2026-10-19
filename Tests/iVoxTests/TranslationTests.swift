@@ -169,7 +169,7 @@ final class TranslationCacheTests: XCTestCase {
         return TranslationService(config: .init(), session: URLSession(configuration: cfg))
     }
 
-    /// 同一段文字译两次，只该发一次请求；换一段就该再发一次（缓存只留最后一次）。
+    /// 同一段文字译两次，只该发一次请求；换一段就该再发一次。
     func testSameTextTwiceSendsOneRequest() async {
         let service = makeService()
         let a = await service.translate("你好")
@@ -180,9 +180,27 @@ final class TranslationCacheTests: XCTestCase {
 
         _ = await service.translate("另一段")
         XCTAssertEqual(CountingURLProtocol.requestCount, 2)
-        // 换回第一段：缓存里已经只剩「另一段」了，该重发
+        // 换回第一段：历史里两条都在，不必重发
         _ = await service.translate("你好")
-        XCTAssertEqual(CountingURLProtocol.requestCount, 3)
+        XCTAssertEqual(CountingURLProtocol.requestCount, 2)
+    }
+
+    /// 超过容量（16）之后，最老的那条被挤掉、重发；容量内的都还命中。
+    func testOldestEntriesEvictedBeyondCapacity() async {
+        let service = makeService()
+        for i in 0..<16 {
+            _ = await service.translate("第\(i)段")
+        }
+        XCTAssertEqual(CountingURLProtocol.requestCount, 16)
+        // 第 0 段还在容量内 → 命中
+        _ = await service.translate("第0段")
+        XCTAssertEqual(CountingURLProtocol.requestCount, 16)
+        // 再灌 16 条把第 0 段挤出去 → 该重发
+        for i in 16..<32 {
+            _ = await service.translate("第\(i)段")
+        }
+        _ = await service.translate("第0段")
+        XCTAssertEqual(CountingURLProtocol.requestCount, 33)
     }
 
     /// 同一段文字在途时再按一次 → 等同一次的结果，不另发请求。

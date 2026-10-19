@@ -86,6 +86,7 @@ if [[ "$1" == "end" ]]; then
   payload="$(cat)"
   grp=$(printf '%s' "$payload" | python3 -c "
 import json, sys, re
+import time
 from pathlib import Path
 try:
     d = json.load(sys.stdin)
@@ -98,6 +99,17 @@ else:
     sid = re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('session_id','')))
     p = Path.home()/'.config/ivox/lastturn'/sid if sid else None
     print(p.read_text().strip() if p and p.exists() else '')
+# 顺手给 lastturn/ 扫一遍：Stop 一轮一次，一天几十次，便宜。这张表只存「session →
+# 最后一摞」的对照，回复结束就不再有用，留着只是白占目录（实测已堆到 30 个文件）。
+# 七天是下限：七天内的会话还有可能被 Stop 反查，更早的不可能还在对话里。
+try:
+    _dir = p.parent if p else Path.home()/'.config/ivox/lastturn'
+    _cut = time.time() - 7*86400
+    for _f in _dir.iterdir():
+        if _f.is_file() and _f.stat().st_mtime < _cut:
+            _f.unlink()
+except Exception:
+    pass
 " 2>/dev/null)
   args=(speak --source "$2")
   [[ -n "$grp" ]] && args+=(--group "$grp")
