@@ -81,19 +81,13 @@ final class SpeechInputService: @unchecked Sendable {
                 return
             }
 
-            Log.debug("语音输入: right ⌘/⌃ 按下 → 暂停音乐 → 取消 TTS → 开始录音")
-            // cancelAll 只管打断、不碰音乐；这里串行 cancelAll → pause，确保先打断、后暂停，
-            // 音乐稳稳停在暂停态（松开时 `media.resume()` 恢复）。不写成两个独立 Task 并发，
-            // 免得音乐暂停与打断谁先谁后不定。
-            // **全项目借还背景音乐只此一家**——录音需要安静（音乐会串进麦克风、干扰识别），
-            // 播报那条链路已完全不碰音乐。
-            Task {
-                await queue.cancelAll(origin: .speech)
-                await media.pause()
-            }
-
+            Log.debug("语音输入: right ⌘/⌃ 按下 → 试录（成了才打断播报、暂停音乐）")
             // 建目录 + 建 AVAudioRecorder 是同步 IO，而这里跑在 GlobalKeyTap 的事件线程上
             // （它监听的是**全系统**键盘）——必须挪出去，否则按键瞬间整机输入都会卡顿。
+            // **打断播报与暂停音乐都搬进 beginRecording**：它们是为录音让路，没在录就没什么
+            // 好让的（原先在按键那一刻就跑完，于是没插麦克风时按一下 = 白打断一次播报、
+            // 白暂停一次音乐，然后静默失败）。这里也不预检设备——耳机类设备按需唤醒，
+            // 预检会误判；**按下就试这一下，试活了算数**。
             Task { self.beginRecording() }
         } else {
             // 松开 right ⌘/⌃：检查状态，只有 recording 才能结束
@@ -125,12 +119,21 @@ final class SpeechInputService: @unchecked Sendable {
         }
         guard canStart, let (recorder, url) = startRecording() else { return }
         stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
-        showOverlay(.listening)
-        // 「可以说了」——**录音确实起来之后**才响（此刻说才录得到）。
-        // 取舍：它会紧接着被麦克风拾到一点点，但 Tink 极短、ASR 不会把音效转成文字；
-        // 反过来"先等音效响完再开录"会丢掉你开头的字，不划算。
-        playCue("Tink")
-        startLevelMetering()
+        Task {
+            // cancelAll 只管打断、不碰音乐；这里串行 cancelAll → pause，确保先打断、后暂停，
+            // 音乐稳稳停在暂停态（松开时 `media.resume()` 恢复）。不写成两个独立 Task 并发，
+            // 免得音乐暂停与打断谁先谁后不定。
+            // **全项目借还背景音乐只此一家**——录音需要安静（音乐会串进麦克风、干扰识别），
+            // 播报那条链路已完全不碰音乐。
+            await queue.cancelAll(origin: .speech)
+            await media.pause()
+            showOverlay(.listening)
+            // 「可以说了」——**录音确实起来、播报也让完路之后**才响（此刻说才录得到）。
+            // 取舍：它会紧接着被麦克风拾到一点点，但 Tink 极短、ASR 不会把音效转成文字；
+            // 反过来"先等音效响完再开录"会丢掉你开头的字，不划算。
+            playCue("Tink")
+            startLevelMetering()
+        }
     }
 
     private func startRecording() -> (AVAudioRecorder, URL)? {
