@@ -16,6 +16,12 @@ import iVoxKit
 /// 写一次，之后全是只读。
 private nonisolated(unsafe) var crashLogFD: Int32 = -1
 
+/// 崩溃日志与计数的路径。默认主 daemon 的文件名；子进程 install(role:) 时换成自己的
+/// （如 `tts-crash.log`）——**共用一份文件会互相清空**：子进程每次启动都把上一条
+/// 崩溃记录报走并 ftruncate 腾空，主进程攒下的现场就被它擦了。
+private nonisolated(unsafe) var crashLogPathName = ""
+private nonisolated(unsafe) var crashCountPathName = ""
+
 /// 历史崩溃累计次数，跨重启累计：crash.log 每次启动就被清空，单靠它编号永远是 #1。
 /// 单独落一个小文件存，只在启动期读写一次。
 private nonisolated(unsafe) var crashCount: Int = 0
@@ -38,8 +44,14 @@ private func ivoxCrashHandler(_ sig: Int32) {
 }
 
 enum CrashTrap {
-    static func install() {
-        let path = crashLogPath()
+    /// - Parameter role: 角色名（如 `"tts"`）。给时崩溃日志与计数落到
+    ///   `<role>-crash.log` / `<role>-crash.count`，与主 daemon 的那份互不干扰；
+    ///   不给就是主 daemon 自己的 `crash.log`。
+    static func install(role: String? = nil) {
+        let prefix = role.map { "\($0)-" } ?? ""
+        crashLogPathName = (AppPaths.configDir as NSString).appendingPathComponent("\(prefix)crash.log")
+        crashCountPathName = (AppPaths.configDir as NSString).appendingPathComponent("\(prefix)crash.count")
+        let path = crashLogPathName
         try? FileManager.default.createDirectory(
             atPath: AppPaths.configDir, withIntermediateDirectories: true)
         // 顺序要紧：先把上次崩溃的记录报走并**原地截断**这份文件，再打开 fd。
@@ -97,11 +109,7 @@ enum CrashTrap {
         }
     }
 
-    private static func crashLogPath() -> String {
-        (AppPaths.configDir as NSString).appendingPathComponent("crash.log")
-    }
+    private static func crashLogPath() -> String { crashLogPathName }
 
-    private static func crashCountPath() -> String {
-        (AppPaths.configDir as NSString).appendingPathComponent("crash.count")
-    }
+    private static func crashCountPath() -> String { crashCountPathName }
 }

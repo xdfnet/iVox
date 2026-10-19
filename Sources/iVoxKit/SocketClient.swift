@@ -7,6 +7,9 @@ import Foundation
 public enum AppPaths {
     public static var configDir: String { expandTilde("~/.config/ivox") }
     public static var socketPath: String { configDir + "/ivox.sock" }
+    /// 誊清员进程的 socket。独立于主 daemon —— 它跑 MLX 合成，是唯一会崩的一层，
+    /// 崩了不该带走主进程里的队列与字条。
+    public static var ttsSocketPath: String { configDir + "/ivox-tts.sock" }
     public static var binDir: String { expandTilde("~/.local/bin") }
 
     static func expandTilde(_ path: String) -> String {

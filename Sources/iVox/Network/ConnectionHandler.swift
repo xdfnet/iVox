@@ -4,7 +4,7 @@ import iVoxKit
 
 // Unix socket 单连接处理：解析协议并分发。
 
-actor ConnectionHandler {
+actor ConnectionHandler: SocketConnectionHandler {
     private let queue: PlaybackQueue
 
     /// **跑腿侧的衔接表**：「外部 group/turn ↔ 播报站自编的摞号」。

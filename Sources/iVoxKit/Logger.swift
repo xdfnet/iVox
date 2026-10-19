@@ -1,7 +1,10 @@
 import Foundation
 import os.log
 
-// 日志：同时写 os_log 与 ~/.config/ivox/daemon.log（0600，5MB 轮转）。
+// 日志：同时写 os_log 与日志文件（0600，5MB 轮转）。
+// 默认落在 ~/.config/ivox/daemon.log；子进程（誊清员等）用 IVOX_LOG_FILE 改写自己的
+// 文件名 —— 拆成独立进程后「谁没干好」要看哪个文件才能一眼判定，混在一个文件里
+// 就又回到 2026-10-19 晚上那种翻三轮日志才定案的局面。
 
 private let maxLogSize: UInt64 = 5 * 1024 * 1024
 
@@ -17,7 +20,13 @@ public enum Log {
     private static let subsystem = "com.user.ivox"
     private static let log = OSLog(subsystem: subsystem, category: "daemon")
     private static let fileQueue = DispatchQueue(label: "com.user.ivox.filelog")
-    private static let filePath = NSString(string: "~/.config/ivox/daemon.log").expandingTildeInPath
+
+    private static let filePath: String = {
+        if let override = ProcessInfo.processInfo.environment["IVOX_LOG_FILE"], !override.isEmpty {
+            return NSString(string: override).expandingTildeInPath
+        }
+        return NSString(string: "~/.config/ivox/daemon.log").expandingTildeInPath
+    }()
 
     /// 默认只留 INFO 及以上；排查时 `IVOX_LOG_LEVEL=debug` 重启守护进程即可放出 DEBUG。
     /// 认不出 / 没设一律按 info 处理——静默降级不该让人查不了日志。

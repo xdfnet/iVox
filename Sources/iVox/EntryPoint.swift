@@ -22,6 +22,7 @@ struct iVox: AsyncParsableCommand {
             VersionCommand.self,
             UpdateCommand.self,
             ServeCommand.self,
+            TTSCommand.self,
         ],
         defaultSubcommand: ServeCommand.self
     )

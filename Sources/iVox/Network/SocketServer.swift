@@ -4,12 +4,20 @@ import iVoxKit
 
 // Unix domain socket 服务端：监听 / accept / 对端校验。
 
+/// 一次 socket 连接的处理者。Server 只管监听与对端校验，收到连接之后怎么分派
+/// 由实现者自己决定 —— 主 daemon 走 `ConnectionHandler`（跑腿接入），誊清员进程
+/// 走 `TTSServer`（合成 PCM 写回）。两者共用同一个 Server，故抽成协议。
+protocol SocketConnectionHandler: Sendable {
+    /// 接管这个 fd 的生命周期（读完或写完必须自己 close）
+    func handle(fd: Int32)
+}
+
 actor SocketServer {
     private var socketFD: Int32 = -1
     private var source: DispatchSourceRead?
     private var socketPath: String?
 
-    func start(path: String, handler: ConnectionHandler) throws {
+    func start(path: String, handler: any SocketConnectionHandler) throws {
         unlink(path)
 
         socketFD = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
@@ -55,7 +63,7 @@ actor SocketServer {
     }
 
     /// DispatchSource 直接调用（去掉中间 Task 层），handle 放到专用队列
-    private nonisolated func acceptAndHandle(fd: Int32, handler: ConnectionHandler) {
+    private nonisolated func acceptAndHandle(fd: Int32, handler: any SocketConnectionHandler) {
         var clientAddr = sockaddr_un()
         var len = socklen_t(MemoryLayout<sockaddr_un>.size)
         let clientFD = withUnsafeMutablePointer(to: &clientAddr) {
