@@ -353,10 +353,13 @@ pi 扩展（`integrations/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在
 1. WeChatPlatform 长轮询 getupdates（每 ~35 秒）
 2. 收到消息 → 去重 → 白名单过滤 → 提取文本
 3. Daemon.handleWeChatMessage()
-   → ClaudeAskService.ask() 调用 claude --print
+   → ClaudeAskService.askStreaming()（常驻 `claude`，走 stream-json 双工，非 --print）
    → WeChatPlatform.sendMessage() 发回微信
-4. claude --print 结束 → Stop Hook → hook.sh → ivox speak TTS
 ```
+
+**这条链路不发声**：回复以文字发回微信，不进 `PlaybackQueue`（裁决见
+[playback/purpose.md](playback/purpose.md)）——聊天窗口里已经有文字了，再念一遍是打扰。
+它也不经过 Claude Code 的 hook 体系（那是 Claude Code 会话才有的）。
 
 ## 文本过滤
 
@@ -389,16 +392,25 @@ ConnectionHandler.extractVoicePrefix():
 所有运行时文件在 `~` 下，项目目录可删：
 
 ```
-~/.local/bin/ivox                          # CLI 入口（符号链接）
-~/.local/share/ivox/runtime/iVox          # 实际二进制
+~/.local/bin/ivox                          # CLI 与守护进程同一个二进制（约 61MB，ad-hoc 签名）
 ~/.config/ivox/config.json                 # 配置
 ~/.config/ivox/integrations/               # 集成资产权威源（随发布包解包，分发器读这里）
 ~/.config/ivox/hook.sh                     # 分发后的 hook（Claude 挂载引用它）
 ~/.config/ivox/model/                      # TTS/ASR MLX 模型
 ~/.config/ivox/voices/                     # 参考音频
 ~/.config/ivox/wechat/                     # 微信轮询状态
-~/.config/ivox/daemon.log                  # 日志（5MB 轮转）
+~/.config/ivox/daemon.log                  # 主进程日志（5MB 轮转）
+~/.config/ivox/tts.log                      # 誊清员日志（拆进程后各写各的）
+~/.config/ivox/tts-crash.log               # 誊清员崩溃现场（主进程的 crash.log 是它自己的）
+~/.config/ivox/crash.log / crash.count     # 主进程崩溃现场与累计次数
+~/.config/ivox/ivox.sock                    # 主进程 socket
+~/.config/ivox/ivox-tts.sock                # 誊清员 socket
 ```
+
+日志为什么分家（2026-10-19 决定）：拆成子进程后若还共用一份文件，从「pi 没出声」
+查到「MLX 崩了」翻了三轮日志——因为**所有角色写进同一个文件，谁的错看不出来**。
+分家之后判据变成一句话：**哪个文件里有现场，就是哪个角色的错**。三份日志靠
+`IVOX_LOG_FILE` 与 `IVOX_ROLE` 落点，块号 `seq` 随 IPC 递过去，跨文件对得起来。
 
 `make update` 停服 → 构建 → 签名 → 拷贝二进制 → 启动守护进程。
 

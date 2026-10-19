@@ -205,32 +205,32 @@ TTS 合成作废（MLX 不响应中途取消…）[…]（打断来源=esc）  #
 
 ## 代码签名
 
-macOS 要求所有可执行文件有效签名。iVox 的开发签名证书 Hash：
-
-`4A287668E97BC130AA6D19F4D64799394CAACBAD`
-
-签名命令：
+macOS 要求可执行文件有效签名。iVox 用的是 **ad-hoc 自签名**（没有开发者证书）：
 
 ```bash
-codesign --force --sign 4A287668E97BC130AA6D19F4D64799394CAACBAD ~/.local/share/ivox/runtime/iVox
+codesign --force --sign - ~/.local/bin/ivox
 ```
 
-**注意**：`make update` 会重新编译二进制并 ad-hoc 重签（`runtime.sh deploy-bin`），签名变了 TCC 权限可能要重勾。
-
-验证签名：
+验证：
 
 ```bash
-codesign -dv ~/.local/share/ivox/runtime/iVox 2>&1 | grep -E 'flags|Signature|TeamIdentifier'
+codesign -dv ~/.local/bin/ivox 2>&1 | grep -E 'Signature|flags'
 ```
 
-期望输出：`flags=0x0(none)`、`Signature size` 存在、`TeamIdentifier=K9UF7A2D7Y`
+期望 `Signature=adhoc`、`flags=0x2(adhoc)`、`TeamIdentifier=not set`——
+**没有 TeamIdentifier 才是对的**，有反而说明签成了别的证书。
+
+> ⚠️ **ad-hoc 签名的代价：每次重新构建重签，签名就变，macOS 的 TCC 授权（麦克风、
+> 输入监控）可能随之失效**，表现为热键与语音输入毫无反应。遇到这种「重装后突然不灵」
+> 先去系统设置重新勾一遍，而不是查代码。`make update` 会自动重签。
+
 
 ## 故障排查
 
 | 症状 | 检查点 |
 |------|--------|
 | 日志空 | daemon 是否在运行？`pgrep -fl "ivox serve"` |
-| 日志有收到但没播放 | 代码签名失效？`codesign -dv ~/.local/share/ivox/runtime/iVox` |
+| 日志有收到但没播放 | 代码签名失效？`codesign -dv ~/.local/bin/ivox`（期望 `Signature=adhoc`） |
 | 日志有播放但没声音 | AudioPlayer 引擎异常？音量设置？扬声器？ |
 | 播完字幕不收 / 队列不判收尾 | 日志里有没有「播报收尾: 队列已空，字幕收起」；Web 服务在不在 `curl http://127.0.0.1:8888/health` |
 | Hook 不触发 | `~/.claude/settings.json` 配置是否正确？Shell 权限？ |
