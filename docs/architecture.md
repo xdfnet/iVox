@@ -175,7 +175,7 @@ Daemon (actor)
 - 键盘监听由 `HotKey/GlobalKeyTap` **独占**（一个 tap 服务多个消费者，见下节），本服务只订阅**修饰键**：右⌘(0x36) / 右⌃(0x3E) 的状态变化由它回调进来
 - **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」——用户快捷键打断之一）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 用户快捷键五个：right⌘ 说话、Cmd+D 插队念译文、Ctrl+Esc 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+1 跳整摞、Ctrl+2 读下一页。**pi 新轮与停止帧不再打断**，一律排队
+- 用户快捷键五个：right⌘ 说话、Cmd+D 插队念译文、Ctrl+2 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+1 跳整摞、Ctrl+Esc 读下一页。**pi 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 
@@ -184,7 +184,7 @@ Daemon (actor)
 `Sources/iVox/HotKey/GlobalKeyTap.swift`
 
 - 独占一个 CGEvent tap 与**专用线程的 run loop**，只按事件类型 / keyCode **路由**，不含任何业务判断
-- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/Q/X/C` → `QuickActionsService`；`Ctrl+Esc` / `Ctrl+1` / `Ctrl+2` → `PlaybackQueue`（手动打断三档：掀桌 / 跳整摞 / 读下一页）
+- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/Q/X/C` → `QuickActionsService`；`Ctrl+2` / `Ctrl+1` / `Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掀桌 / 跳整摞 / 读下一页）
 - 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
 - ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
 - 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Cmd+D` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
@@ -357,7 +357,7 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-**打断权只归 ivox 快捷键**（right⌘ 说话 / Cmd+D 插队译文 / 手动三档：Ctrl+2 读下一页 · Ctrl+1 跳整摞 · Ctrl+Esc 掀桌）；`hook.sh` **不再有 interrupt 分支**（手动打断在 `ivox skip` 三档：`--page` 读下一页 / `--stack` 跳整摞 / `--all` 全场闭嘴），`UserPromptSubmit` 亦不挂。
+**打断权只归 ivox 快捷键**（right⌘ 说话 / Cmd+D 插队译文 / 手动三档：Ctrl+Esc 读下一页 · Ctrl+1 跳整摞 · Ctrl+2 掀桌）；`hook.sh` **不再有 interrupt 分支**（手动打断在 `ivox skip` 三档：`--page` 读下一页 / `--stack` 跳整摞 / `--all` 全场闭嘴），`UserPromptSubmit` 亦不挂。
 
 | 工具 | 配置/挂载 | 回复播报 |
 |------|----------|----------|

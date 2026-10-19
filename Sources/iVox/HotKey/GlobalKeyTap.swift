@@ -30,9 +30,9 @@ final class GlobalKeyTap: @unchecked Sendable {
         case openTerminalCodex    // Opt+X
         case openTerminalPi       // Opt+Q
         case copyPath             // Opt+C
-        case escInterrupt         // Ctrl+Esc 手动闭嘴（不录音）
+        case escInterrupt         // Ctrl+2 手动闭嘴（不录音）
         case skipBucket           // Ctrl+1 跳整摞（丢当前摞，播下一摞）
-        case skipPage             // Ctrl+2 读下一页（丢掉当前页剩下的块，翻页）
+        case skipPage             // Ctrl+Esc 读下一页（丢掉当前页剩下的块，翻页）
     }
 
     /// 右⌘(0x36) / 右⌃(0x3E) 状态变化。在 tap 线程同步调用，**必须立刻返回**。
@@ -197,9 +197,9 @@ final class GlobalKeyTap: @unchecked Sendable {
         Binding(keyCode: 0x07, modifiers: .maskAlternate, hotKey: .openTerminalCodex), // X
         Binding(keyCode: 0x0C, modifiers: .maskAlternate, hotKey: .openTerminalPi),     // Q
         Binding(keyCode: 0x08, modifiers: .maskAlternate, hotKey: .copyPath),          // C
-        Binding(keyCode: 0x35, modifiers: .maskControl, hotKey: .escInterrupt),        // Esc（Ctrl+Esc）
+        Binding(keyCode: 0x13, modifiers: .maskControl, hotKey: .escInterrupt),        // 2（Ctrl+2 闭嘴）
         Binding(keyCode: 0x12, modifiers: .maskControl, hotKey: .skipBucket),         // 1（Ctrl+1）
-        Binding(keyCode: 0x13, modifiers: .maskControl, hotKey: .skipPage),           // 2（Ctrl+2 读下一页）
+        Binding(keyCode: 0x35, modifiers: .maskControl, hotKey: .skipPage),           // Esc（Ctrl+Esc 读下一页）
     ]
 
     // MARK: - 权限

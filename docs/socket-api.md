@@ -230,9 +230,9 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 请求头，无 body：
 
 ```
-{type:skip,mode:page}    # 读下一页（同 Ctrl+2）：丢掉正在播的那一页剩下的块
+{type:skip,mode:page}    # 读下一页（同 Ctrl+Esc）：丢掉正在播的那一页剩下的块
 {type:skip,mode:stack}   # 跳整摞（同 Ctrl+1）：丢掉正在播的那一摞（含其后各页）
-{type:skip,mode:all}     # 全场闭嘴（同 Ctrl+Esc）：停当前 + 清空排队
+{type:skip,mode:all}     # 全场闭嘴（同 Ctrl+2）：停当前 + 清空排队
 ```
 
 无回复。`mode` 缺省按 `page`。**头的尾随 `\n` 是必需的路由依据**——没有它，服务端会把整条请求当传统整段播报体交给 `handleTTS`（`{type:stop}` 正踩在这条边界上：它现在发无换行裸串，走的就是 handleTTS 分支）。
@@ -261,9 +261,9 @@ ivox listen -f 录音.wav                    # 文件
 ivox listen -l en < english.wav           # 英文
 
 # 打断三档（三个参数对应三个快捷键，缺省 --page）
-ivox skip --page                           # 读下一页（Ctrl+2）
+ivox skip --page                           # 读下一页（Ctrl+Esc）
 ivox skip --stack                          # 跳过整摞（Ctrl+1）
-ivox skip --all                            # 全场闭嘴（Ctrl+Esc）
+ivox skip --all                            # 全场闭嘴（Ctrl+2）
 ```
 
 ## 错误处理

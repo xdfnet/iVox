@@ -57,7 +57,7 @@
 | Codex | Stop → `hook.sh speak codex`<br>Interrupt → `hook.sh end codex` | `~/.codex/hooks.json` |
 | pi 扩展 | `agent_start`→`agent_end` 一条流跨整次输入，`message_update` 逐 `text_delta` 送（新轮排队，不打断） | `~/.pi/agent/extensions/ivox.ts` |
 
-> ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文插队 / 手动三档：Ctrl+2 读下一页 · Ctrl+1 跳整摞 · Ctrl+Esc 掀桌）。在 Claude Code 里提交、后台 agent 轮次、pi 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip` 承担）。
+> ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Cmd+D 译文插队 / 手动三档：Ctrl+Esc 读下一页 · Ctrl+1 跳整摞 · Ctrl+2 掀桌）。在 Claude Code 里提交、后台 agent 轮次、pi 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip` 承担）。
 
 Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`）：assistant 消息流式显示时按行批触发、取 `delta` 增量逐句播，final 批含完整结尾，故不再挂 `Stop`（否则与 MessageDisplay 同播重复）。Codex 仍用 `Stop`（Codex 无 MessageDisplay 等价事件，只能终了一次），**只搬结论**：从 payload 的 `transcript_path` 里按 `turn_id` + `phase == FinalAnswer` 挑出本轮最终答案，**中途解说（`Commentary`）与半截答案（`PartialAnswer`）一律不搬**；挑不到才退回 payload 自带的 `last_assistant_message`（那本来就是结论）。搬来的东西**一摞一页、不带 `--page`**，与 `ivox speak` 完全同形（2026-10-18 裁决：先前一版搬本轮全部消息当多页，听着像在念日志）。
 
@@ -80,7 +80,7 @@ Codex 的 `Interrupt`（按 Esc 中断）**不是打断、只作收尾**：那�
 - **`hook.sh speak <source>`（Stop / ivox speak 场景）**：从 stdin JSON 提取 `last_assistant_message`。调用 `ivox speak` 后台运行，不阻塞 AI 工具。
   - 注：Claude Code 交互会话现有配置**只挂 `MessageDisplay`**（不再挂 Stop），因 MessageDisplay 的 final 批已含完整结尾、与 Stop 同播会重复；`speak` 模式保留给其他工具/手动 `ivox speak`。
 
-> **`interrupt` 分支已从 hook.sh 移除**——打断权只归 ivox 快捷键（右⌘/Cmd+D/Ctrl+Esc/Ctrl+1/Ctrl+2）与命令行 `ivox skip`（同三档），不再经 hook.sh 自动打断（UserPromptSubmit 亦不挂）。
+> **`interrupt` 分支已从 hook.sh 移除**——打断权只归 ivox 快捷键（右⌘/Cmd+D/Ctrl+2/Ctrl+1/Ctrl+Esc）与命令行 `ivox skip`（同三档），不再经 hook.sh 自动打断（UserPromptSubmit 亦不挂）。
 
 Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执行。脚本不传配置文件路径，依赖 `~/.config/ivox/config.json` 自动加载。
 
@@ -165,9 +165,9 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
   |---------|------|------|
   | 说话 | right⌘ / right⌃ → `cancelAll` | `speech` |
   | 划词翻译 | Cmd+D → `speakUserInitiated`（掐在播 + 译文进加急段插到最前，其余段全保留）；另有 `{now:1}` / `ivox speak --now` 同一条路 | `dict` |
-  | 掀桌 | Ctrl+Esc → `cancelAll` | `esc` |
+  | 掀桌 | Ctrl+2 → `cancelAll` | `esc` |
   | 跳整摞（中） | Ctrl+1 → `skipCurrentBucket` | `skip` |
-  | 读下一页（轻） | Ctrl+2 → `skipCurrentPage` | `skip-page` |
+  | 读下一页（轻） | Ctrl+Esc → `skipCurrentPage` | `skip-page` |
   这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。**Claude 的 `Stop` 钩子只作「收尾信号」**（`hook.sh end`：丢弃 payload、不发一个字，只让队列收尾当前摞）——当年摘它是因为它连正文一起送、与 MessageDisplay 重复播两遍，现在这条不出声。以下讲的是**旧的停止帧**：**`{type:stop}` 已完全失效且无发送方**（`hook.sh interrupt` 已摘、`ivox quiet` 已删），daemon 收到只记日志忽略、不再打断（这一支留作护栏：它走正文分支，删掉会把旧脚本发来的帧当内容念出来）。流式新轮（pi）不再顶替——排队。Escape 放弃自己那轮（`cancelTurn`）只删该轮自己那段，不占打断来源。**agent 回复到达时一律排队，不抢麦**。
 
 ### 7. MediaController

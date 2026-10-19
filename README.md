@@ -19,7 +19,7 @@
 
 | | 能力 | 说明 | 怎么用 |
 |---|---|---|---|
-| 🗣️ | **自动播报** | AI 回复边生成边念，跳过代码与噪音；可开屏幕字幕（`playback.captions`，贴底跟随声音）；手动打断三档：`Ctrl+2` 读下一页 · `Ctrl+1` 跳整摞 · `Ctrl+Esc` 掀桌 | 装好即用 |
+| 🗣️ | **自动播报** | AI 回复边生成边念，跳过代码与噪音；可开屏幕字幕（`playback.captions`，贴底跟随声音）；手动打断三档：`Ctrl+Esc` 读下一页 · `Ctrl+1` 跳整摞 · `Ctrl+2` 掀桌 | 装好即用 |
 | 🎛️ | **媒体控制** | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 打开 `127.0.0.1:8888`，手机同局域网用 `http://<本机IP>:8888` |
 | 🎙️ | **语音输入** | 按住说话，松开识别粘贴，浮窗实时显示波形 | 右 ⌘ / 右 ⌃ |
 | 📖 | **划词翻译** | 选中即译，屏幕下方歌词式浮窗出译文并可朗读 | `Cmd+D` |
@@ -44,7 +44,7 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 
 ```bash
 ivox speak "你好"           # 手动播报
-ivox skip --page            # 读下一页（Ctrl+2，可省）；--stack 跳整摞（Ctrl+1）；--all 全场闭嘴（Ctrl+Esc）
+ivox skip --page            # 读下一页（Ctrl+Esc，可省）；--stack 跳整摞（Ctrl+1）；--all 全场闭嘴（Ctrl+2）
 ivox translate "hello"      # 划词翻译（--selection 取当前选中文本，--json 结构化输出）
 ivox voice list             # 列出音色
 ivox status                 # 版本、各功能健康状态、权限、模型/音色文件体检
@@ -124,7 +124,7 @@ pi 扩展（逐句流式）──────────┴→ Unix Socket → 
                                             │       ├─ SpeechInput  (右 ⌘ / 右 ⌃ + ASR)
                                             │       ├─ Translation  (Cmd+D 划词翻译 + 浮窗)
                                             │       ├─ QuickActions (Opt+Z/A/Q/X/C)
-                                            │       └─ 手动打断三档 (Ctrl+2 读下一页 / Ctrl+1 跳整摞 / Ctrl+Esc 掀桌)
+                                            │       └─ 手动打断三档 (Ctrl+Esc 读下一页 / Ctrl+1 跳整摞 / Ctrl+2 掀桌)
                                             └── MediaHTTPServer (Web UI)
 ```
 
