@@ -2,6 +2,14 @@
 
 ## 未发布
 
+- **`ivox upgrade` 支持 GitHub 认证，报错不再误导** — 未认证的 GitHub API 只有
+  **60 次/小时、按出口 IP 算**（路由器透明代理下全机共用一个 IP，别人用完你就遭殃）。
+  配额耗尽时 GitHub 返回 `{"message":"API rate limit exceeded…"}`——**合法 JSON，但没有
+  `tag_name`**，于是解 JSON 崩掉、报成「解析 release 信息失败」，把人引向「代码坏了」
+  （2026-10-19 实测踩中）。现在：
+  ① token 按 `GITHUB_TOKEN` → `GH_TOKEN` → **`gh auth token`**（gh 登录过就有，
+  多数情况**无需任何配置**）三段取，只进 `Authorization` 头，不打印不写日志；
+  ② 先看 HTTP 状态码再解 JSON，403/429 直接说「限流」并给出配置指引，401 说凭据失效。
 - **codex 只播结论，一摞一页** — `Stop` 时从 transcript 按 `turn_id` + `phase == FinalAnswer`
   挑出本轮最终答案，`Commentary`（中途解说）与 `PartialAnswer`（半截答案）一律不搬；
   挑不到才退回 payload 自带的 `last_assistant_message`。搬来的东西**不带 `--page`**，

@@ -38,11 +38,42 @@ struct UpgradeCommand: AsyncParsableCommand {
         var request = URLRequest(url: URL(string: "https://api.github.com/repos/\(Self.repo)/releases/latest")!)
         request.setValue("iVox-Upgrade", forHTTPHeaderField: "User-Agent")  // GitHub API 要求 UA
         request.timeoutInterval = 20
+        // 未认证的 GitHub API 只有 **60 次/小时、按出口 IP 算**——路由器透明代理下全机共用一个 IP，
+        // 配额被别人用完就轮到自己遭殃，返回 `{"message":"API rate limit exceeded…"}`，
+        // 而那里面**没有 tag_name**，于是 Swift 报「解析 release 信息失败」，把限流说成了代码坏了
+        // （2026-10-19 实测：飞哥机器上配额耗尽，upgrade 直接崩在这个坑上）。
+        // 认证后是 5000 次/小时。token 只进请求头，**绝不打印、不写日志**。
+        if let token = Self.authToken() {
+            request.setValue("Bearer \(token)", forHTTPHeaderField: "Authorization")
+        }
         let data: Data
+        let response: URLResponse
         do {
-            data = try await URLSession.shared.data(for: request).0
+            (data, response) = try await URLSession.shared.data(for: request)
         } catch {
             print("错误: 无法访问 GitHub（\(error.localizedDescription)）。网络受限时可临时设置 https_proxy 后重试。")
+            throw ExitCode.failure
+        }
+
+        // 先看 HTTP 状态码再解 JSON：限流/鉴权失败时 GitHub 返回的是**合法 JSON 但没有 tag_name**，
+        // 直接丢给 JSONDecoder 只会得到一句误导性的「解析失败」。这里把状态码翻译成人话。
+        if let http = response as? HTTPURLResponse, http.statusCode != 200 {
+            // GitHub 的错误正文固定是 {"message": "…"}，取出来直接给用户看
+            let message = (try? JSONSerialization.jsonObject(with: data) as? [String: Any])
+                .flatMap { ($0?["message"] as? String) } ?? String(data: data, encoding: .utf8) ?? ""
+            switch http.statusCode {
+            case 403, 429:
+                print("错误: GitHub 拒绝了请求（HTTP \(http.statusCode)）——多半是 API 限流。")
+                if !message.isEmpty { print("  GitHub 说：\(message)") }
+                print("  认证后配额是未认证的 80 多倍。设置一个 token 即可，例如在 ~/.zshrc 里：")
+                print("    export GITHUB_TOKEN=\(Self.tokenHint)")
+                print("  若已装并登录 GitHub CLI，ivox 会自动借用它的登录态，通常无需配置。")
+            case 401:
+                print("错误: GitHub 拒绝了凭据（401）——环境变量里的 GITHUB_TOKEN 可能已失效。")
+            default:
+                print("错误: GitHub 返回 HTTP \(http.statusCode)。")
+                if !message.isEmpty { print("  GitHub 说：\(message)") }
+            }
             throw ExitCode.failure
         }
 
@@ -50,7 +81,7 @@ struct UpgradeCommand: AsyncParsableCommand {
         do {
             release = try JSONDecoder().decode(Release.self, from: data)
         } catch {
-            print("错误: 解析 release 信息失败：\(error)")
+            print("错误: 解析 release 信息失败（HTTP 成功但内容不是预期的 release 结构）：\(error)")
             throw ExitCode.failure
         }
 
@@ -180,6 +211,43 @@ struct UpgradeCommand: AsyncParsableCommand {
             print("守护进程此前未运行，需要时执行 ivox on 启动")
         }
     }
+
+    /// 取 GitHub token，按「显式环境变量 → gh CLI 登录态」的顺序。
+    ///
+    /// 之所以留 `gh` 这条兜底：用户机器上装了 gh 并登录过就天然有 token，
+    /// **不必再为一次升级去配环境变量**（本项目的取向是「非必要不让用户操作」）。
+    /// 都没有则返回 nil —— 退回未认证的 60 次/小时，那条路径由状态码分支给出可操作的提示。
+    /// 注意 token 只回传给调用方进请求头，任何日志/输出都不碰它。
+    private static func authToken() -> String? {
+        let env = ProcessInfo.processInfo.environment
+        for key in ["GITHUB_TOKEN", "GH_TOKEN"] {
+            if let t = env[key]?.trimmingCharacters(in: .whitespacesAndNewlines), !t.isEmpty {
+                return t
+            }
+        }
+        // `gh auth token` 把 token 打到 stdout；token 在系统钥匙串里，gh 自己会去读
+        let proc = Process()
+        let pipe = Pipe()
+        proc.executableURL = URL(fileURLWithPath: "/usr/bin/env")
+        proc.arguments = ["gh", "auth", "token"]
+        proc.standardOutput = pipe
+        proc.standardError = FileHandle.nullDevice   // gh 未登录时会往 stderr 抱怨，别让终端炸出噪音
+        do {
+            try proc.run()
+            let data = pipe.fileHandleForReading.readDataToEndOfFile()
+            proc.waitUntilExit()
+            guard proc.terminationStatus == 0,
+                  let t = String(data: data, encoding: .utf8)?
+                      .trimmingCharacters(in: .whitespacesAndNewlines),
+                  !t.isEmpty else { return nil }
+            return t
+        } catch {
+            return nil   // gh 没装、或钥匙串问不出来——都不是错误，退回未认证即可
+        }
+    }
+
+    /// 提示文案里的占位符，**不是真 token**（拿不到真值也不该在失败路径上泄露）
+    private static let tokenHint = "ghp_…（在 github.com/settings/tokens 生成，只需 public repo 读权限）"
 
     /// 轮询等待守护进程退出（最多 ~10s），已退出返回 true（非 async，用 Thread 阻塞）
     private static func waitForStop(path: String) -> Bool {
