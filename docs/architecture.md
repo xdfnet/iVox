@@ -61,6 +61,29 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
 
 所有服务的所有者。按顺序：init（加载配置/状态）→ run（并行启动各服务）→ cleanup（SIGINT/SIGTERM 优雅关闭）。各服务以 `Task` 运行，取消传播到所有子任务。
 
+**收尾后 `fflush` + `_exit(0)`，不走静态析构**：mlx 全局持有一张 `CommandEncoder` 哈希表，进程退出时
+`__cxa_finalize_ranges` → 表析构 → `CommandEncoder::~CommandEncoder` → `end_encoding`，撞上未收口的
+encoder 即 SIGSEGV。现场是 `ivox restart` 恰好在合成进行中，整进程被这一下带崩（自检里连着几个用例
+ECONNREFUSED）。收尾已完成、日志已落盘，直接退场，不给析构函数碰 GPU 的机会。
+
+### CrashTrap — 崩溃捕获
+
+`Sources/iVox/Daemon/CrashTrap.swift`
+
+MLX 后端崩在 C++ 层时，系统日志里只有一行 `mutex lock failed: Invalid argument`、**没有调用栈**，事后
+无从判断是哪条路径撞上去的。故自己接 `SIGABRT/SIGSEGV/SIGBUS/SIGILL/SIGFPE`，把带栈的记录写进
+`~/.config/ivox/crash.log`，下次启动打进 daemon.log 再清空。
+
+两个必须记住的坑：
+
+- 清空记录**只能用 `ftruncate`**（原地截断），不能用 `String.write(toFile:)`——那是「写临时文件 +
+  rename」，换掉了 inode，而 handler 的 fd 在此之前就已打开，指向一个已经没人看见的孤儿文件，
+  于是**每次崩溃的完整栈都写进了虚空**（`crash.log` 恒为 0 字节）。同理顺序必须是「先报走记录 →
+  截断 → 再开 fd」
+- 崩溃计数记 `~/.config/ivox/crash.count`：`crash.log` 每次启动就被清空，光靠它编号永远是 `#1`
+
+信号处理函数里只用异步信号安全的调用（`write`/`fsync`/`backtrace`），不碰 actor 与 Logger。
+
 ```swift
 // run() 内部大致结构
 async let ws: Void = wechat?.start(handler: handleWeChatMsg)
@@ -123,6 +146,13 @@ Daemon (actor)
 - `generateStream()` 流式合成 float32 PCM → 重采样 48kHz → int16
 - 按音色读取 `refAudio` + `refText` 做声音克隆
 - 流式间隔由 `streamingInterval` 控制
+- **合成串行**：世代闸门保证第 N 代必须等第 N-1 代**完全离开模型**才准进 MLX（模型非并发安全）
+- ⚠️ **打断后不丢弃 MLX 生成器**：encoder 里还压着未 commit 的命令，析构即触发 AGX 断言
+  （SIGABRT `commit command buffer with uncommitted encoder`）或 `copy_gpu` 越界（SIGSEGV）。
+  现在取消后**停止 yield 但继续把流读完**，等 GPU 自然收口再抛 `CancellationError`
+- `refAudio` 走**盒子缓存**：`mlx-swift` 的 `refAudio` 参数带 `sending`（转移所有权），而库内部
+  又靠 `ObjectIdentifier(refAudio)` 复用输入准备上下文——故必须交同一个实例，造新的每块多花
+  1~2 秒（实测 4~5s 涨到 5~7s）。两层盒子看着冗余，实为绕开库的所有权语义
 
 ### PlaybackSession + PlaybackQueue — 身份与播放
 
@@ -173,11 +203,24 @@ Daemon (actor)
 `Sources/iVox/SpeechInput/`
 
 - 键盘监听由 `HotKey/GlobalKeyTap` **独占**（一个 tap 服务多个消费者，见下节），本服务只订阅**修饰键**：右⌘(0x36) / 右⌃(0x3E) 的状态变化由它回调进来
-- **right ⌘/⌃ 按下**：暂停音乐 + 取消 TTS + 开始录音（「你一开口，对方就停」——用户快捷键打断之一）
+- **right ⌘/⌃ 按下**：过 150ms 长按阈值 → 查授权 → **先试录**；`record()` 成功了才暂停音乐 +
+  取消 TTS + 出浮窗（见下「副作用在录上之后」）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
 - 用户快捷键五个：right⌘ 说话、Cmd+D 插队念译文、Ctrl+2 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+1 跳整摞、Ctrl+Esc 读下一页。**pi 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
+- **副作用发生在「真的在录」之后**：原先一按下就先打断播报、暂停音乐，然后才建 recorder——
+  没插麦克风时按一下 = 白打断一次播报、白暂停一次音乐，然后静默失败。现在**先试录、试活了才
+  让路**：打断与让路是为录音服务的，没在录就没什么好让的
+- **刻意不做设备预检**：耳机类麦克风**按需唤醒**，未唤醒时枚举/默认设备可能为空，预检会误判、
+  把本来能用的设备焊死。按下就试这一下、试活了算数，恰好是对按需唤醒最友好的做法
+- 失败日志**授权层与设备层分开报**：TCC 的 `authorizationStatus` vs CoreAudio 的默认输入设备名
+  （`AVAudioSession` 是 iOS 独有的，macOS 上走 `CoreAudio`）。实测常见形态是「授权已给、
+  设备层空」——只写「启动失败」会让人跑去系统设置里白找，那儿本来就勾上了
+- 失败路径的 recorder 进**隔离区**延迟 1 秒释放：`record()` 返回 false 的那一瞬 audio queue 的
+  回调线程**已经起来**了，立刻析构会让它访问已释放对象 → `objc_loadWeak` 野指针 SIGSEGV
+  （2026-10-19 实测）。与 TTS 那侧「排空 MLX 流再放行」是同一条纪律：**底层线程已经在跑，
+  就不能把对象扔了**
 
 ### GlobalKeyTap — 键盘事件层
 
@@ -188,12 +231,22 @@ Daemon (actor)
 - 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
 - ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
 - 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Cmd+D` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
+- **防误触也在这一层判，一处判完**（都是纯整数比较，不碰业务）：① **同键冷却，按键分档**——
+  `Cmd+D` 0.2s（它靠后写胜出连按，冷却只挡连击）、三个打断键 0.3s（翻页掀摞本就该能连按）、
+  其余 1s。冷却中**仍然吃掉事件**只是不执行：漏给目标 app 更糟。走 `systemUptime` 单调时钟，
+  只在 tap 线程读写，不加锁。② **右⌘/右⌃ 150ms 长按阈值**——按下沿延迟到阈值才发，阈值内松开
+  当没发生过。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」
+  的第二句吃掉。⚠️ 每 `make update` 都会重签二进制、**输入监控权限可能随之失效**（TCC 跟着
+  签名走），症状是 `Cmd+D` 全哑而修饰键照常
 
 ### Translation — 划词翻译
 
 `Sources/iVox/Translation/`（AppKit/CG 侧）+ `Sources/iVoxKit/Translation/`（纯逻辑，可单测）
 
 - `Cmd+D` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 屏幕下方居中的歌词式浮窗（`TranslationPanel`，NSPanel 非激活浮层）+ 可选朗读
+- **贵的动作押后**：先弹「读取选区…」占位 → 读剪贴板校验 → 弹「翻译中…」→ **等 200ms 提交点才发请求**。期间又按一次（世代推进）就到此为止，请求压根不发——误触的代价从「一次请求 + 一次朗读」降到「一个闪一下的空窗」
+- **连按是「后写胜出」而非丢弃**：`generation` 世代号，在途的那一代回来发现号变了就作废、不上屏不朗读。原先 `guard !inFlight else { return }` 是直接丢第二次，换了个选区想再译一次白按
+- **译文零重复推理**：`TranslationService`（actor）两层——**在途去重**（同一段文字并发时后到的等同一次的结果）与**最近 16 条译文缓存**（FIFO，键带 `provider|model`，切后端不拿旧译文顶账）。命中缓存**照样朗读**：用户想听的是译文，缓存省的是生成，不是他的耳朵
 - **三个浮窗各自独立、刻意不抽公共件**（消失策略与生命周期各不同，硬抽要开一堆口子）：语音波形（`OverlayPanel`，跟鼠标收）、翻译结果（`TranslationPanel`，屏幕下方 96pt）、播报字幕（`CaptionPanel`，贴底 24pt，`playback.captions` 开关，**跟播放不跟合成**）。三者同源的是那套 `NSPanel` 组合：非激活、悬于所有窗口、跨 Space
 - 翻译走 `iVoxKit.TranslationService`（`actor`）：Google 主/备**双通道容灾**，或 OpenAI 兼容；**直连失败自动走兜底代理**（`translation.proxyURL`），直连用短超时探测（`directProbeTimeoutSeconds`），成功后记住「该走代理」
 - 朗读走 `PlaybackQueue.speakUserInitiated()`：**插队**——掐掉在播的那一句让译文立刻响，但**不掀桌**（其余段全保留、流式轮不作废）。与 hook 汇报的「只排队」语义相反
@@ -205,6 +258,7 @@ Daemon (actor)
 `Sources/iVox/QuickActions/QuickActionsService.swift`
 
 - `Opt+Z` 在 Finder 当前目录开终端；`Opt+A`/`Opt+X`/`Opt+Q` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
+- `Opt+Z`（不带命令）在 Ghostty **已经在跑时改为聚焦**而非开新窗口——连按五下开五个终端是最明显的「后面干活的压力」。取舍：复用时不保证落在 Finder 当前目录（取已在跑的窗口目录要向 Ghostty 要 Automation 授权，不值当）。带命令的三个**仍开新实例**（见下条实测坑②，这条不能破）
 - 开终端走 **Ghostty**（`--working-directory` + `--initial-command` 是它的原生 CLI 参数）：一条 LaunchServices 调用就够，**不需要**临时 `.command` 文件，也不沾 Terminal 的 Automation 授权
 - 三个实测坑：① 参数必须经 `NSWorkspace.OpenConfiguration.arguments`（数组）下发——命令行 `open --args` 会把**含空格的参数拆坏**；② **必须配 `createsNewApplicationInstance`**，复用已运行的 Ghostty 实例时参数会被**静默忽略**（命令根本不跑）；③ **不用 `-e`**——它每次弹 macOS 的「Allow Ghostty to execute」确认框，Ghostty 目前无配置项可关
 - 命令写作 `--initial-command=/bin/zsh -lc <cmd>`：该参数默认经 `/bin/bash --noprofile --norc -c` 执行，套一层 login shell 才拿得到用户 PATH（`/opt/homebrew/bin`、`~/.local/bin` 都不在 GUI 进程的最小 PATH 里）；另配 `--wait-after-command=true` 让命令退出后**保留窗口**（Ghostty 默认关窗，与原先 Terminal 的行为不一致，退出 claude 时会看不到最后的输出）
@@ -366,5 +420,12 @@ ConnectionHandler.extractVoicePrefix():
 | PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_update` 流式（`agent_settled` 兜底） |
 
 由 `install-hooks.sh` 统一安装（Claude 挂 MessageDisplay + Stop 收尾信号，Codex 挂 Stop 整段播报 + Interrupt 收尾信号——**Claude 与 Codex 共用 `Stop` 这个键但命令不同**，所以脚本里键名与命令是两个参数）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。`hook.sh` 有 `speak` / `msgdisplay` / `end` 三模式（`end` 只送收尾暗号、不出声）：`speak` 提取 `last_assistant_message`、`msgdisplay` 提取 `delta` 增量，都经 `ivox speak` 排队入队（不打断）。
+
+**`~/.config/ivox/lastturn/`** 是 hook 链的一小块状态：Claude 的 Stop payload 里**没有 `turn_id`**（官方
+hooks reference 的 Stop 专属字段只有 `stop_hook_active` / `last_assistant_message` / …，通用字段是
+`prompt_id`），所以 `msgdisplay` 每批把 `session_id → turn_id` 的对照写进这个目录，Stop 到了再反查。
+按 session 分文件是为了两个会话并行时互不覆盖。**七天后自动淘汰**：这张表只为 Stop 反查而存，回复
+结束就无用，此前只涨不清（实测堆到 30 个文件）；现在每轮 Stop 顺手扫一遍删掉 mtime 超过 7 天的——
+一轮一次、代价可忽略，七天内可能还会被反查，更早的会话不可能还在对话里。
 
 **集成资产随发布包自包含**：release tarball 除 `ivox` 外含整个 `integrations/`（含 `install-hooks.sh`），安装/升级时解包到权威源 `~/.config/ivox/integrations/`，再由分发器幂等铺到各 agent 位置。同步只发生在三个显式时机：`make update`（runtime.sh deploy-bin）、`ivox update`（UpdateCommand 解包后 Process 调分发器）、`install-binary.sh`（curl|bash 首次安装也补齐集成）；守护进程启动不自动同步。分发器按自身位置探测素材源：脚本在 `integrations/` 内（部署态）用同级目录，在 `scripts/`（源码态）用 `../integrations`。
