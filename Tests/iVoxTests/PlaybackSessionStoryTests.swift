@@ -344,7 +344,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
     ///
     /// 这是 2026-10-18 那次改造的核心断言：早先页号直接存外部 `message_id`，
     /// 外部不给就挂「匿名页」，掀页与掀摞在日志上都说不清掀的是哪一张。
-    /// 改成资料室自编之后，**身份不再由端决定**——`ivox speak` / codex 这类没有
+    /// 改成资料室自编之后，**身份不再由端决定**——`ivox speak` / pi 这类没有
     /// 外部页号的来源，掀页照样掀得掉、也照样报得出第几页。
     func testSkipPageOnAPaperWithoutExternalName() async {
         let s = PlaybackSession()
@@ -357,13 +357,13 @@ final class PlaybackSessionStoryTests: XCTestCase {
     }
 
     /// **无外部编号的稿子，一份就是一摞**——这是 2026-10-18 18:11 那次现场：
-    /// codex 没 turn_id，早先的实现把它和之前那条长回复焊进了同一个段，
+    /// 那个来源没 turn_id，早先的实现把它和之前那条长回复焊进了同一个段，
     /// Ctrl+1 掀一次 34 块全丢（其中只有 6 块是新回复）。
     /// 助理的规矩：外部编号只配当「同一摞」的线索，缺席时**各自成摞**，绝不合并。
     func testPlainStacksAreNeverWeldedTogether() async {
         let s = PlaybackSession()
-        _ = await s.appendPlain([block("甲的第一句", source: "codex")])
-        _ = await s.appendPlain([block("乙的第一句", source: "codex")])
+        _ = await s.appendPlain([block("甲的第一句", source: "pi")])
+        _ = await s.appendPlain([block("乙的第一句", source: "pi")])
         let first = await s.takeHeadStack()
         XCTAssertEqual(first?.dropped, 1, "掀第一摞只该丢它自己的块，不该把后到的一起带走")
         let second = await s.takeHeadStack()
@@ -393,21 +393,21 @@ final class PlaybackSessionStoryTests: XCTestCase {
     // MARK: - 清单 8：跨来源喊闭嘴，会不会挂错那摞的牌？
 
     /// Ctrl+Esc 是**全局热键**，拿不到「当前会话」是谁。此前一刀切埋全部，
-    /// 于是你在 Claude 里喊闭嘴，把 **Codex 正在生成的那摞**也埋了——
+    /// 于是你在 Claude 里喊闭嘴，把 **pi 正在生成的那摞**也埋了——
     /// 它随后送来的字全被丢弃、从此不再开口。
     /// 这条钉的是：**容器照旧全清，墓碑只给最近有块入队的那个来源。**
     func testShutUpBuriesOnlyTheSourceThatWasTalking() async {
         let s = PlaybackSession()
         _ = await deliver(s, group: "gClaude", page: "p1", blocks: [block("C1", source: "claude")])
-        _ = await deliver(s, group: "gCodex", page: "p2", blocks: [block("X1", source: "codex")])
+        _ = await deliver(s, group: "gPi", page: "p2", blocks: [block("X1", source: "pi")])
         _ = await deliver(s, group: "gClaude", page: "p3", blocks: [block("C2", source: "claude")])
 
         let buried = await s.discardAll()
 
-        let codexLater = await deliver(s, group: "gCodex", page: "p4", blocks: [block("X2", source: "codex")])
+        let piLater = await deliver(s, group: "gPi", page: "p4", blocks: [block("X2", source: "pi")])
         let claudeLater = await deliver(s, group: "gClaude", page: "p5", blocks: [block("C3", source: "claude")])
         XCTAssertEqual(buried, ["gClaude"], "只该埋正在说话那一摞的牌")
-        XCTAssertEqual(codexLater, .appended, "Codex 没被喊停，它的后续增量必须照常入队")
+        XCTAssertEqual(piLater, .appended, "pi 没被喊停，它的后续增量必须照常入队")
         XCTAssertEqual(claudeLater, .dead, "正在说话的那个被喊停了，它不该再开口")
     }
 
@@ -415,7 +415,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
     func testShutUpStopsWhicheverSourceIsSpeaking() async {
         let s = PlaybackSession()
         _ = await deliver(s, group: "gClaude", page: "p1", blocks: [block("C1", source: "claude")])
-        _ = await deliver(s, group: "gCodex", page: "p2", blocks: [block("X1", source: "codex")])
+        _ = await deliver(s, group: "gPi", page: "p2", blocks: [block("X1", source: "pi")])
         await advanceAll(s)
 
         _ = await s.discardAll()

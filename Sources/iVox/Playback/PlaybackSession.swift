@@ -29,7 +29,7 @@ struct PlaybackBlock: Sendable {
     let seq: UInt
     let text: String
     let voiceID: String
-    /// 属主来源（claude / codex / pi / …）。**只供墓碑分范围**（`discardAll` 要按属主立墓碑），
+    /// 属主来源（claude / pi / …）。**只供墓碑分范围**（`discardAll` 要按属主立墓碑），
     /// 不参与任何身份判断——块的身份只有 `seq`。
     let source: String
 }
@@ -56,9 +56,9 @@ struct PlaybackSegment: Sendable {
     /// （18:11 实测：34 块里只有 6 块是新回复）。身份是容器自己的事，不该由外部决定。
     let localID: Int
     /// 外部编号（`turn_id`）。**只管一件事：立墓碑**——「这一摞作废，它后续来的增量别再收」。
-    /// 没有就是没有（`ivox speak` / hook 终稿 / codex 全走无编号），**不影响这摞的身份与掀除**。
+    /// 没有就是没有（`ivox speak` 等无编号来源全走这条路），**不影响这摞的身份与掀除**。
     let turnID: String?
-    /// 属主来源（claude / codex / pi / …）。**只为 Ctrl+Esc 的墓碑分范围而存在**：
+    /// 属主来源（claude / pi / …）。**只为 Ctrl+Esc 的墓碑分范围而存在**：
     /// 掀容器是全体，埋墓碑只埋属主那一份（见 `discardAll`）。
     let source: String?
     var sealed: Bool
@@ -384,7 +384,7 @@ actor PlaybackSession {
     /// 「自成一段」不是随手定的，是外部编号缺席时资料室自己的规矩：`appendGrouped`
     /// 靠 turn_id 把同一摞的续页并进同一段，无编号时没有那把钥匙，**就不能靠它分组**，
     /// 否则就只能把所有无编号的稿子视作一摞——Ctrl+1 的契约「掀这一摞、下一摞留着」
-    /// 于是作废（2026-10-18 18:11 实测：codex 一条长回复的 28 块与新回复的 6 块被焊成一摞，
+    /// 于是作废（2026-10-18 18:11 实测：一条长回复的 28 块与新回复的 6 块被焊成一摞，
     /// 掀一次 34 块全丢，只 6 块是你想听的）。
     ///
     /// 无分组段天生收尾（没有「还在生成」这回事），因此 `sealed: true`。

@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 安装 iVox hook 到 Claude / Codex / PI，已存在则跳过
+# 安装 iVox hook 到 Claude / PI，已存在则跳过
 set -euo pipefail
 
 HOOK_SH="${1:?用法: install-hooks.sh <hook-sh-path>}"
@@ -25,22 +25,21 @@ fi
 
 # ── 公共函数：用 jq 或 python3 安全写入 hook 配置 ──
 # 用法：write_hook <config> <source> <timeout> [event] [action]
-#   event  = settings.json 里的事件键。Claude 与 Codex **都用 Stop**——别自造 End 之类，
-#            Claude Code 不认的名字会把整条 hook 静默丢弃（2026-10-16 修的就是这个）。
-#   action = 命令选择：speak（念整段，缺省）| msgdisplay | end（收尾暗号）
-# 两个参数必须分开：同一个 Stop 键，Claude 要 end、Codex 要 speak，靠一个参数区分不开。
+#   event  = settings.json 里的事件键。**只认 Claude Code 认识的名字**——自造 End 之类
+#            不认的名字会把整条 hook 静默丢弃（2026-10-16 修的就是这个）。
+#   action = 命令选择：msgdisplay（送整页正文）| end（收尾暗号，不出声）
+# 认不得的 action 直接失败，不猜——猜出来的是一条没人要的 hook。
 write_hook() {
   local config_path="$1"
   local tool_name="$2"
   local timeout="$3"
-  local event="${4:-Stop}"
+  local event="${4:-MessageDisplay}"
   local action="${5:-$event}"   # 缺省跟 event 走，保持省略后两个参数的调用点行为不变
   local cmd
   case "$action" in
-    UserPromptSubmit) cmd="bash $HOOK_SH interrupt $tool_name" ;;
     MessageDisplay)   cmd="bash $HOOK_SH msgdisplay $tool_name" ;;
     end)              cmd="bash $HOOK_SH end $tool_name" ;;
-    *)                cmd="bash $HOOK_SH speak $tool_name" ;;
+    *)                return 1 ;;
   esac
 
   if command -v jq &>/dev/null; then
@@ -82,7 +81,6 @@ write_prompt_hook() {
 # 立刻收尾（字幕立刻回来）。历史坑：去重那次（57179ae）摘的是**指向 `hook.sh speak` 的**那条 Stop
 # （连正文一起送 → 与 MessageDisplay 重复播两遍），不是"不许挂 Stop"；现在这条不发正文，不重复。
 # **本脚本只写不删**：遗留的旧 Stop（命令里是 `hook.sh speak claude`）请人工摘除，否则重复播报。
-# 注：Codex 无 MessageDisplay 事件，仍走 Stop 整段播报（见下），别跟着一起改。
 CLAUDE_JSON="$HOME/.claude/settings.json"
 if [[ -f "$CLAUDE_JSON" ]]; then
   if grep -q 'hook.sh msgdisplay claude' "$CLAUDE_JSON" 2>/dev/null; then
@@ -99,7 +97,7 @@ if [[ -f "$CLAUDE_JSON" ]]; then
   # 现在这条不出声，不构成重复。
   # 坑点（2026-10-16）：此处原本传 `End`——那不是 Claude Code 认识的事件名，整条 hook 被静默
   # 丢弃（只在启动告警里提一句），收尾信号从未生效，全靠 2 秒空闲宽限兜底。正解：键名 `Stop`
-  # + 第 5 参 `end`。改的时候别只改键名——`Stop` 同时是 Codex 的键，会连带把它写成 end 而哑掉。
+  # + 第 5 参 `end`。
   if grep -q 'hook.sh end claude' "$CLAUDE_JSON" 2>/dev/null; then
     echo "[i] Claude Stop hook（收尾信号）已存在"
   elif write_hook "$CLAUDE_JSON" "claude" 10 Stop end; then
@@ -109,39 +107,6 @@ if [[ -f "$CLAUDE_JSON" ]]; then
   fi
   write_prompt_hook "$CLAUDE_JSON" 10 claude
 fi
-
-# ── Codex ──
-CODEX_JSON="$HOME/.codex/hooks.json"
-mkdir -p "$(dirname "$CODEX_JSON")"
-[[ -f "$CODEX_JSON" ]] || echo '{}' > "$CODEX_JSON"
-
-if grep -q 'hook.sh speak codex' "$CODEX_JSON" 2>/dev/null; then
-  echo "[i] Codex hook 已存在"
-elif write_hook "$CODEX_JSON" "codex" 30; then
-  echo "✓  Codex hook（首次触发时授权即可）"
-else
-  echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
-fi
-
-# Esc 中断的**收尾信号**（不是打断）：按 Esc 时 codex 不走 Stop（那摞永远等不到收尾，
-# 只能干等 2 秒空闲宽限）。InterruptRequest 同样带 session_id + turn_id
-# （`hooks/src/events/interrupt.rs`），所以直接复用 `hook.sh end codex`：
-# 它只送「说完了」这个暗号、不出声、不打断，与 Stop 是同一个动作。
-# 注意别把它跟已废弃的 UserPromptSubmit **打断**混为一谈——那是被明确废除的机制。
-#
-# 超时写 **3** 不是随手取的：codex 对 Interrupt / SessionEnd 硬性封顶 3 秒
-# （`hooks/src/engine/discovery.rs` 的 `SESSION_END_MAX_TIMEOUT_SEC`），写更大的值会被
-# clamp，且每一处 clamp 都往 warnings 里塞一句，客户端遂显示成「此源有 1 个钩子加载问题」。
-# 照着 3 写就没有这句提示（行为与被 clamp 后完全一致，纯粹是不给界面假警报）。
-if grep -q 'hook.sh end codex' "$CODEX_JSON" 2>/dev/null; then
-  echo "[i] Codex Interrupt hook（中断收尾信号）已存在"
-elif write_hook "$CODEX_JSON" "codex" 3 Interrupt end; then
-  echo "✓  Codex Interrupt hook（中断收尾信号，不出声）"
-else
-  echo "⚠️  需要 jq 或 python3 写入 Codex 配置，请手动添加"
-fi
-
-write_prompt_hook "$CODEX_JSON" 30 codex
 
 # ── PI coding agent 扩展 ──
 PI_EXT_DIR="$HOME/.pi/agent/extensions"

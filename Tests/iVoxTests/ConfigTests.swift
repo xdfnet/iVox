@@ -18,7 +18,7 @@ final class ConfigTests: XCTestCase {
         let config = Config(
             models: nil,
             defaultVoice: "voice",
-            sourceVoices: ["codex": "missing"],
+            sourceVoices: ["pi": "missing"],
             voices: [VoiceInfo(id: "voice", description: nil)],
             configBaseDir: nil
         )

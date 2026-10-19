@@ -104,10 +104,10 @@ if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
   "speechInput": { "enabled": true, "language": "zh", "autoEnter": true, "maxRecordingSeconds": 30 },
   "translation": { "enabled": true, "provider": "google", "baseURL": "https://api.openai.com/v1", "apiKey": "", "model": "gpt-5-mini", "speechEnabled": true, "speechVoice": null, "panelTimeoutSeconds": 60, "timeoutSeconds": 20, "proxyURL": "http://192.168.100.6:10808" },
   "defaultVoice": "taozi",
-  "sourceVoices": { "claude": "taozi", "codex": "wanwan", "pi": "taozi" },
+  "sourceVoices": { "claude": "taozi", "pi": "taozi" },
   "voices": [
     { "name": "甜妹桃子", "id": "taozi", "refText": "嗨，我是甜妹桃子。我有着活泼甜美的声线，听起来元气满满。如果你需要一位热情开朗的声音陪伴，选我就对了。", "refAudio": "~/.config/ivox/voices/ref_taozi.wav", "description": "Claude 音色" },
-    { "name": "湾湾小何", "id": "wanwan", "refText": "你好，我是湾湾小何。我的声音温柔知性。", "refAudio": "~/.config/ivox/voices/ref_wanwan.wav", "description": "Codex 音色" },
+    { "name": "湾湾小何", "id": "wanwan", "refText": "你好，我是湾湾小何。我的声音温柔知性。", "refAudio": "~/.config/ivox/voices/ref_wanwan.wav", "description": "温柔知性" },
     { "name": "米仔", "id": "mizai", "refText": "大家好，我是米仔。我的声音温暖自然，适合日常播报和语音助手场景。无论是读书、讲故事，还是播报天气新闻，我都能轻松应对。", "refAudio": "~/.config/ivox/voices/ref_mizai.wav", "description": "备用音色" },
     { "name": "大易", "id": "dayi", "refText": "大家好，我是大易。我有着沉稳可靠的男声，听起来踏实有力量。需要播报重要通知或者讲述深度内容，交给我就好。", "refAudio": "~/.config/ivox/voices/ref_dayi.wav", "description": "PI 音色" }
   ]

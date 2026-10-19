@@ -1,8 +1,8 @@
 #!/bin/bash
-# iVox + iW Hook — Claude Code / Codex / PI 播报 Hook
-# Usage: hook.sh <speak|msgdisplay> <source>   # source: claude | codex | pi
-#   hook.sh speak claude       → 念 claude 的回复（Codex 等无 MessageDisplay 的走这条）
+# iVox Hook — Claude Code 播报 Hook（PI 走自己的 TS 扩展，不经过这里）
+# Usage: hook.sh <msgdisplay|end> <source>   # source: claude
 #   hook.sh msgdisplay claude  → MessageDisplay：assistant 行批增量，按 turn_id 装进同一摞
+#   hook.sh end claude         → Stop：只送「说完了」这个暗号，不出声
 # 协议：stdout 必须保持干净；exit 0 = 继续，非 0 = 停止
 # 手动静音（IVOX_SKIP=1，如 Samantha 内部调用）或 reflexio 后台学习调用（CLAUDE_SMART_INTERNAL=1）→ 不播报
 [[ "${IVOX_SKIP:-}" == "1" ]] && exit 0
@@ -13,7 +13,7 @@
 # 起因：`make check-tts` 压的是真实 daemon，而真人对话的播报走同一个队列，会挤掉自检用例。
 [[ -f /tmp/ivox-hook-muted ]] && exit 0
 
-# 必须两个参数：动作（speak|msgdisplay）+ 来源。来源与动作一个都不能猜，宁缺毋滥。
+# 必须两个参数：动作（msgdisplay|end）+ 来源。来源与动作一个都不能猜，宁缺毋滥。
 # 注：interrupt 分支已移除——打断权只归快捷键（右⌘/Cmd+D/Ctrl+Esc）与命令行 `ivox skip`，
 # 不再经 hook.sh 自动打断。（`ivox quiet` 已随停止帧一起删除。）
 if [[ "$#" -lt 2 ]]; then exit 0; fi
@@ -64,9 +64,9 @@ if isinstance(page, str):
     if len(page) <= 5 and not re.search(r'[一-鿿]', page):
         page = ''
 
-# 按 session_id 记下「这条会话最后一次是哪一摞」——**Claude 的** Stop payload 里没有 turn_id
+# 按 session_id 记下「这条会话最后一次是哪一摞」——**Claude 的 Stop payload 里没有 turn_id**
 # （只有 prompt_id 与 last_assistant_message，见官方 hooks reference），收尾信号要靠这一笔
-# 反查才能精确指认。Codex 的 Stop 自带 turn_id，不走这条反查（见 end 分支）。
+# 反查才能精确指认。
 # 分文件存是为了两个会话并行时互不覆盖（一个文件按 session 一键）。
 sid = san(d.get('session_id',''))
 if sid and grp:
@@ -95,12 +95,10 @@ if [[ "$1" == "end" ]]; then
   # 作用：让队列立刻判「这一摞说完了」→ 收尾（收字幕），不必再等空闲宽限那 2 秒。
   # 与 msgdisplay 的分工：那条送**内容**，这条只说**完了**。
   # 当年摘 Stop（57179ae）是因为它连正文一起送、与 MessageDisplay 重复播两遍；现在只送暗号，不重复。
-  # Stop 的 payload **两家不一样**，这行是关键的分叉（2026-10-18 核实）：
-  #   · Codex  —— 带 `turn_id`（`StopRequest.session_id/turn_id/...`），直接用，精确指认。
-  #   · Claude —— **没有 turn_id**（官方 hooks reference 的 Stop 事件专属字段只有
-  #     stop_hook_active / last_assistant_message / background_tasks / session_crons，
-  #     通用字段里是 prompt_id 不是 turn_id），只能按 session_id 反查 msgdisplay 记下的那一笔。
-  # 两家都取不到就不带 group（服务端退化成"收最后打开的那摞"）。
+  # Claude 的 Stop **没有 turn_id**（官方 hooks reference 的 Stop 事件专属字段只有
+  # stop_hook_active / last_assistant_message / background_tasks / session_crons，
+  # 通用字段里是 prompt_id 不是 turn_id），只能按 session_id 反查 msgdisplay 记下的那一笔。
+  # 先试 payload 里万一有 turn_id，没有再反查；两条都取不到就不带 group（服务端退化成「收最后打开的那摞」）。
   # 另注：按 Esc 中断与 API 报错（走 StopFailure）时本钩子**不会触发**，那两种情形交给 2 秒空闲宽限兜底。
   payload="$(cat)"
   grp=$(printf '%s' "$payload" | python3 -c "
@@ -137,92 +135,3 @@ except Exception:
   exit 0
 fi
 
-[[ "$1" == "speak" ]] || exit 0   # 未知动作：不处理
-source="$2"
-
-exec 3>&1
-exec 1>/dev/null
-
-payload="$(cat)"
-
-# **codex 的 Stop payload 带 `turn_id`**（`hooks/src/events/stop.rs` 的 `StopRequest`），
-# 拿它当分组号，这一摞就是「这一次输入引发的全部回复」，Ctrl+1 能整摞掀掉。
-# 早先这里只取 `last_assistant_message` 不带分组，codex 每次回复都成「无编号入队」——
-# 叠加助理侧曾按无编号合并，一次掀摞把几十块一起丢了（2026-10-18 修）。
-# Claude 的 Stop **没有** turn_id（只有 prompt_id），走本分支时 grp 为空，退回无分组入队——
-# Claude 的正文由 MessageDisplay 送、带 turn_id，本分支对它不是主通路。
-grp=$(printf '%s' "$payload" | python3 -c "
-import json, sys, re
-try:
-    d = json.loads(sys.stdin.read()) if sys.stdin.readable() else {}
-except Exception:
-    d = {}
-print(re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('turn_id') or '')))
-" 2>/dev/null)
-
-# **只搬结论：一摞一页，与 `ivox speak` 同形。**
-# codex 一次输入会产出一条条 assistant 消息，transcript 里靠 `phase` 区分身份：
-#   · `Commentary`    —— 中途解说（「我先看看」「找到了，改一下」）
-#   · `PartialAnswer` —— 正式答案写到一半的中间态
-#   · `FinalAnswer`   —— 本轮最终答案，**通常只有一条**
-# 早先一版把本轮**全部**消息都搬过来当多页，听着「一次输入有回音」；实际听着是
-# 半截结论 + 过程碎片 + 结论重播，且 codex 的增量不落盘（AgentMessageContentDelta
-# → None）也没有流式钩子，Stop 时已经是「迟到一步」——搬得越多，越像在念日志。
-# 2026-10-18 飞哥裁决：**只留 Stop、只搬运结论**，行为对齐 `ivox speak`——
-# 一摞一页，Ctrl+1 掀摞 / Ctrl+2 掀页都还成立（只是这一摞本来就只有一页）。
-# **不带 `--page`**：一页的东西没有页号可编，助理自编一个即可，多传反而添乱。
-#
-# 正文从 payload 的 `transcript_path`（rollout jsonl）里按 turn_id + phase 挑。
-# 挑不到（无 transcript / 换版本改了字段名 / 本轮没落 FinalAnswer）时退回
-# `last_assistant_message`——Stop 自带它，**那本来就是结论**，兜底不会播成过程碎片。
-# 正文走 base64 一段一行：正文可能含换行，按行读原文会被拆错；`mapfile` 是 bash 4+
-# 才有的，macOS /bin/bash 是 3.2 直接报 command not found。
-b64=$(python3 -c "
-import json, os, re, sys
-d = json.loads(sys.argv[1]) if len(sys.argv) > 1 and sys.argv[1].strip() else {}
-tid = str(d.get('turn_id') or '')
-tp  = d.get('transcript_path') or ''
-finals, seen = [], set()
-if tp and tid and os.path.exists(tp):
-    try:
-        for line in open(tp, encoding='utf-8', errors='replace'):
-            line = line.strip()
-            if not line: continue
-            try: rec = json.loads(line)
-            except Exception: continue
-            if not isinstance(rec, dict): continue
-            for node in (rec.get('payload'), rec):      # 包法随版本变（payload 摊平与否）
-                if not isinstance(node, dict): continue
-                if str(node.get('turn_id') or '') != tid: continue
-                item = node.get('item')
-                if not isinstance(item, dict): break
-                if 'agentmessage' not in str(item.get('type') or '').replace('_','').lower(): break
-                iid = str(item.get('id') or '')
-                if iid and iid in seen: break           # 同一条消息落盘两次时只取一次
-                if iid: seen.add(iid)
-                if str(item.get('phase') or '') != 'FinalAnswer': break   # 中途解说/半截答案一律不搬
-                s = ''.join(c['text'] for c in (item.get('content') or [])
-                            if isinstance(c, dict) and isinstance(c.get('text'), str) and c['text']).strip()
-                if s: finals.append(s)
-                break
-    except Exception:
-        pass
-if not finals:
-    last = str(d.get('last_assistant_message') or '').strip()
-    if last: finals = [last]
-import base64
-if finals:
-    text = '\n\n'.join(finals).strip()
-    # 过短的纯西文确认（如 true/ok/done）不播报
-    if len(text) <= 5 and not re.search(r'[一-鿿]', text): raise SystemExit
-    sys.stdout.write(base64.b64encode(text.encode('utf-8')).decode('ascii'))
-" "$payload" 2>/dev/null)
-
-[[ -n "$b64" ]] || { echo '{"continue": true}' >&3; exit 0; }
-body=$(printf '%s' "$b64" | /usr/bin/base64 -D 2>/dev/null)
-[[ -n "${body// }" ]] || { echo '{"continue": true}' >&3; exit 0; }
-
-args=(speak --source "$source")
-[[ -n "$grp" ]] && args+=(--group "$grp")
-ivox "${args[@]}" -- "$body" 2>/dev/null 3>&-
-echo '{"continue": true}' >&3

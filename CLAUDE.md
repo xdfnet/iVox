@@ -60,7 +60,7 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
 Tests/iVoxTests/       — 测试（仅依赖 iVoxKit）
 
 integrations/          — 各外部 agent 的对接适配层（安装时由脚本 cp，不编进二进制）
-  hook.sh              — 通用播报 hook（claude/codex 共用）
+  hook.sh              — Claude Code 的播报 hook（msgdisplay 送整页 / end 送收尾暗号）
   pi/ivox.ts           — pi coding agent 流式扩展
 
 docs/                  — architecture.md, socket-api.md, hook-chain.md, native-bridge.md（微信链路实测依据）；playback/ 放播报四层：purpose.md（目的/取舍，**有分歧先翻它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研

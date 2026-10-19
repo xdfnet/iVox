@@ -12,7 +12,7 @@ actor ConnectionHandler: SocketConnectionHandler {
     /// 播报站只认自己发的号（`PlaybackBlock` / `PlaybackSegment` 上没有任何外部编号做身份），
     /// 所以「这批材料属于哪一摞」这张对照表归**跑腿的**记。2026-10-18 起从助理内部
     /// 挪到这里：原先助理靠 `turnID == group` 去容器里检索，等于承认「外部号就是身份」，
-    /// 于是「无编号 ⇒ 可以合并」这种推断长了出来，把 codex 的两次回复焊成一摞
+    /// 于是「无编号 ⇒ 可以合并」这种推断长了出来，把同一来源的两次回复焊成一摞
     /// （Ctrl+1 掀一次 34 块，其中只有 6 块是新回复）。
     private var stackOfExternalGroup: [String: Int] = [:]
 

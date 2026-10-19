@@ -19,7 +19,6 @@
   "defaultVoice": "taozi",
   "sourceVoices": {
     "claude": "taozi",
-    "codex": "wanwan",
     "pi": "taozi"
   },
   "speechInput": {
@@ -53,7 +52,7 @@
       "name": "湾湾小何",
       "refAudio": "~/.config/ivox/voices/ref_wanwan.wav",
       "refText": "你好，我是湾湾小何。我的声音温柔知性。",
-      "description": "Codex 音色"
+      "description": "温柔知性"
     },
     {
       "id": "mizai",

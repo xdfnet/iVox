@@ -21,37 +21,14 @@
 
 **流式是常态，不是特例**：页先占位、正文陆续往里塞，这就是「纯流式」。三个接入方现在都是这样。
 
-## 三方对齐表（目标态）
+## 对齐表（目标态）
 
 | | 摞（turn） | 页（page） | 页内增量 | 现状 |
 |---|---|---|---|---|
 | **Claude Code** | 每批的 `turn_id`；缺失时回落 `message_id` | 每批的 `message_id` | MessageDisplay 分批带 | ✅ 已是流式 |
 | **pi** | 连接首帧自带的 turn 号（扩展自编，只作线索） | `{page}` 帧（页号由助理数） | `text_delta` | ✅ 已是流式，且一条流跨**一次输入**（run 级，`agent_start`→`agent_end`） |
-| **codex** | `Stop`/`Interrupt` payload 的 `turn_id`（**已接**，2026-10-18） | 协议事件里的 `item_id` | `AgentMessageContentDeltaEvent.delta` | ⚠️ 现状挂 Stop（整段一次，`turn_id` 当分组号）+ Interrupt（Esc 中断的收尾信号）；**流式增量待改** |
 
-三个都应是**有摞有页的纯流式**。粒度差异（谁切得快）不影响结构。
-
-### codex 的身份是现成的（已核实源码）
-
-`codex exec --json` 输出 JSONL 事件流，其协议里有：
-
-```rust
-// codex-rs/protocol/src/protocol.rs:2081
-pub struct AgentMessageContentDeltaEvent {
-    pub thread_id: String,
-    pub turn_id: String,   // 摞
-    pub item_id: String,   // 页：一个 item = 一条 assistant 消息
-    pub delta: String,     // 页内增量
-}
-```
-
-**两个身份都是事件里现成的，不需要反查、不需要服务端数页号**——比 Claude 现在的做法还干净。
-
-### codex 的 hook 面（现状为何是「整段一次」）
-
-`~/.codex/hooks.json` 现在只挂 `Stop`，而 Stop 的 payload 里只有 `last_assistant_message`（完整一段），故拿不到过程。
-
-codex 本身支持 12 个 hook 事件（`PreToolUse` / `PostToolUse` / `SessionStart` / `UserPromptSubmit` / `Stop` …）和 `Thread` / `Turn` 两种 scope，payload 里带 `thread_id` / `turn_id`。但**这些 hook 里没有 assistant 正文增量事件**——所以只靠 hook 拿不到流。
+两家都已是**有摞有页的纯流式**。粒度差异（谁切得快）不影响结构。
 
 ## 接入形态（真正的来源分类）
 
@@ -62,7 +39,7 @@ codex 本身支持 12 个 hook 事件（`PreToolUse` / `PostToolUse` / `SessionS
 |---|---|---|---|---|
 | **A. 长连接流式** | 接入方自己开一条连接，边生成边发增量 | pi 扩展 | 接入方**自报** turn；页由翻页信号给（pi 发 `{page}` 帧） | 连接内 `{end}` / EOF，可靠；另有 `{cancel}` 自取消 |
 | **B. hook 增量分批** | 工具渲染时按行批触发 hook，每批带增量 | Claude Code（MessageDisplay） | 每批 payload 里带 `turn_id` + `message_id`（缺失时回落）；Stop 只有 `session_id`，靠 `lastturn/` 反查 | 外部 Stop 钩子（**可能丢**），丢了靠宽限兜底 |
-| **C. hook 终了一次** | 工具结束时触发 hook，payload 带完整回复 | codex，以及**任何能配 stop hook 且 payload 有 `last_assistant_message` 的工具** | 拿 `turn_id` 当摞号（Claude 的 Stop 没有，回落 `session_id` 反查）；正文**只搬 `phase == FinalAnswer` 的结论**，中途解说与半截答案不搬；**一摞一页、不带 `--page`**——与 `ivox speak` 同形 | Stop 即完整，无缺口 |
+| **C. hook 终了一次** | 工具结束时触发 hook，payload 带完整回复 | 暂无接入方；**任何能配 stop hook 且 payload 有 `last_assistant_message` 的工具**都能接 | 拿 payload 里的 turn 号当摞号，没有就回落 `session_id` 反查；**一摞一页、不带 `--page`**——与 `ivox speak` 同形 | Stop 即完整，无缺口 |
 | **D. 一次性 speak** | 命令行丢一段文本进来 | `ivox speak`（人工、脚本） | 无 | 发完即完整 |
 | **E. 插队播报** | 用户主动开口，要立刻响 | Cmd+D 划词译文 | 无 | 发完即完整，**插队到队首** |
 
@@ -77,9 +54,9 @@ codex 本身支持 12 个 hook 事件（`PreToolUse` / `PostToolUse` / `SessionS
 | **麦克风**（按住右⌘ / 右⌃） | 录音 → 语音转文字 → 文字落到光标所在的输入框 | **只调 `cancelAll(.speech)`**。用户的讲话是给 AI 的，不是让播报员复述一遍——所以一个字都不往队列递。全项目没有任何以 `speech` 入队的调用点，这是结构事实，不是约定 |
 | **微信** | `sendMessage` / `sendTyping` / 长轮询 `pollLoop` | 只发消息和「正在输入」，**不发声**。聊天窗口里已经有文字了，再念一遍是打扰（[目的层](purpose.md) 早已裁定） |
 
-**形态 C 是一整个类别，不止 codex。** 任何工具只要能配一个 stop hook、payload 里带
-`last_assistant_message`，就能以「整段一次」的方式接进来——这是最低门槛的接法，
-也是目前 codex 的现状。
+**形态 C 是一整个类别。** 任何工具只要能配一个 stop hook、payload 里带
+`last_assistant_message`，就能以「整段一次」的方式接进来——这是最低门槛的接法。
+目前没有接入方占着，留着这条是因为它划的是「接得进」的下限，不是某个具体产品。
 
 ## 打断粒度由身份决定
 
@@ -121,12 +98,7 @@ Stop 钩子到来（payload 只有 session_id + last_assistant_message，没有 
 
 ## 未决问题
 
-1. **codex 怎么接上事件流？** hook 拿不到增量，只有两条路：
-   - `codex exec --json` —— JSONL 事件流，但这是**非交互**模式，等于我们 spawn 一个新会话，抓不到用户在自己终端里跑的那个
-   - **`codex app-server` 事件订阅** —— 交互会话本来就跑在 app-server 上（`codex agents` 提到 shared local app-server daemon），订阅它才能拿到正在用的会话
-
-   待定：选 app-server 订阅；现有 Stop hook 是留作兜底还是删。
-2. **`lastturn/` 的时序错位**要不要在 hook 端加固（例如存「最近两摞」而非一个值）。
+1. **`lastturn/` 的时序错位**要不要在 hook 端加固（例如存「最近两摞」而非一个值）。
 
 ## 维护约束
 
