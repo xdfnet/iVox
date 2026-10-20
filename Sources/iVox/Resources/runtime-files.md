@@ -16,6 +16,7 @@ iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文�
 ├── lastturn/       132K ← 「会话 → 最后一摞」对照表
 ├── pagebuf/          0  ← 攒整页正文的临时缓冲
 ├── integrations/    28K ← 分发前的 hook / pi 扩展素材源
+├── signing/          4K ← 自签证书 + 私钥（备份，钥匙串重置后照它的 README 恢复）
 ├── *.log            日志与崩溃现场
 ├── *.sock           Unix socket
 └── config.toml      配置（TOML，能写注释）
@@ -40,6 +41,7 @@ iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文�
 | `config.toml` | 你手改 / `ivox init-config` 生成 | ❌ 主配置，删了播报与音色全没 |
 | `hook.sh` | `install-hooks.sh` 从 `integrations/` 铺过来 | ❌ Claude 的播报 hook 入口 |
 | `integrations/` | `make update` 时铺一次 | ⚠️ 删了下次 update 会补回来 |
+| `signing/` | 我（一次性备好） | ⚠️ 删了钥匙串重置后就没法用同一张证书签名了（权限会再掉一次） |
 
 ### 改配置（`config.toml`）
 
@@ -106,6 +108,6 @@ pkill -9 -f 'tts --serve'    # 誊清员，daemon 挂了它不会跟着死
 | 某一摞没念完 | `daemon.log` 搜 `seq=`，再用同一个号去 `tts.log` 里对——三处日志都带它 |
 | 播报断了但服务还在 | `daemon.log` 搜「已拉起誊清员」，看监督者有没有重启 |
 | daemon 莫名重启 | `crash.log` 有栈；`crash.count` 是累计次数 |
-| 麦克风/快捷键没反应 | 多半是 TCC 权限掉了，去系统设置重新勾「输入监控」「辅助功能」「麦克风」。**正常更新不会再掉**（用的是固定签名证书）；换了证书或证书过期才会 |
+| 麦克风/快捷键没反应 | 多半是 TCC 权限掉了，去系统设置重新勾「输入监控」「辅助功能」「麦克风」。**正常更新不会再掉**（用的是固定的自签证书，见 `signing/`）；换了证书才会 |
 | 改了配置没生效 | 忘了 `ivox restart`（守护进程只在启动时读一遍配置） |
 | 配置里的某项像是不起作用 | `ivox status` 会列出「没人认领」的键——多半是键名写错了 |

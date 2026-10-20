@@ -165,11 +165,16 @@ macOS 的 TCC（麦克风/辅助功能/输入监控）认的是**签名要求**�
 要求里含 **cdhash**（= 二进制内容哈希）→ 每次重编译内容就变、要求就变 → 旧授权自动作废，
 于是每次部署都得手动重新勾一遍权限。
 
-现在 `scripts/runtime.sh` 的签名**优先用钥匙串里第一个有效的代码签名证书**
-（`IVOX_SIGN_IDENTITY` 可显式指定；没有有效证书才回落 ad-hoc）。稳定证书的 designated
-requirement 含证书指纹，**跨版本不变** → 权限只掉一次，之后更新随便发。
+**现在用自签的长期身份**（`CN=iVox Local Signing`，10 年有效、不会被 Apple 吊销），
+它的 designated requirement 只含**证书指纹**（`dabf80f8…`）→ 换多少次版本权限都不掉。
+2026-10-21 实测：重编译 + 重新签（同一张证书）后，六项能力与三项权限全绿，一次没掉。
 
-证书本身会过期（Apple Development 一年），过期后要换一张——那时权限会再掉一次。
+- 签名身份的选择顺序（`scripts/runtime.sh` 的 `sign_bin`）：
+  `IVOX_SIGN_IDENTITY` > 自签的 `iVox Local Signing` > 钥匙串里第一个有效证书 > ad-hoc。
+- 证书与私钥备份在 `~/.config/ivox/signing/`（钥匙串重置后按那里的 README 恢复；
+  恢复后指纹仍是同一张 → **权限不用重勾**）。
+- 将来若要把 iVox **分发给别人**（Gatekeeper / 公证），得换 Developer ID 证书——
+  那时签名身份变了，权限会掉一次。
 
 ### 安装网络层问题（HTTP/2 截断 + Metal Toolchain）
 git smart 协议（POST `git-upload-pack`）在国内偶发 HTTP/2 截断，HuggingFace 也常 SSL 握手失败。已实现兜底：模型下载三级 fallback（HF → hf-mirror → ModelScope），mlx 子模块 tarball 预填（`scripts/fetch-mlx-submodules.sh`），SwiftPM `--skip-update`。首次安装还需 `xcodebuild -downloadComponent MetalToolchain`（~838MB）。详见 `docs/archive/guide-install-network.md`。

@@ -82,8 +82,15 @@ install_voices() {
 # 用一张固定的代码签名证书签，要求变成「这张证书的指纹」，指纹不变 → 权限跨版本保留。
 # 设置 IVOX_SIGN_IDENTITY="证书名" 即启用；没设或签不了就回落 ad-hoc。
 sign_bin() {
-  # 签名身份：IVOX_SIGN_IDENTITY 指定 > 钥匙串里第一个**有效**的代码签名证书 > ad-hoc
+  # 签名身份：IVOX_SIGN_IDENTITY 指定 > 自签的长期身份 > 钥匙串里第一个**有效**的
+  # 代码签名证书 > ad-hoc
+  #
+  # 自签身份（CN=iVox Local Signing）是自己造的，10 年有效、不会被 Apple 吊销，
+  # 它的 designated requirement 只含证书指纹 → 换多少次版本权限都不掉。
   local identity="${IVOX_SIGN_IDENTITY:-}"
+  if [[ -z "${identity}" ]] && security find-certificate -c "iVox Local Signing" -a >/dev/null 2>&1; then
+    identity="iVox Local Signing"
+  fi
   if [[ -z "${identity}" ]]; then
     identity="$(security find-identity -v -p codesigning 2>/dev/null \
       | grep -v CSSMERR \
