@@ -51,7 +51,7 @@ speechEnabled = true           # 译完是否朗读
 # speechVoice = "taozi"        # 朗读用哪个音色；不写 = 用下面 sourceVoices.default
 panelTimeoutSeconds = 60       # 浮窗兜底隐藏秒数（鼠标一移开就提前收起）
 timeoutSeconds = 20            # 翻译请求超时
-proxyURL = ""                  # 兜底代理（如 http://192.168.100.6:10808）；空 = 不走
+# proxyURL = "http://192.168.100.6:10808"   # 兜底代理；不写 = 直连失败就算了，不走代理
 
 # ── 播报 ───────────────────────────────────────────────
 [playback]

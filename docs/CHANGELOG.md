@@ -22,6 +22,22 @@
   - `MediaController.config`：存着不读的属性连同 init 参数一起去掉。
   - `Config.configBaseDir`：赋值了从没被读过。
 
+- **配置整体审计：模板与代码默认值钉在一起** — 飞哥「关于配置整体审计一下」。
+  盘点结果：**外部配置没有死字段**（每个键都有真读点，用脚本逐字段核过），
+  代码内配置也都在用。真正的风险是另一头——**同一件事写了两遍**：
+  默认值在代码里一份、在模板里又抄一份，改了一边忘了另一边，新装用户就跟老用户不一样。
+  现在加 `ConfigTemplateTests` 把两者钉住：段的顺序、每段的键、每个默认值，
+  任何一边漂了测试就红。顺带修了几处「抄错」的默认值：
+  `PlaybackConfig.default` 的 `captions` 由 nil 改成明确的 false；
+  `WeChatConfig.claudePath` 的默认由 nil 改成 `~/.local/bin/claude`
+  （原来靠 `resolvedClaudePath` 兜底，编码时却是 nil）；模板里 `proxyURL` 改成注释形式
+  （默认就是「不走代理」，写成空串会被读成「配了个空代理」）。
+
+- **运行时家当说明入库** — 飞哥「换个名字，入库」。`~/.config/ivox/README.md`
+  → 仓库里的 [docs/runtime-files.md](runtime-files.md)（说清每个文件谁写、能不能删、
+  删了会怎样）；机器上那个文件只留一行入口，不再抄内容——抄了就会和代码漂。
+  `docs/README.md` 索引与 `CLAUDE.md` 的指针同步。
+
 - **语音键默认只要右⌘** — 飞哥「`voice = "rightcmd"`，只要这个」。默认语音键从
   「右⌘ 或右⌃」改成**只要右⌘**（`VoiceKeySpec.default`），模板与用户配置同步；
   配置里仍可写 `rightctrl` / `rightcmd+rightctrl` / `none`。

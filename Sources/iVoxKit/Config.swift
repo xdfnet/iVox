@@ -63,7 +63,7 @@ public struct PlaybackConfig: Codable, Sendable {
     /// 播报字幕：念到哪句就在屏幕下方显示哪句（常驻，默认关）
     public var captions: Bool?
 
-    public static let `default` = PlaybackConfig(captions: nil)
+    public static let `default` = PlaybackConfig(captions: false)
 
     /// 默认关：字幕会一直占着屏幕下方，只在你明确要看时才开
     public var resolvedCaptions: Bool { captions ?? false }
@@ -135,11 +135,14 @@ public struct WeChatConfig: Codable, Sendable {
         self.allowFrom = try c.decodeIfPresent(String.self, forKey: .allowFrom) ?? ""
         self.longPollMS = try c.decodeIfPresent(Int.self, forKey: .longPollMS) ?? 35000
         self.dataDir = try c.decodeIfPresent(String.self, forKey: .dataDir) ?? ""
-        self.claudePath = try c.decodeIfPresent(String.self, forKey: .claudePath)
+        self.claudePath = try c.decodeIfPresent(String.self, forKey: .claudePath) ?? WeChatConfig.defaultClaudePath
         self.askTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .askTimeoutSeconds)
     }
 
-    public init(token: String = "", baseURL: String = "https://ilinkai.weixin.qq.com", allowFrom: String = "", longPollMS: Int = 35000, dataDir: String = "", claudePath: String? = nil, askTimeoutSeconds: Int? = nil) {
+    /// claude 可执行文件的默认位置（配置里不写就用它）
+    public static let defaultClaudePath = "~/.local/bin/claude"
+
+    public init(token: String = "", baseURL: String = "https://ilinkai.weixin.qq.com", allowFrom: String = "", longPollMS: Int = 35000, dataDir: String = "", claudePath: String? = WeChatConfig.defaultClaudePath, askTimeoutSeconds: Int? = nil) {
         self.token = token
         self.baseURL = baseURL
         self.allowFrom = allowFrom
@@ -150,7 +153,7 @@ public struct WeChatConfig: Codable, Sendable {
     }
 
     public var enabled: Bool { !token.isEmpty }
-    public var resolvedClaudePath: String { claudePath ?? "~/.local/bin/claude" }
+    public var resolvedClaudePath: String { claudePath ?? Self.defaultClaudePath }
     /// 单条提问的等待上限。300s 给长任务留余量——测网络、跑脚本这类要串几次带超时的
     /// 外部调用，120s 常在任务真跑完前就放弃（2026-10-16 实测：微信问「GitHub 通不」因此超时）。
     public var resolvedAskTimeoutSeconds: Int { askTimeoutSeconds ?? 300 }
