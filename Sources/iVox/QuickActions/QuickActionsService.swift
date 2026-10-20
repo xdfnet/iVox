@@ -26,7 +26,7 @@ final class QuickActionsService {
     private static let ghosttyApp = URL(fileURLWithPath: "/Applications/Ghostty.app")
     private static let ghosttyBundleID = "com.mitchellh.ghostty"
 
-    func handle(_ hotKey: GlobalKeyTap.HotKey, at location: CGPoint) async {
+    func handle(_ hotKey: HotKeyAction, at location: CGPoint) async {
         switch hotKey {
         case .translate:
             break   // 不属于本域；Daemon 分派时已排除，这里只是穷举

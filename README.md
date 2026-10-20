@@ -52,6 +52,7 @@ ivox status                 # 版本、各功能健康状态、权限、模型/�
 ivox listen -f 录音.wav     # 语音识别
 ivox on                     # 启动（并配置登录自启 + 崩溃自动重启）
 ivox off                    # 停止并关闭自启（卸下 job + disable；plist 保留，ivox on 恢复）
+ivox restart                # 只重启守护进程（改完配置跑一次即生效，不动自启开关）
 ivox update                 # 检查 GitHub 最新版并自动升级（备份旧版、重签、重启）
 ```
 
@@ -111,10 +112,45 @@ make clean     # 清除 .build
 | `translation.speechEnabled` | 划词翻译后是否朗读译文 |
 | `translation.proxyURL` | 直连不通时的兜底代理，如 `http://192.168.100.6:10808`（只在直连失败后才用） |
 | `mediaControl.httpServerEnabled` | Web UI（端口 8888） |
+| `hotkeys` | 热键覆盖（键位写法见下）；不写就用默认键位 |
 | `wechat.token` | 微信 ilink bot token |
 | `voice.xx.refAudio` | 音色参考音频路径 |
 
 完整字段见 `Sources/iVoxKit/Config.swift`。
+
+### 改快捷键
+
+热键写在配置 `~/.config/ivox/config.json` 的 `hotkeys` 段，**只写要改的**，没写的用默认键位。
+改完跑 `ivox restart` 生效（守护进程重读配置；`restart` 只重启进程，不动登录自启开关）。
+
+```json
+{
+  "hotkeys": {
+    "translate": "cmd+shift+d",
+    "skipPage": "ctrl+alt+right",
+    "voice": "rightcmd"
+  }
+}
+```
+
+| 动作名 | 默认键位 | 干什么 |
+|---|---|---|
+| `translate` | `cmd+d` | 划词翻译 |
+| `openTerminal` | `opt+z` | 在当前目录开终端 |
+| `openTerminalClaude` | `opt+a` | 开终端跑 `claude` |
+| `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
+| `openTerminalPi` | `opt+q` | 开终端跑 `pi` |
+| `copyPath` | `opt+c` | 复制 Finder 选中路径 |
+| `escInterrupt` | `ctrl+2` | 闭嘴（全掀） |
+| `skipBucket` | `ctrl+1` | 跳整摞 |
+| `skipPage` | `ctrl+esc` | 读下一页（掀页） |
+| `voice` | 右 ⌘ / 右 ⌃ | 长按说话；可写 `rightcmd` / `rightctrl` / `rightcmd+rightctrl` / `none` |
+
+写法：修饰键 `cmd` `ctrl` `opt` `shift`（也认 `command` `control` `option` `alt`），用 `+` 连主键；
+主键可用 `a-z`、`0-9`、`esc`、`space`、`tab`、`return`、`backspace`、`delete`、`f1`-`f12`、方向键。
+
+配错了**不会静默**：守护进程启动时会在 `daemon.log` 里写清楚是哪个动作、错在哪、退回了哪个默认键位；
+两个动作抢同一个键位也会说明（配的优先，另一个退回默认）。
 
 ## 架构
 

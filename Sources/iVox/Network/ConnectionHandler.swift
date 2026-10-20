@@ -383,7 +383,7 @@ actor ConnectionHandler: SocketConnectionHandler {
     }
 
     /// 命令行动作名 → 热键动作。只认这几个，其余一律忽略（别让请求端能触发打断三档）。
-    private nonisolated static let quickHotKeys: [String: GlobalKeyTap.HotKey] = [
+    private nonisolated static let quickHotKeys: [String: HotKeyAction] = [
         "terminal": .openTerminal,
         "claude": .openTerminalClaude,
         "codex": .openTerminalCodex,

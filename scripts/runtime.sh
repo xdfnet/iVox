@@ -35,6 +35,7 @@ init_config() {
     cp "${ROOT}/Sources/iVox/Resources/config.example.json" "${CONFIG}"
     sed -i '' "s|\"~|\"${HOME}|g" "${CONFIG}"
     echo "✓  已生成配置: ${CONFIG}"
+    echo "   热键可在配置的 hotkeys 段改（如 \"translate\": \"cmd+shift+d\"），改完跑 ivox restart"
   else
     echo "[i] 配置已存在: ${CONFIG}"
   fi

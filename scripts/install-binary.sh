@@ -101,6 +101,7 @@ if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
   "tts": { "language": "Chinese", "streamingInterval": 0.08, "outputSampleRate": 48000 },
   "mediaControl": { "enabled": true, "httpServerEnabled": true, "httpServerPort": 8888 },
   "playback": { "captions": false },
+  "hotkeys": {},
   "speechInput": { "enabled": true, "language": "zh", "autoEnter": true, "maxRecordingSeconds": 30 },
   "translation": { "enabled": true, "provider": "google", "baseURL": "https://api.openai.com/v1", "apiKey": "", "model": "gpt-5-mini", "speechEnabled": true, "speechVoice": null, "panelTimeoutSeconds": 60, "timeoutSeconds": 20, "proxyURL": "http://192.168.100.6:10808" },
   "defaultVoice": "taozi",
@@ -202,6 +203,7 @@ echo -e "${GREEN}${BOLD}✓ iVox 安装完成！${RESET}"
 echo ""
 echo "   二进制: ${BIN_DIR}/ivox"
 echo "   配置:   ${CONFIG_DIR}/config.json"
+echo "   热键:   改配置里的 hotkeys 段（如 \"translate\": \"cmd+shift+d\"），改完跑 ivox restart"
 echo "   日志:   ${LOG}"
 echo "   模型:   ${MODEL_DIR} $(du -sh "$MODEL_DIR" | cut -f1)"
 echo ""

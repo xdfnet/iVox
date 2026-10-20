@@ -13,7 +13,8 @@ actor Daemon {
     private let server = SocketServer()
     private let speechInput: SpeechInputService?
     /// 键盘事件层：一个 tap 服务多个消费者（右⌘ 语音 + 各组热键）
-    private let keyTap = GlobalKeyTap()
+    /// 键位来自配置 `hotkeys` 段（没写的走默认），见 `HotKeySpec`。
+    private let keyTap: GlobalKeyTap
     private var translationCoordinator: TranslationCoordinator?
     private var quickActions: QuickActionsService?
     /// 播报字幕浮窗（配置开启才创建）
@@ -29,6 +30,7 @@ actor Daemon {
     init(config: Config) {
         self.config = config
         let asrPath = config.models?.asrPath ?? NSHomeDirectory() + "/.config/ivox/model/Qwen3-ASR-1.7B-8bit"
+        self.keyTap = GlobalKeyTap(config: config.hotkeys)
 
         // 引擎选谁：**默认远程**——MLX 的 Metal 命令编码器析构时会重复释放 GPU 命令
         // 队列（SIGTRAP），上游未修且拿不到 encoder 引用无从拦截。把它隔离进誊清员
@@ -309,7 +311,9 @@ actor Daemon {
         // 处理器都装好了，这时才开 tap（顺序反了会让启动瞬间的按键落到 nil handler 上）
         keyTap.start()
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
-        Log.info("热键已装配（Cmd+D 划词翻译，\(speak)；Opt+Z/A/Q/X/C QuickActions；手动打断三档：Ctrl+1 跳整摞 / Ctrl+2 掀桌 / Ctrl+Esc 读下一页）")
+        // 键位本身不写在这里：各动作实际绑了哪组键，由键盘事件层逐行打「热键: xxx = cmd+d」，
+        // 改过配置后那里就是真相（这里再写一遍就成了第二份、还会漂移）。
+        Log.info("热键已装配（划词翻译 \(speak)；QuickActions 五项；手动打断三档：跳整摞 / 掀桌 / 读下一页）")
     }
 
     /// 播报字幕（配置开启才装）：把队列广播的「正在念的这句」显示到屏幕下方浮窗。

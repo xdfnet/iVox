@@ -145,6 +145,10 @@ public struct Config: Codable, Sendable {
     public var speechInput: SpeechInputConfig?
     public var wechat: WeChatConfig?
     public var translation: TranslationConfig? = nil
+    /// 热键覆盖：键是动作名（见 `HotKeyAction`），值是组合键串（`"cmd+d"`）。
+    /// 只写要改的，没写的走 `HotKeySpec.defaultChord` 的默认键位。
+    /// `"voice"` 是特例：值为 `"rightcmd"` / `"rightctrl"` / `"rightcmd+rightctrl"` / `"none"`。
+    public var hotkeys: [String: String]? = nil
     public var configBaseDir: String?
 
     public var voiceByID: [String: VoiceInfo] {
@@ -170,6 +174,7 @@ public struct Config: Codable, Sendable {
         case speechInput
         case wechat
         case translation
+        case hotkeys
         case defaultVoice
         case sourceVoices
         case voices

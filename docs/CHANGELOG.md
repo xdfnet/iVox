@@ -2,6 +2,26 @@
 
 ## 未发布 — 2026-10-21
 
+- **热键改到配置里：改 `config.json` 的 `hotkeys` 段，`ivox restart` 生效** — 飞哥「经常换快捷键」，
+  而九个组合键原先是 `GlobalKeyTap` 里的一张硬编码表，换一个键要改代码重编译。现状：
+  - 键位**只写一处**：`iVoxKit/HotKeySpec.swift` 里 `defaultChord`（默认值）与 `parseChord`（解析器），
+    纯逻辑无 UI 依赖，配套 14 条用例；`GlobalKeyTap` 只消费它，不再自带一份表。动作名也从
+    `GlobalKeyTap.HotKey` 挪到 `iVoxKit.HotKeyAction`——配置与键盘层共用同一个名字来源。
+  - 配置 `hotkeys` 段按**动作名**给键位（`translate` / `openTerminal` / `openTerminalClaude` /
+    `openTerminalCodex` / `openTerminalPi` / `copyPath` / `escInterrupt` / `skipBucket` /
+    `skipPage`），**只写要改的**，没写的走默认；语音键（右⌘/右⌃ 长按说话）也归它管
+    （`rightcmd` / `rightctrl` / `rightcmd+rightctrl` / `none`）。
+  - 写法：`cmd+shift+d`、`ctrl+esc` 这种人话，修饰键认 `command`/`control`/`option`/`alt` 别名，
+    主键可用 `a-z`、`0-9`、`esc`、`space`、`tab`、`return`、`backspace`、`delete`、`f1`-`f12`、方向键。
+  - **配错不静默**：解析失败、动作名不存在、两个动作抢同一个键位，都在启动日志里写明
+    （哪个动作、错在哪、退回了哪个默认）；生效的键位逐行打「热键: 动作 = 键位」，**日志即真相**。
+  - 新增 `ivox restart`：只重启守护进程（`launchctl kickstart -k`），**不动登录自启开关**——
+    `on` 会 enable 自启、`off` 会 disable 自启，都不是「重启」该干的事；job 没在跑时明确报错让人
+    `ivox on`，不顺手把它拉起来（那会顺带打开自启）。
+  - 配置模板（`config.example.json`）与安装脚本写的默认配置里加 `"hotkeys": {}`：**空 = 全默认**，
+    不把默认键位抄进配置当第二份真源（抄了它就永远盖住代码里的默认值，日后改默认对老用户不生效）。
+    装机提示与 README 写清去哪改。
+
 - **模型加载失败不再静默卡死：子进程加载失败就退出，主进程按退避换一个重试** — 这是 v6.0.0
   三进程拆分带来的新故障模式，而**不是理论风险**：2026-10-19 23:32 真实卡过一次
   （`誊清员: 模型未就绪 — 誊清员无响应` → `TTS 合成失败`，直到人工重启 daemon 才恢复）。

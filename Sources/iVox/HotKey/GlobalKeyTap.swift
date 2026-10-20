@@ -22,23 +22,10 @@ import iVoxKit
 /// `keyUp` 一律透传：`keyDown` 已被吃掉，放行 `keyUp` 对目标 app 无害，
 /// 反过来若按 keyCode 宽松匹配 keyUp，就会把「单独按 D」的抬起也吞掉、干扰打字。
 final class GlobalKeyTap: @unchecked Sendable {
-    /// 组合热键（iDict 时代沿用；Qwen 键已随 Qwen Code 支持下线，现五个）
-    enum HotKey: Sendable {
-        case translate            // Cmd+D
-        case openTerminal         // Opt+Z
-        case openTerminalClaude   // Opt+A
-        case openTerminalCodex    // Opt+X
-        case openTerminalPi       // Opt+Q
-        case copyPath             // Opt+C
-        case escInterrupt         // Ctrl+2 手动闭嘴（不录音）
-        case skipBucket           // Ctrl+1 跳整摞（丢当前摞，播下一摞）
-        case skipPage             // Ctrl+Esc 读下一页（丢掉当前页剩下的块，翻页）
-    }
-
     /// 右⌘(0x36) / 右⌃(0x3E) 状态变化。在 tap 线程同步调用，**必须立刻返回**。
     var onModifier: (@Sendable (_ keyCode: UInt16, _ isDown: Bool) -> Void)?
     /// 命中的组合热键 + 触发时的鼠标位置。在 tap 线程同步调用，**必须立刻返回**。
-    var onHotKey: (@Sendable (_ hotKey: HotKey, _ mouseLocation: CGPoint) -> Void)?
+    var onHotKey: (@Sendable (_ hotKey: HotKeyAction, _ mouseLocation: CGPoint) -> Void)?
 
     private var thread: Thread?
     private var eventTap: CFMachPort?
@@ -46,6 +33,22 @@ final class GlobalKeyTap: @unchecked Sendable {
     private var runLoop: CFRunLoop?
     private var shouldStop = false
     private let stateQueue = DispatchQueue(label: "com.user.ivox.keytap.state")
+
+    /// 生效的组合键表：动作 → 键位。**默认键位只写在 `HotKeySpec` 一处**，
+    /// 这里是「默认 + 配置覆盖」算出来的结果，启动时算一次。
+    private let bindings: [Binding]
+    /// 语音键（右⌘ 0x36 / 右⌃ 0x3E）用哪几个；空集合 = 语音层不启用。
+    private let voiceKeys: Set<UInt16>
+
+    /// 建 tap。`config` 是配置里的 `hotkeys` 段（可为 nil = 全用默认）。
+    ///
+    /// 配错了**不静默**：解析失败、动作名不存在、两个动作抢同一个键位，
+    /// 都在这里打日志说明，并退回默认键位——宁可继续用旧键位，也不能让热键无声消失。
+    init(config: [String: String]? = nil) {
+        let resolved = Self.resolve(config)
+        self.bindings = resolved.bindings
+        self.voiceKeys = resolved.voiceKeys
+    }
 
     /// 同一组合键的冷却：窗口内只放行一次，防连点/手抖引发一串重复动作。
     /// 按键各自的冷却互不相干：Cmd+D 的连点不会连带压住 Ctrl+2。
@@ -56,14 +59,14 @@ final class GlobalKeyTap: @unchecked Sendable {
     ///   「我换了个选区」，本就该让位给最新那次），压太久反而挡路，只留 0.2s 挡连击
     /// - 三个打断键：翻页/掀摞本来就该能连按，给 0.3s
     /// - 其余（开终端、复制路径）：一次就是一次，给足 1s
-    private static func cooldown(for hotKey: HotKey) -> TimeInterval {
+    private static func cooldown(for hotKey: HotKeyAction) -> TimeInterval {
         switch hotKey {
         case .translate: return 0.2
         case .escInterrupt, .skipBucket, .skipPage: return 0.3
         default: return 1.0
         }
     }
-    private var lastFireAt: [HotKey: TimeInterval] = [:]
+    private var lastFireAt: [HotKeyAction: TimeInterval] = [:]
 
     /// 右⌘/⌃ 语音的**长按阈值**：按下不足这么久就松开，判为误触（很多 App 用右⌘，
     /// 碰一下就打断播报 + 暂停音乐 + 开麦代价太大），什么都不发。
@@ -133,7 +136,7 @@ final class GlobalKeyTap: @unchecked Sendable {
             runLoopSource = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
             CFRunLoopAddSource(CFRunLoopGetCurrent(), runLoopSource, .commonModes)
         }
-        Log.info("键盘事件层已启动（右 ⌘/⌃ 语音；Cmd+D 划词翻译；Opt+Z/A/Q/X/C Finder）")
+        Log.info("键盘事件层已启动（键位见上方「热键:」各行；语音键见「语音键:」）")
         CFRunLoopRun()
         stateQueue.sync { runLoop = nil }
     }
@@ -180,7 +183,7 @@ final class GlobalKeyTap: @unchecked Sendable {
         switch type {
         case .flagsChanged:
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
-            guard keyCode == 0x36 || keyCode == 0x3E else { return false }
+            guard voiceKeys.contains(UInt16(keyCode)) else { return false }
             let isDown = event.flags.contains(keyCode == 0x36 ? .maskCommand : .maskControl)
             handleModifier(keyCode: UInt16(keyCode), isDown: isDown)
             return false
@@ -198,25 +201,25 @@ final class GlobalKeyTap: @unchecked Sendable {
             // 排查完请连同「热键触发补日志」一起决定去留。
             if keyCode == 0x35 {
                 let raw = event.flags.rawValue
-                let hit = Self.bindings.first { $0.keyCode == 0x35 && $0.modifiers == flags }
-                let hitName = (hit?.hotKey == .skipPage) ? "skipPage(翻页)" : "无"
+                let hit = bindings.first { $0.keyCode == 0x35 && $0.modifiers == flags }
+                let hitName = (hit?.action == .skipPage) ? "skipPage(翻页)" : "无"
                 Log.info("[探针] Esc keyDown: rawFlags=0x\(String(raw, radix: 16)) "
                        + "stdFlags=0x\(String(flags.rawValue, radix: 16)) "
                        + "命中=\(hitName) "
                        + "tapUptime=\(String(format: "%.2f", ProcessInfo.processInfo.systemUptime))")
             }
-            guard let binding = Self.bindings.first(where: {
+            guard let binding = bindings.first(where: {
                 $0.keyCode == keyCode && $0.modifiers == flags
             }) else { return false }
             let now = ProcessInfo.processInfo.systemUptime
-            let cooldown = Self.cooldown(for: binding.hotKey)
-            if let last = lastFireAt[binding.hotKey], now - last < cooldown {
+            let cooldown = Self.cooldown(for: binding.action)
+            if let last = lastFireAt[binding.action], now - last < cooldown {
                 Log.debug("热键冷却中，忽略本次重复触发（剩余 "
                           + String(format: "%.1f", cooldown - (now - last)) + "s）")
                 return true   // 冷却中：仍然吃掉，别漏给目标 app；但不重复执行
             }
-            lastFireAt[binding.hotKey] = now
-            onHotKey?(binding.hotKey, event.location)
+            lastFireAt[binding.action] = now
+            onHotKey?(binding.action, event.location)
             return true
 
         default:
@@ -267,20 +270,94 @@ final class GlobalKeyTap: @unchecked Sendable {
     private struct Binding {
         let keyCode: Int64
         let modifiers: CGEventFlags
-        let hotKey: HotKey
+        let action: HotKeyAction
+        /// 归一化显示名（"cmd+shift+d"），写日志用
+        let display: String
     }
 
-    private static let bindings: [Binding] = [
-        Binding(keyCode: 0x02, modifiers: .maskCommand, hotKey: .translate),           // D
-        Binding(keyCode: 0x06, modifiers: .maskAlternate, hotKey: .openTerminal),      // Z
-        Binding(keyCode: 0x00, modifiers: .maskAlternate, hotKey: .openTerminalClaude),// A
-        Binding(keyCode: 0x07, modifiers: .maskAlternate, hotKey: .openTerminalCodex), // X
-        Binding(keyCode: 0x0C, modifiers: .maskAlternate, hotKey: .openTerminalPi),     // Q
-        Binding(keyCode: 0x08, modifiers: .maskAlternate, hotKey: .copyPath),          // C
-        Binding(keyCode: 0x13, modifiers: .maskControl, hotKey: .escInterrupt),        // 2（Ctrl+2 闭嘴）
-        Binding(keyCode: 0x12, modifiers: .maskControl, hotKey: .skipBucket),         // 1（Ctrl+1）
-        Binding(keyCode: 0x35, modifiers: .maskControl, hotKey: .skipPage),           // Esc（Ctrl+Esc 读下一页）
-    ]
+    /// 算出生效的键位表：默认键位（`HotKeySpec`）+ 配置覆盖。
+    ///
+    /// 规则说清楚，别让人猜：
+    /// 1. 配的键位**优先**占位；两个配置项抢同一个键位 → 后者退回默认并说明；
+    /// 2. 默认键位撞上已被占的键位 → 该动作**本轮不可用**并说明（不静默丢功能）；
+    /// 3. 解析失败 / 动作名不存在 → 退回默认并说明。
+    private static func resolve(_ config: [String: String]?) -> (bindings: [Binding], voiceKeys: Set<UInt16>) {
+        var configChords: [HotKeyAction: KeyChord] = [:]
+        for (name, value) in (config ?? [:]) {
+            guard name != "voice" else { continue }
+            guard let action = HotKeyAction(rawValue: name) else {
+                Log.warn("热键配置: 不认识的动作「\(name)」，已忽略（可用动作："
+                        + HotKeyAction.allCases.map(\.rawValue).joined(separator: "、") + "）")
+                continue
+            }
+            do {
+                configChords[action] = try HotKeySpec.parseChord(value)
+            } catch {
+                Log.warn("热键配置: \(action.rawValue) 的键位「\(value)」无法解析（\(error)），"
+                        + "改用默认 \(HotKeySpec.defaultChord(for: action).display)")
+            }
+        }
+
+        var owner: [KeyChord: HotKeyAction] = [:]
+        var final: [HotKeyAction: KeyChord] = [:]
+        // 先落配置项：撞车时后来者退回默认（谁先按动作表顺序，顺序固定、可预期）
+        for action in HotKeyAction.allCases {
+            guard let chord = configChords[action] else { continue }
+            if let other = owner[chord] {
+                Log.warn("热键配置: \(action.rawValue) 与 \(other.rawValue) 都用了「\(chord.display)」，"
+                        + "\(action.rawValue) 退回默认键位")
+                continue
+            }
+            owner[chord] = action
+            final[action] = chord
+        }
+        // 再落默认：连默认都撞上了 → 该动作本轮不可用，明确说出来
+        for action in HotKeyAction.allCases where final[action] == nil {
+            let chord = HotKeySpec.defaultChord(for: action)
+            if owner[chord] != nil {
+                Log.warn("热键: \(action.rawValue) 的默认键位「\(chord.display)」已被占用，该动作本轮不可用")
+                continue
+            }
+            owner[chord] = action
+            final[action] = chord
+        }
+
+        // 语音键：配置优先，配错退回默认（右⌘ + 右⌃）
+        var voice = VoiceKeySpec.default
+        if let raw = config?["voice"] {
+            do {
+                voice = try HotKeySpec.parseVoice(raw)
+            } catch {
+                Log.warn("热键配置: voice 的「\(raw)」无法解析（\(error)），改用默认 右⌘/右⌃")
+            }
+        }
+        var voiceKeys: Set<UInt16> = []
+        if voice.rightCommand { voiceKeys.insert(0x36) }
+        if voice.rightControl { voiceKeys.insert(0x3E) }
+
+        let bindings = HotKeyAction.allCases.compactMap { action -> Binding? in
+            guard let chord = final[action] else { return nil }
+            return Binding(keyCode: chord.keyCode, modifiers: cgFlags(chord.modifiers),
+                          action: action, display: chord.display)
+        }
+        for binding in bindings {
+            Log.info("热键: \(binding.action.rawValue) = \(binding.display)")
+        }
+        Log.info("语音键: " + (voiceKeys.isEmpty
+                                ? "未启用"
+                                : voiceKeys.sorted().map { $0 == 0x36 ? "右⌘" : "右⌃" }.joined(separator: "/")))
+        return (bindings, voiceKeys)
+    }
+
+    /// `KeyModifiers` → `CGEventFlags`（只比四个标准修饰键位）。
+    private static func cgFlags(_ modifiers: KeyModifiers) -> CGEventFlags {
+        var flags: CGEventFlags = []
+        if modifiers.contains(.command) { flags.insert(.maskCommand) }
+        if modifiers.contains(.control) { flags.insert(.maskControl) }
+        if modifiers.contains(.option) { flags.insert(.maskAlternate) }
+        if modifiers.contains(.shift) { flags.insert(.maskShift) }
+        return flags
+    }
 
     // MARK: - 权限
 

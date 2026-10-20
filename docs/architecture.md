@@ -251,6 +251,10 @@ Daemon (actor)
 `Sources/iVox/HotKey/GlobalKeyTap.swift`
 
 - 独占一个 CGEvent tap 与**专用线程的 run loop**，只按事件类型 / keyCode **路由**，不含任何业务判断
+- **键位可配**：配置 `hotkeys` 段（`Config.hotkeys`）按动作名给键位，只写要改的；默认键位的**唯一真源**是
+  `HotKeySpec.defaultChord`，解析器与默认值都在 `iVoxKit/HotKeySpec.swift`（纯逻辑、可测）。改完跑
+  `ivox restart` 生效。**本节及下文提到的所有键位都是默认值**——实际生效的看 `daemon.log` 里的
+  「热键: 动作 = 键位」各行；配错时那里会写明是哪个动作、错在哪、退回了哪个默认
 - 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Cmd+D` → `TranslationService`；`Opt+Z/A/Q/X/C` → `QuickActionsService`；`Ctrl+2` / `Ctrl+1` / `Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掀桌 / 跳整摞 / 读下一页）
 - 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
 - ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
