@@ -41,6 +41,13 @@
   把墓碑放回去它立刻变红（`dead != appended`，且只念了第一句）。
   `make test` 182 全绿；`make check-tts` **21/21 全绿**（0 fail / 0 skip / 0 advisory）。
 
+- **新增「粘贴」动作（Opt+P）** — 配 `Opt+C` 用：复制完路径再按一次 Opt+P 就贴到光标处，
+  不用再按 Cmd+V。实现上**复用划词翻译的 `KeyboardSimulator`**（把 Cmd+C 改成 Cmd+V），
+  键位可配（`hotkeys.paste`）。默认键位取 `opt+p` 而不取 `opt+v`：终端与不少客户端已占后者。
+  顺带：`KeyboardSimulator` 搬到 `iVoxKit/Input/`（两个能力域共用一份），status 新增
+  **「键盘注入」**一行（macOS 的 `PostEvent` 授权与「辅助功能」分开记，重签名后最容易掉档；
+  缺了它的症状是「动作触发了但合成按键送不到别的 app」）。
+
 - **`scripts/open_soda.py` 入库（`open` 不管用时的替补）** — 走 ESP32 真实 HID 敲 Cmd+Space
   搜名字打开汽水音乐：`open -a` 对它「主进程起来就退」，无窗口无日志，只有像人那样点才起得来。
   调试媒体控制时用它开一个真实播放器，好观察「说话时音乐让不让开、暂停/恢复/切歌准不准」。

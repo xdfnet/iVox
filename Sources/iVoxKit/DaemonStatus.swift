@@ -33,10 +33,13 @@ public struct DaemonStatus: Codable, Sendable {
         public var microphone: String
         /// 设备控制与数据访问（旧称辅助功能）
         public var deviceControl: Bool
+        /// 键盘注入（向别的 app 投递合成按键；macOS 单独记的 PostEvent 授权）
+        public var postEvent: Bool
 
-        public init(microphone: String, deviceControl: Bool) {
+        public init(microphone: String, deviceControl: Bool, postEvent: Bool) {
             self.microphone = microphone
             self.deviceControl = deviceControl
+            self.postEvent = postEvent
         }
     }
 

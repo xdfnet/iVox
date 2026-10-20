@@ -200,7 +200,8 @@ actor Daemon {
             ),
             permissions: .init(
                 microphone: mic,
-                deviceControl: MediaController.checkDeviceControlPermission()
+                deviceControl: MediaController.checkDeviceControlPermission(),
+                postEvent: MediaController.checkPostEventPermission()
             )
         )
     }
@@ -292,7 +293,7 @@ actor Daemon {
                     guard coordinator.isEnabled else { return }
                     await coordinator.translateSelection()
                 case .openTerminal, .openTerminalClaude,
-                     .openTerminalCodex, .openTerminalPi, .copyPath:
+                     .openTerminalCodex, .openTerminalPi, .copyPath, .paste:
                     await quickActionsService.handle(hotKey, at: location)
                 case .escInterrupt:
                     // 手动打断三档之「掀桌」：Ctrl+2 用户不想说话，只静音播报。

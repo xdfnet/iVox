@@ -40,6 +40,8 @@ final class QuickActionsService {
             await openTerminal(running: "pi")
         case .copyPath:
             copySelectedPath()
+        case .paste:
+            await pasteToFocus()
         case .escInterrupt:
             break   // 不属于本域；Daemon 分派时已处理打断，这里只是穷举
         case .skipBucket, .skipPage:
@@ -101,6 +103,23 @@ final class QuickActionsService {
             }
         } catch {
             Log.warn("QuickActions: 打开 Ghostty 失败（装了没？brew install --cask ghostty）: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - 粘贴
+
+    /// 把剪贴板内容贴到当前焦点处：合成一次 Cmd+V，走系统自己的粘贴路径
+    /// （目标 app 怎么处理剪贴板、要不要弹提示，都由它说了算）。
+    ///
+    /// 为什么不直接往目标 app 的输入框塞字：那要按 app 类型分别处理，
+    /// 而 Cmd+V 对所有 app 都一样，表格、文件这类特殊格式也能原样贴过去。
+    /// 配对用法：Opt+C 复制路径 → Opt+V 直接贴到光标处（原来还得再按一次 Cmd+V）。
+    private func pasteToFocus() async {
+        do {
+            try await KeyboardSimulator.simulatePaste()
+            Log.info("QuickActions: 已粘贴（合成 Cmd+V）")
+        } catch {
+            Log.warn("QuickActions: 粘贴失败（\(error.localizedDescription)）")
         }
     }
 

@@ -189,6 +189,10 @@ final class GlobalKeyTap: @unchecked Sendable {
             return false
 
         case .keyDown:
+            // 自己合成的按键（粘贴等）：一律放过，不参与匹配
+            if event.getIntegerValueField(.eventSourceUserData) == KeyboardSimulator.syntheticEventMarker {
+                return false
+            }
             // 按住不放的重复触发不要
             guard event.getIntegerValueField(.keyboardEventAutorepeat) == 0 else { return false }
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)

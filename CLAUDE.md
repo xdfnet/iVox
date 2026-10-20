@@ -41,7 +41,7 @@ Sources/iVox/          — 主程序 target
                           合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
   SpeechInput/         — 语音输入：右⌘ 录音 + ASR + 浮窗（事件由 HotKey 层送来）
   Translation/         — 划词翻译（Cmd+D）：复制 → 翻译 → 浮窗 + 朗读
-  QuickActions/        — 快速操作：Finder/终端快捷（Opt+Z/A/Q/X/C）
+  QuickActions/        — 快速操作：Finder/终端快捷 + 粘贴（Opt+Z/A/Q/X/C/P）
   WeChat/              — 微信桥接：ilink HTTP 客户端 + 长轮询平台
   MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI）+ MediaController
 
@@ -93,7 +93,7 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
                                                                    ├─ GlobalKeyTap (键盘事件层，一个 tap)
                                                                    │    ├─ SpeechInputService (右⌘ + ASR)
                                                                    │    ├─ TranslationService (Cmd+D 划词翻译)
-                                                                   │    └─ QuickActionsService (Opt+Z/A/Q/X/C)
+                                                                   │    └─ QuickActionsService (Opt+Z/A/Q/X/C/P)
                                                                    └─ MediaHTTPServer (端口 8888, Web UI)
 ```
 
@@ -115,7 +115,7 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
 
 - **播报通路（hook / 微信 / MessageDisplay）**：①Claude Code 交互会话的播报**只靠 `MessageDisplay` 钩子**（`hook.sh msgdisplay claude`）——assistant 消息按行批增量播报，过程内容（分步/工具多段）逐句进段、边写边播，**不再挂 Stop / UserPromptSubmit**（摘 Stop 因 MessageDisplay 的 final 批已含完整结尾，两者同播会重复；摘 UserPromptSubmit 因打断权只归快捷键）。钩子把 payload 的 **`turn_id` 当分组号**（`ivox speak --group`）——**一摞 = 一次输入引发的全部回复**，Ctrl+1 掀的就是整摞（后续增量由墓碑拦住，另见下「弱分组」）。**收尾三个触发点，主力是 `Stop`**：①**主力** `Stop` 钩子（`hook.sh end` → `ivox speak --final` → `closeOpenGroup()`：只送「说完了」这个暗号、**不带正文**，故与 MessageDisplay 不重复；**只标 ended、不立墓碑**——在途的页还要让它播完。⚠️ 2026-10-21 修过：收尾曾顺手立墓碑，于是「Stop 早到 9 毫秒」就把随后到达的最后一段 140 字静默丢弃（用户听到的是「念到一半没了声音」）——**Stop 与正文是两条独立通路，谁先到没保证**。现在**内容生死只由用户主动放弃决定**（掀/全掀/取消才埋碑），收尾只管「什么时候收字幕」）；②「新的 turn 来了就把上一个盖上」——**清场与兜底**（盖上即可，不埋碑）；③**最后兜一层 2 秒空闲宽限**（`idleGraceSeconds`：队列见底又仍有未结束的轮，**先等设备把已排队音频播完**——声音真停下才开始数，否则会在尾音还没念完时就判完、把字幕收掉——再静候 2 秒没新内容即判说完）；页级的 `final` 只说明"这一页说完"，认不得"整摞说完"（一次回复夹工具调用会有好几页），所以不拿它收尾。`hook.sh` 已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip --page|--stack|--all` 三档承担，`ivox quiet` 已删除）。②**微信链路不发声**：`WeChatPlatform` 只有 `sendMessage` / `sendTyping` / 长轮询，不进播报队列——聊天窗口里已经有文字了，再念一遍是打扰（见 `docs/playback/purpose.md` 的裁决）。③pi 走流式（见下）。
 
-- **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者：右⌘（默认；配置可改成右⌃ 或两者）→ `SpeechInputService`，`Cmd+D` → `TranslationService`，`Opt+Z/A/Q/X/C` → `QuickActionsService`，`Ctrl+2`/`Ctrl+1`/`Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掐+全掀 / 掐+掀摞 / 掐+掀页）（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `iVoxKit/HotKeySpec.swift` 的 `HotKeyAction` 加一个动作 + `defaultChord` 给默认键位 + 在 `setUpHotKeys` 加一个消费者**（`GlobalKeyTap` 里不再有键位表，它只消费）。**键位可在配置 `hotkeys` 段按动作名改**（TOML 写法 `translate = "cmd+shift+d"`；首次安装会写全量默认键位）；⚠️ 默认键位有**两份副本**：代码兜底 `HotKeySpec.defaultChord` 与模板 `iVoxKit/ConfigTemplate.swift`（安装脚本不再内嵌第三份，改默认要同步这两处）；配错时启动日志会写明（哪个动作、错在哪、退回哪个默认），生效的键位逐行打「热键: 动作 = 键位」。改完跑 `ivox restart`（只重启进程，不动登录自启开关）。 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Cmd+D 毫无反应"。
+- **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者：右⌘（默认；配置可改成右⌃ 或两者）→ `SpeechInputService`，`Cmd+D` → `TranslationService`，`Opt+Z/A/Q/X/C/P` → `QuickActionsService`（P = 粘贴，合成 Cmd+V 把剪贴板贴到当前光标；**不取 Opt+V**，终端等客户端已占那个键），`Ctrl+2`/`Ctrl+1`/`Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掐+全掀 / 掐+掀摞 / 掐+掀页）（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `iVoxKit/HotKeySpec.swift` 的 `HotKeyAction` 加一个动作 + `defaultChord` 给默认键位 + 在 `setUpHotKeys` 加一个消费者**（`GlobalKeyTap` 里不再有键位表，它只消费）。**键位可在配置 `hotkeys` 段按动作名改**（TOML 写法 `translate = "cmd+shift+d"`；首次安装会写全量默认键位）；⚠️ 默认键位有**两份副本**：代码兜底 `HotKeySpec.defaultChord` 与模板 `iVoxKit/ConfigTemplate.swift`（安装脚本不再内嵌第三份，改默认要同步这两处）；配错时启动日志会写明（哪个动作、错在哪、退回哪个默认），生效的键位逐行打「热键: 动作 = 键位」。改完跑 `ivox restart`（只重启进程，不动登录自启开关）。 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Cmd+D 毫无反应"。
 - **防误触也在 tap 层判，一处判完**：① **同键冷却，按键分档**——`Cmd+D` 0.2s（它靠后写胜出连按，冷却只挡连击）、三个打断键 0.3s（翻页掀摞本就该能连按）、其余 1s；冷却中**仍然吃掉事件**只是不执行（漏给目标 app 更糟），走 `systemUptime`，只在 tap 线程读写。② **语音键（右⌘，默认只有它）有 150ms 长按阈值**——按下不足就松开判为误触，按下沿直接丢弃（很多 App 用右⌘，碰一下就打断播报+暂停音乐+开麦代价太大）。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」的第二句吃掉。
 - **右⌘ 语音：副作用发生在「真的在录」之后**——按下经阈值与授权检查后**先试录**，`record()` 成功了才 `cancelAll`（打断播报）→ `pause`（暂停音乐）→ 浮窗「聆听中…」+ Tink + 波形。**不做设备预检**：耳机类麦克风按需唤醒，预检「设备在不在」会误判、把本来能用的设备焊死；按下就试这一下、试活了算数。失败时播报不中断、音乐不停，只在日志写清原因（**授权层与设备层分开报**：TCC 状态 vs CoreAudio 的默认输入设备名，`AVAudioSession` 是 iOS 独有的、macOS 走 CoreAudio）。失败路径的 recorder 进**隔离区**延迟 1 秒释放——`record()` 返回 false 时 audio queue 的回调线程已经起来了，立刻析构会 `objc_loadWeak` 野指针（2026-10-19 实测 SIGSEGV）。**全项目借还背景音乐只此一家**：播报链路完全不碰音乐，只有说话时才借（按下 pause、松开 resume）。
 

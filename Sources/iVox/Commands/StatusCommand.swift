@@ -106,6 +106,7 @@ struct StatusCommand: ParsableCommand {
         print("权限")
         print("  麦克风      \(micText(s.permissions.microphone))")
         print("  设备控制    \(s.permissions.deviceControl ? "已授权" : "未授权")")
+        print("  键盘注入    \(s.permissions.postEvent ? "已授权" : "未授权（合成按键送不到别的 app）")")
     }
 
     /// ok → 正常；off → 未启用；loading → 加载中；error:xxx → 异常(xxx)
