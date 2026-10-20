@@ -30,6 +30,12 @@
 | 4 | [playback/requirements.md](playback/requirements.md) | 需求层：必须做到什么、场景清单、底线 |
 | 5 | [playback/queue.md](playback/queue.md) | 实现层：今天代码怎么写的、改它有什么坑 |
 
+### 提案 — 待裁决，代码未动
+
+| 文档 | 内容 |
+|---|---|
+| [playback/proposal-drop-stop.md](playback/proposal-drop-stop.md) | 提案：拆掉 Stop 收尾信号（**未裁决**。现状是 Stop 通路完整保留；本文只把「拆掉它」摊开给飞哥看） |
+
 **先读第 1 份建立直觉，冲突的裁决在第 2 份。** 两者分工：paper.md 讲「播报怎么跑起来的」，
 purpose.md 讲「取舍时听谁的」——每条原则下面都记着它裁决过什么，只有带裁决记录的原则才算数，
 好听的口号一律不作数。
