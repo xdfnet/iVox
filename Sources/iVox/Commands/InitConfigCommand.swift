@@ -27,6 +27,16 @@ struct InitConfigCommand: ParsableCommand {
             print("配置已存在，未改动: \(path)")
             return
         }
+        // 有老配置（config.json）就**迁移**它，别拿模板盖掉用户已经调好的设置
+        if out == nil, FileManager.default.fileExists(atPath: ConfigFile.legacyJSONPath) {
+            do {
+                try migrateLegacyJSON(ConfigFile.legacyJSONPath, to: path)
+                print("✓  已把老配置迁移过来: \(path)（旧文件保留，可自行删除）")
+                return
+            } catch {
+                print("✗  老配置迁移失败（\(error.localizedDescription)），改用默认模板")
+            }
+        }
         // 模板里写 "~/.config/ivox/..."，落盘时换成真实家目录
         let home = NSHomeDirectory()
         let text = ConfigTemplate.tomlText.replacingOccurrences(of: "\"~", with: "\"\(home)")

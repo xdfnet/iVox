@@ -390,7 +390,7 @@ private func resolveConfigPath(_ path: String?) throws -> String {
 }
 
 /// 老 JSON 配置 → TOML。顺手把老写法的 `defaultVoice` 并进 `sourceVoices.default`。
-private func migrateLegacyJSON(_ from: String, to: String) throws {
+public func migrateLegacyJSON(_ from: String, to: String) throws {
     let data = try Data(contentsOf: URL(fileURLWithPath: from))
     guard var object = try JSONSerialization.jsonObject(with: data) as? [String: Any] else {
         throw ConfigError.invalidJSON("\(from): 不是合法的 JSON")
