@@ -446,9 +446,16 @@ actor PlaybackSession {
         lastActiveSource = source
     }
 
-    /// 这一摞说完了（Stop 钩子 / `{end}`）：盖印 + **立墓碑**。
-    /// Stop 之后不会有新增量（Claude 已回复完毕），墓碑只拦「后续不该再来的增量」，
-    /// 不丢在播的块（墓碑命中的是入口的 `appendToStack`/`appendPlain`，跟当前播放无关）。
+    /// 这一摞说完了（Stop 钩子 / `{end}`）：**只盖印，不立墓碑**。
+    ///
+    /// 盖印 = 「这摞不会再有内容了」；墓碑 = 「这摞作废，迟到的内容一律不开口」。
+    /// 墓碑只归**用户主动放弃**（掀 / 全掀 / 取消轮次），不归收尾——
+    /// 收尾只该决定「什么时候收字幕」，**内容生死只由用户放弃决定**。
+    ///
+    /// 2026-10-21 实测踩过：Stop 钩子与正文是两条独立通路，谁先到没保证。
+    /// 有一次 Stop 早到 9 毫秒，收尾顺手立了墓碑，于是随后到达的最后一段 140 字
+    /// 被静默丢弃——用户听到的是「念到一半没了声音」。当时以为「Stop 之后不会有
+    /// 新增量」，这个前提不成立：Claude 的正文分批送，最后一批可能落在 Stop 之后。
     @discardableResult
     func sealTurn(_ id: String) -> Bool {
         var hit = false
@@ -458,7 +465,6 @@ actor PlaybackSession {
         for i in front.indices where front[i].turnID == id {
             front[i].sealed = true; hit = true
         }
-        if hit { bury(id) }
         if hit { signal() }
         return hit
     }

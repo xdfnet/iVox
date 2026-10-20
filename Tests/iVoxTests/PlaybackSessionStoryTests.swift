@@ -390,6 +390,26 @@ final class PlaybackSessionStoryTests: XCTestCase {
         XCTAssertNil(next, "一摞里没有第二页（掀完页这摞就没了）")
     }
 
+    // MARK: - 收尾不是作废令：内容生死只由用户放弃决定
+
+    /// Claude 说「我说完了」之后又来正文 → 照样开口。
+    ///
+    /// 2026-10-21 实测踩过：Stop 钩子与正文是两条独立通路，谁先到没保证。
+    /// 有一次 Stop 早到 9 毫秒，而当时收尾顺手立了墓碑，于是随后到达的最后一段
+    /// 140 字被静默丢弃——用户耳朵里是「念到一半没了声音」。
+    /// 收尾只决定「什么时候收字幕」；作废（墓碑）只由用户主动放弃发起。
+    func testFinishDoesNotKillThePagesThatArriveLater() async {
+        let s = PlaybackSession()
+        await seed(s, stacks: [(id: "gA", pages: [["A1"]])])
+        _ = await s.sealTurn("gA")                       // Claude 说「我说完了」
+
+        let later = await deliver(s, group: "gA", page: "gA-p1", blocks: [block("A2")])
+        XCTAssertEqual(later, .appended, "收尾只是说完了，不是作废 —— 后续页必须还能入队")
+
+        let spoken = await spokenOrder(s)
+        XCTAssertEqual(spoken, ["A1", "A2"], "后到的内容必须照念")
+    }
+
     // MARK: - 清单 8：跨来源喊闭嘴，会不会挂错那摞的牌？
 
     /// Ctrl+Esc 是**全局热键**，拿不到「当前会话」是谁。此前一刀切埋全部，
