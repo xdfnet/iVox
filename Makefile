@@ -62,11 +62,12 @@ build:
 VERSION ?= $(shell sed -n 's/.*iVoxVersion = "\(.*\)"/\1/p' Sources/iVox/Utilities/Version.swift)
 PKG := ivox-v$(VERSION)-macos-arm64
 package: build
-	@rm -rf /tmp/$(PKG) && mkdir -p /tmp/$(PKG)/integrations
+	@rm -rf /tmp/$(PKG) && mkdir -p /tmp/$(PKG)/integrations /tmp/$(PKG)/voices
 	@cp .build/release/ivox /tmp/$(PKG)/ivox
 	@cp -R integrations/. /tmp/$(PKG)/integrations/
 	@cp scripts/install-hooks.sh /tmp/$(PKG)/integrations/install-hooks.sh
-	@cd /tmp/$(PKG) && tar czf $(CURDIR)/.build/release/$(PKG).tar.gz ivox integrations
+	@cp Sources/iVox/Resources/voices/*.wav /tmp/$(PKG)/voices/
+	@cd /tmp/$(PKG) && tar czf $(CURDIR)/.build/release/$(PKG).tar.gz ivox integrations voices
 	@rm -rf /tmp/$(PKG)
 	@echo "✓  .build/release/$(PKG).tar.gz"
 

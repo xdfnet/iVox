@@ -2,6 +2,14 @@
 
 ## 未发布 — 2026-10-21
 
+- **发布包带上音色参考音频** — 飞哥问「首次安装都要干什么」，顺带查出一个真缺口：发布包里只有
+  `ivox` + `integrations`，**没有 4 个参考音频 wav**（1.7MB）。于是走 `curl | bash` 装的人，
+  配置里四个音色的 `refAudio` 指向的 `~/.config/ivox/voices/ref_*.wav` **是空的**——参考音频读不到，
+  合成直接抛错，**装完播报根本用不了**（走 `make install` 的没事，runtime.sh 有 voices 步骤）。
+  补法：`make package` 把 `voices/` 打进包（12MB → 15MB），`install-binary.sh` 解到 `$CONFIG_DIR`
+  （落点即 `$VOICE_DIR`，与配置里的 `refAudio` 路径对齐）；旧包不含 voices 时解不出来不算错，
+  只提示用户从源码装。解包路径特意验过：解到 `$VOICE_DIR` 会多一层 `voices/voices/`。
+
 - **热键改到配置里：改 `config.json` 的 `hotkeys` 段，`ivox restart` 生效** — 飞哥「经常换快捷键」，
   而九个组合键原先是 `GlobalKeyTap` 里的一张硬编码表，换一个键要改代码重编译。现状：
   - 键位**只写一处**：`iVoxKit/HotKeySpec.swift` 里 `defaultChord`（默认值）与 `parseChord`（解析器），

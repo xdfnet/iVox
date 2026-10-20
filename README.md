@@ -37,6 +37,10 @@
 curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-binary.sh | bash
 ```
 
+安装会一并装好：二进制、hook 集成、配置（含全量热键）、4 个音色的参考音频、MLX 模型，
+并把守护进程拉起来（登录自启 + 崩溃自动重启）。装完只剩三件要你手动做：给**麦克风**与
+**输入监控**权限、`ivox wechat setup` 扫码微信、试一下 `Cmd+D`。
+
 需要编译？克隆后 `make` 即可（需 Xcode 26+，自带 Swift 6.4）。
 
 ## 使用

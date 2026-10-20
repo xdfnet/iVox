@@ -56,11 +56,19 @@ if [[ -z "$ASSET_URL" ]]; then
 fi
 
 echo "   来自: $ASSET_URL"
-mkdir -p "$BIN_DIR" "$CONFIG_DIR"
+mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$VOICE_DIR"
 curl -fL --progress-bar -o /tmp/ivox-pkg.tar.gz "$ASSET_URL"
 tar xzf /tmp/ivox-pkg.tar.gz -C "$BIN_DIR" ivox
 # 集成资产（旧包可能不含，失败不影响二进制安装）
 tar xzf /tmp/ivox-pkg.tar.gz -C "$CONFIG_DIR" integrations 2>/dev/null || true
+# 音色参考音频：缺了播报合成会直接失败（参考音频读不到），所以必须随包带上。
+# 旧包不含 voices，解不出来不算错——只是提醒用户。
+# 解到 CONFIG_DIR（包内是 voices/ 目录，落点即 $VOICE_DIR）
+if tar xzf /tmp/ivox-pkg.tar.gz -C "$CONFIG_DIR" voices 2>/dev/null; then
+  ok "音色参考音频 $(ls -1 "$VOICE_DIR"/*.wav 2>/dev/null | wc -l | tr -d ' ') 个"
+else
+  info "该版本包不含音色文件，播报需从源码安装（make install）或自行放入 $VOICE_DIR"
+fi
 chmod 755 "$BIN_DIR/ivox"
 rm -f /tmp/ivox-pkg.tar.gz
 ok "iVox $(du -h "$BIN_DIR/ivox" | cut -f1)"
@@ -217,6 +225,7 @@ echo "   配置:   ${CONFIG_DIR}/config.json"
 echo "   热键:   改配置里的 hotkeys 段（如 \"translate\": \"cmd+shift+d\"），改完跑 ivox restart"
 echo "   日志:   ${LOG}"
 echo "   模型:   ${MODEL_DIR} $(du -sh "$MODEL_DIR" | cut -f1)"
+echo "   音色:   ${VOICE_DIR} $(ls -1 "$VOICE_DIR"/*.wav 2>/dev/null | wc -l | tr -d ' ') 个参考音频"
 echo ""
 echo "   ivox serve    # 前台调试"
 echo "   ivox status   # 查看状态"
