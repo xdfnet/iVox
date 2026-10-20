@@ -129,8 +129,8 @@ pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─
   默认模板在 `iVoxKit/ConfigTemplate.swift`（唯一真源，`ivox init-config` 写的就是它）。
   程序改配置（`ivox voice add/remove`、`ivox wechat setup`）走 `TOMLDocument` **就地改**，
   保留用户自己写的注释——整体重排会把注释冲掉。
-  所有运行时文件在 `~/.config/ivox/` 下（家当说明见 [docs/runtime-files.md](docs/runtime-files.md)，
-  随代码走）。
+  所有运行时文件在 `~/.config/ivox/` 下（家当说明在 `Sources/iVox/Resources/runtime-files.md`，
+  装机时由 `ivox init-config` 拷到 `~/.config/ivox/runtime-files.md`）。
 
 - **日志分三份，各归各的角色**（分家是有意的：出事时「哪个文件里有现场，就是哪个角色的错」）：
   `daemon.log`（主进程：队列/打断/播放收尾，>5M 轮转）· `tts.log`（誊清员：合成侧）·
