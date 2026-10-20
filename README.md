@@ -120,7 +120,8 @@ make clean     # 清除 .build
 
 ### 改快捷键
 
-热键写在配置 `~/.config/ivox/config.json` 的 `hotkeys` 段，**只写要改的**，没写的用默认键位。
+热键写在配置 `~/.config/ivox/config.json` 的 `hotkeys` 段。**首次安装会写全量默认键位**（下表那些），
+改哪一行改哪一行；没写的项用内置默认值。
 改完跑 `ivox restart` 生效（守护进程重读配置；`restart` 只重启进程，不动登录自启开关）。
 
 ```json

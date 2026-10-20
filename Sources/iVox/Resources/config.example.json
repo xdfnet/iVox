@@ -16,7 +16,18 @@
   "playback": {
     "captions": false
   },
-  "hotkeys": {},
+  "hotkeys": {
+    "translate": "cmd+d",
+    "openTerminal": "opt+z",
+    "openTerminalClaude": "opt+a",
+    "openTerminalCodex": "opt+x",
+    "openTerminalPi": "opt+q",
+    "copyPath": "opt+c",
+    "escInterrupt": "ctrl+2",
+    "skipBucket": "ctrl+1",
+    "skipPage": "ctrl+esc",
+    "voice": "rightcmd+rightctrl"
+  },
   "defaultVoice": "taozi",
   "sourceVoices": {
     "claude": "taozi",
