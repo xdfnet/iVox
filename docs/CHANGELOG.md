@@ -33,6 +33,14 @@
   （原来靠 `resolvedClaudePath` 兜底，编码时却是 nil）；模板里 `proxyURL` 改成注释形式
   （默认就是「不走代理」，写成空串会被读成「配了个空代理」）。
 
+- **TCC 权限根治：改用固定签名身份，更新不再掉权限** — 飞哥「TCC 权限很烦啊，有啥其他办法」。
+  根子：macOS 的 TCC 认的是**签名要求**，ad-hoc 签名的要求里含 cdhash（= 二进制内容哈希），
+  每次重编译内容就变 → 要求变 → 旧授权作废，于是每次部署都得手动重新勾一遍。
+  现在 `scripts/runtime.sh` 签名时**优先用钥匙串里第一个有效的代码签名证书**
+  （`IVOX_SIGN_IDENTITY` 可显式指定；没有有效证书才回落 ad-hoc）——
+  稳定证书的 designated requirement 含证书指纹，跨版本不变 → **权限只掉一次**。
+  ⚠️ 证书本身会过期（Apple Development 一年），过期换证时权限会再掉一次。
+
 - **家当说明随装机一起走** — 飞哥「初始化的时候把 runtime-files.md 拷贝到
   `~/.config/ivox/` 目录下，明白了吗」。`ivox init-config` 现在除生成配置外，
   还把 `runtime-files.md`（家当说明）拷到 `~/.config/ivox/`——

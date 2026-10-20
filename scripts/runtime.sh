@@ -82,16 +82,23 @@ install_voices() {
 # 用一张固定的代码签名证书签，要求变成「这张证书的指纹」，指纹不变 → 权限跨版本保留。
 # 设置 IVOX_SIGN_IDENTITY="证书名" 即启用；没设或签不了就回落 ad-hoc。
 sign_bin() {
+  # 签名身份：IVOX_SIGN_IDENTITY 指定 > 钥匙串里第一个**有效**的代码签名证书 > ad-hoc
   local identity="${IVOX_SIGN_IDENTITY:-}"
+  if [[ -z "${identity}" ]]; then
+    identity="$(security find-identity -v -p codesigning 2>/dev/null \
+      | grep -v CSSMERR \
+      | grep -E '^[[:space:]]+[0-9]+\) [0-9A-F]{40}' \
+      | head -1 | sed -E 's/.*\) ([0-9A-F]{40}).*/\1/')"
+  fi
   if [[ -n "${identity}" ]]; then
     if codesign --force --sign "${identity}" "${LAUNCHER}" 2>/dev/null; then
-      echo "✓  签名完成（身份: ${identity}）"
+      echo "✓  签名完成（稳定身份 ${identity}）"
       return
     fi
     echo "⚠️  用身份「${identity}」签名失败，回落 ad-hoc"
   fi
   if codesign --force --sign - "${LAUNCHER}" 2>/dev/null; then
-    echo "✓  ad-hoc 签名完成"
+    echo "✓  ad-hoc 签名完成（注意：TCC 权限会随重编译失效）"
   else
     echo "⚠️  ad-hoc 签名失败: ${LAUNCHER}"
   fi
