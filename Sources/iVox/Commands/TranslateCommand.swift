@@ -32,7 +32,7 @@ struct TranslateCommand: AsyncParsableCommand {
         let source = try await resolveSource()
         let config = (try? loadConfig())?.resolvedTranslation ?? .default
         guard config.enabled else {
-            throw ValidationError("划词翻译已关闭（config.json 里 translation.enabled = false）")
+            throw ValidationError("划词翻译已关闭（config.toml 里 translation.enabled = false）")
         }
 
         switch await TranslationService(config: config).translate(source) {

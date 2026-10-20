@@ -31,6 +31,15 @@ struct ServeCommand: AsyncParsableCommand {
             throw ExitCode.failure
         }
 
+        // 配置里有没人认领的键（写错了、或写了已挪进内部的旧段）→ 记进日志，
+        // 免得「配了却没生效」只能靠猜
+        if let text = try? String(contentsOfFile: ConfigFile.path, encoding: .utf8) {
+            let issues = ConfigAudit.unknownKeys(inTOMLText: text)
+            if !issues.isEmpty {
+                Log.warn("配置里有 \(issues.count) 个键没人认领（写了但没生效）：\(ConfigAudit.describe(issues))")
+            }
+        }
+
         let daemon = Daemon(config: config)
         try await daemon.run()
         // 正常收尾后**不走静态析构**：mlx 全局持有一张 `CommandEncoder` 哈希表，进程退出时

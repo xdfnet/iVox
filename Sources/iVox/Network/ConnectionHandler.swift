@@ -137,7 +137,7 @@ actor ConnectionHandler: SocketConnectionHandler {
                                           buf: inout [UInt8]) {
         defer { Darwin.close(fd) }
         let meta = parseMetaKV(header)
-        let source = meta["source"] ?? "default"
+        let source = meta["source"] ?? VoiceSource.default
         let voiceID = meta["voice"] ?? config.sourceVoices[source] ?? config.defaultVoice
         guard let turn = meta["turn"], !turn.isEmpty else {
             Log.warn("stream 缺少 turn，丢弃连接")
@@ -425,7 +425,7 @@ actor ConnectionHandler: SocketConnectionHandler {
     /// 合成 TTS 并将 PCM 分块写回客户端（请求-响应，不播放、不入队）
     private nonisolated func handleTTSPCM(fd: Int32, header: String, body: Data) {
         let meta = parseMetaKV(header)
-        let sourceID = meta["source"] ?? "default"
+        let sourceID = meta["source"] ?? VoiceSource.default
         let voiceID = meta["voice"] ?? config.sourceVoices[sourceID] ?? config.defaultVoice
 
         let text = String(data: body, encoding: .utf8)?
@@ -470,11 +470,11 @@ actor ConnectionHandler: SocketConnectionHandler {
 
     nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, group: String?, isFinal: Bool, page: String?, isNow: Bool) {
         guard text.hasPrefix("{"), let end = text.firstIndex(of: "}") else {
-            return ("default", config.defaultVoice, text, nil, false, nil, false)
+            return (VoiceSource.default, config.defaultVoice, text, nil, false, nil, false)
         }
         let metaStr = String(text[text.index(after: text.startIndex)..<end])
         let pairs = metaStr.split(separator: ",").map { $0.split(separator: ":", maxSplits: 1).map(String.init) }
-        var sourceID = "default"
+        var sourceID = VoiceSource.default
         var explicitVoice: String?
         var group: String?
         var page: String?

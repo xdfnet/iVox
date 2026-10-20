@@ -2,20 +2,20 @@ import ArgumentParser
 import Foundation
 import iVoxKit
 
-// `ivox restart`：只重启守护进程。改完 config.json（热键等）跑一次即可生效。
+// `ivox restart`：只重启守护进程。改完 config.toml（热键等）跑一次即可生效。
 
 /// 重启守护进程（`ivox restart`）。
 ///
 /// **只重启进程，不碰自启开关**——`ivox on` 会 enable 自启、`ivox off` 会 disable 自启，
 /// 都不是「重启」该干的事。这里只做 launchd 的 `kickstart -k`（杀掉旧的、拉起新的），
-/// 守护进程会重新读一遍 config.json，所以改完配置跑它就行。
+/// 守护进程会重新读一遍 config.toml，所以改完配置跑它就行。
 ///
 /// job 没加载（本来就没在跑）时明确报错，让人去 `ivox on`，不静默把它拉起来——
 /// 那会顺带打开登录自启，属于「重启」不该做的副作用。
 struct RestartCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "restart",
-        abstract: "重启守护进程（改完 config.json 后跑一次即生效）"
+        abstract: "重启守护进程（改完 config.toml 后跑一次即生效）"
     )
 
     func run() throws {

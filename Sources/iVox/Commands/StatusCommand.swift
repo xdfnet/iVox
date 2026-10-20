@@ -46,15 +46,28 @@ struct StatusCommand: ParsableCommand {
             return
         }
 
-        let ttsPath = cfg.models?.ttsPath ?? "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+        let ttsPath = ModelPaths.tts
         modelCheck(name: "TTS 模型", path: ttsPath)
 
         if cfg.speechInput?.enabled ?? SpeechInputConfig.default.enabled {
-            let asrPath = cfg.models?.asrPath ?? "~/.config/ivox/model/Qwen3-ASR-1.7B-8bit"
+            let asrPath = ModelPaths.asr
             modelCheck(name: "ASR 模型", path: asrPath)
         }
 
-        for v in cfg.voices {
+        // 配置里有没人认领的键（写错了、或写了已挪进内部的旧段）→ 当场说出来，
+        // 不用去翻 daemon.log
+        if let text = try? String(contentsOfFile: ConfigFile.path, encoding: .utf8) {
+            let issues = ConfigAudit.unknownKeys(inTOMLText: text)
+            if !issues.isEmpty {
+                print("  ✗ 配置里有 \(issues.count) 个键没人认领（写了但没生效）：")
+                for issue in issues {
+                    let hint = issue.suggestion.map { " → 是不是想写「\($0)」？" } ?? ""
+                    print("      \(issue.path)\(hint)")
+                }
+            }
+        }
+
+        for v in cfg.resolvedVoices {
             guard let ref = v.refAudio, !ref.isEmpty else { continue }
             let exists = FileManager.default.fileExists(atPath: (ref as NSString).expandingTildeInPath)
             print("  音色 \(v.id)\(exists ? "    ✓ 正常" : "    ✗ 参考音频缺失（\(ref)）")")

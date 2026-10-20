@@ -66,7 +66,7 @@ actor TTSEngine: TTSProviding {
             return
         }
         loadState = .loading
-        let modelPath = expandPath(config.models?.ttsPath ?? "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit")
+        let modelPath = expandPath(ModelPaths.tts)
         Log.debug("加载 TTS 模型: \(modelPath)")
         do {
             model = try await TTS.loadModel(modelRepo: modelPath)

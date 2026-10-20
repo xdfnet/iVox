@@ -2,6 +2,56 @@
 
 ## 未发布 — 2026-10-21
 
+- **外部配置换成 TOML：能写注释了** — 飞哥「json 做配置很烦，不能做注释，很不容易阅读」。
+  `~/.config/ivox/config.json` → **`~/.config/ivox/config.toml`**，格式换成 TOML：
+  `#` 注释、方括号分段，写起来像 INI，每一项是干嘛的直接写在旁边。配套：
+  - `iVoxKit/TOML.swift`：**自研**解析/序列化（无外部依赖，发布二进制不变），支持段、数组表
+    （`[[voices]]`）、多行字符串、整数/浮点/布尔/数组/内联表、`#` 注释；
+    不支持的写法**明确报错**并给行号，不静默吞。
+  - `iVoxKit/TOMLDocument.swift`：**就地改**配置——程序写回时只动那几行，**用户自己写的注释留着**
+    （`ivox voice add/remove`、`ivox wechat setup` 都走它；整体重排会把注释冲掉）。
+  - 默认模板挪进 `iVoxKit/ConfigTemplate.swift`（唯一真源，带逐项说明的注释）；
+    `Resources/config.example.json` 删除，`ivox init-config` 写的就是这份模板。
+  - 老 `config.json` **自动迁移**成 `config.toml`（顺带把老写法 `defaultVoice` 并进
+    `sourceVoices.default`）；**旧文件保留不删**（删除交给人）。
+  - 写回时的键顺序由各类型的 `CodingKeys` 派生（`ConfigAudit.sectionOrder`），不另抄清单。
+
+- **清理死配置** — 飞哥「清理死配置」。删掉三处「写了没用的」：
+  - `mediaControl.enabled`：`MediaController` 存了配置从来没人读，Web 服务的真开关是
+    `httpServerEnabled`，这个字段写 true/false 都一样——骗人的死字段，删。
+  - `MediaController.config`：存着不读的属性连同 init 参数一起去掉。
+  - `Config.configBaseDir`：赋值了从没被读过。
+
+- **默认音色并进 `sourceVoices`** — 飞哥「`defaultVoice` 和 `sourceVoices` 能在一个里吗」。
+  现在只有 `sourceVoices` 一段，其中 **`default` 键就是默认音色**（没有来源时用它），
+  顶层不再单设 `defaultVoice` 字段——一处说清，别两处各写一遍。
+
+- **配置重新分层：代码内配置用 Swift 常量，外部只留一个 json** — 飞哥裁决。三层各管各的：
+  ① **代码内配置**（全在 `Sources/iVoxKit/Config.swift` 里，不另开文件）——`ModelPaths`（模型路径）、
+  `TTSConfig.default`（合成参数）、`VoiceCatalog.builtin`（内置音色）：都是**产品内容**，不该让用户
+  在配置里改，也不该把四段几十字的参考文本塞进他的 config.toml；外部配置里再写这些段会被忽略，
+  并被配置审计点名（写了不生效）；
+  ② **外部配置**（`~/.config/ivox/config.toml`，就这一个文件）——凭据（微信 token、翻译 apiKey）
+  与用户会主动改的（开关、键位、端口、模型路径）；
+  ③ **用户数据**（recordings/、wechat/context_token.json）——程序写的运行产物。
+  配套：`Config.voices` 变成可选（现在只表示「用户自建/覆盖的」，首装配置里没有这段），
+  `Config.resolvedVoices` = 内置 + 用户合并（同 id 用户覆盖内置）；`ivox voice list` 标出
+  `[内置]`/`[自建]`；`voice add` 遇内置同名 id 提示「将覆盖它」；`voice remove` 删不掉内置的。
+
+- **键名统一成驼峰 + 未知字段告警** — 同一个配置文件里曾有两套命名风格：`wechat` 段
+  显式映射成蛇形（`base_url` / `allow_from`），其余段是驼峰。现已统一（`WeChatConfig` 去掉
+  显式蛇形映射），并加**配置审计**：解码后对照各段已知键，把「写了但没人认领」的键打进
+  `daemon.log`，还会猜「你是不是想写 allowFrom？」。已知键从各类型 `CodingKeys` 派生
+  （`knownKeys`），不另抄一份清单——两份清单迟早漂移，漂了就成了「告警说某键无效、它其实有效」。
+
+- **默认配置只留一份真源** — 新增 `ivox init-config`：从模板生成默认配置（已存在则不动）。
+  `install-binary.sh` 改为调它，删掉了内嵌的那份 JSON（此前模板与脚本各一份，迟早漂移）。
+
+- **发布包补上两个资源 bundle** — 此前包里只有 `ivox` + `integrations`，**没有**
+  `iVox_iVox.bundle`（Web UI 的 index.html、配置模板、voices）与 `mlx-swift_Cmlx.bundle`
+  （Metal shader，**TTS 合成必需**）→ `curl | bash` 装完 Web 控制台打不开、合成起不来。
+  现在两个 bundle 与 4 个音色参考音频（1.7MB）都随包（12MB → 17MB）。
+
 - **发布包带上音色参考音频** — 飞哥问「首次安装都要干什么」，顺带查出一个真缺口：发布包里只有
   `ivox` + `integrations`，**没有 4 个参考音频 wav**（1.7MB）。于是走 `curl | bash` 装的人，
   配置里四个音色的 `refAudio` 指向的 `~/.config/ivox/voices/ref_*.wav` **是空的**——参考音频读不到，
@@ -10,7 +60,7 @@
   （落点即 `$VOICE_DIR`，与配置里的 `refAudio` 路径对齐）；旧包不含 voices 时解不出来不算错，
   只提示用户从源码装。解包路径特意验过：解到 `$VOICE_DIR` 会多一层 `voices/voices/`。
 
-- **热键改到配置里：改 `config.json` 的 `hotkeys` 段，`ivox restart` 生效** — 飞哥「经常换快捷键」，
+- **热键改到配置里：改配置文件的 `hotkeys` 段，`ivox restart` 生效** — 飞哥「经常换快捷键」，
   而九个组合键原先是 `GlobalKeyTap` 里的一张硬编码表，换一个键要改代码重编译。现状：
   - 键位**只写一处**：`iVoxKit/HotKeySpec.swift` 里 `defaultChord`（默认值）与 `parseChord`（解析器），
     纯逻辑无 UI 依赖，配套 14 条用例；`GlobalKeyTap` 只消费它，不再自带一份表。动作名也从
@@ -26,10 +76,10 @@
   - 新增 `ivox restart`：只重启守护进程（`launchctl kickstart -k`），**不动登录自启开关**——
     `on` 会 enable 自启、`off` 会 disable 自启，都不是「重启」该干的事；job 没在跑时明确报错让人
     `ivox on`，不顺手把它拉起来（那会顺带打开自启）。
-  - 配置模板（`config.example.json`）与安装脚本写的默认配置里**写全量默认键位**——飞哥要「装好就看得见、
+  - 配置模板（`iVoxKit/ConfigTemplate.swift`）里**写全量默认键位**——飞哥要「装好就看得见、
     改哪行改哪行」，首次安装即初始化好这一套（存量配置不自动改，安装脚本只做加法）。
-    ⚠️ 于是默认键位有**三份副本**：代码兜底（`HotKeySpec.defaultChord`，配置缺失时用）、
-    模板、安装脚本内嵌的那份——**改默认键位要同步这三处**，否则新装与老用户行为不一致。
+    ⚠️ 于是默认键位有**两份副本**：代码兜底（`HotKeySpec.defaultChord`，配置缺失时用）与模板——
+    **改默认键位要同步这两处**，否则新装与老用户行为不一致。
 
 - **模型加载失败不再静默卡死：子进程加载失败就退出，主进程按退避换一个重试** — 这是 v6.0.0
   三进程拆分带来的新故障模式，而**不是理论风险**：2026-10-19 23:32 真实卡过一次

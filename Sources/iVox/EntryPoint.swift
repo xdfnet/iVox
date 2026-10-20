@@ -12,6 +12,7 @@ struct iVox: AsyncParsableCommand {
             OnCommand.self,
             OffCommand.self,
             RestartCommand.self,
+            InitConfigCommand.self,
             StatusCommand.self,
             SpeakCommand.self,
             SkipCommand.self,

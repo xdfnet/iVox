@@ -71,13 +71,12 @@ private enum MediaKey: Int32 {
 /// 语义是**「说完继续」而非「恢复原状」**——你若本来就把音乐暂停着，录音结束会把它放起来。
 /// 类需要记住"这次暂停是不是我们发的"，值类型存不住，故为 `actor`。
 actor MediaController {
-    private let config: MediaControlConfig
     /// 是否处于「我们发起的暂停」状态（恢复后复位）。
     private var suspendedByUs = false
 
-    init(config: MediaControlConfig) {
-        self.config = config
-    }
+    /// 不持有什么配置：媒体控制的行为全在方法里（暂停/恢复/切歌），
+    /// 原先那个 `config` 存着从来没人读（2026-10-21 连同死字段 `enabled` 一起清掉）。
+    init() {}
 
     // MARK: - 调度
 

@@ -6,7 +6,7 @@ ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 RUNTIME="${HOME}/.local/share/ivox/runtime"
 LAUNCHER="${HOME}/.local/bin/ivox"
 LABEL="com.user.ivox"
-CONFIG="${HOME}/.config/ivox/config.json"
+CONFIG="${HOME}/.config/ivox/config.toml"
 HOOK_SH="${HOME}/.config/ivox/hook.sh"
 INTEGRATIONS_DIR="${HOME}/.config/ivox/integrations"
 SOCKET="${HOME}/.config/ivox/ivox.sock"
@@ -32,8 +32,10 @@ init_config() {
   mkdir -p "${HOME}/.config/ivox"
 
   if [[ ! -f "${CONFIG}" ]]; then
-    cp "${ROOT}/Sources/iVox/Resources/config.example.json" "${CONFIG}"
-    sed -i '' "s|\"~|\"${HOME}|g" "${CONFIG}"
+    # 默认配置由二进制从模板生成（ivox init-config）——模板是唯一真源
+    "${ROOT}/.build/release/ivox" init-config 2>/dev/null \
+      || "${ROOT}/.build/debug/ivox" init-config 2>/dev/null \
+      || echo "[!] 配置生成失败，稍后手动跑 ivox init-config"
     echo "✓  已生成配置: ${CONFIG}"
     echo "   热键可在配置的 hotkeys 段改（如 \"translate\": \"cmd+shift+d\"），改完跑 ivox restart"
   else

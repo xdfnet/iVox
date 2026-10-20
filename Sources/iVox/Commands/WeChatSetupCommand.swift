@@ -19,24 +19,16 @@ struct WeChatSetupCommand: AsyncParsableCommand {
     var baseURL: String?
 
     func run() async throws {
-        let configPath = NSString(string: "~/.config/ivox/config.json").expandingTildeInPath
-        // 从现有配置加载，没有就建一个空的
+        let configPath = ConfigFile.path
+        // 从现有配置加载，没有就照模板生成一份（模板是唯一真源）
         let cfgExists = FileManager.default.fileExists(atPath: configPath)
         var cfg = cfgExists ? (try? loadConfig()) : nil
         if cfg == nil {
-            Log.info("未找到配置，新建默认配置")
-            // 写入一个带默认值的配置
-            let defaults: [String: Any] = [
-                "default_voice": "taozi",
-                "source_voices": ["claude": "taozi"],
-                "voices": [["id": "taozi", "name": "桃子"]]
-            ]
-            let data = try JSONSerialization.data(withJSONObject: defaults, options: [.prettyPrinted, .sortedKeys])
-            var text = String(data: data, encoding: .utf8) ?? "{}"
-            text += "\n"
-            try? FileManager.default.createDirectory(atPath: NSString(string: "~/.config/ivox").expandingTildeInPath,
+            Log.info("未找到配置，按模板新建")
+            try? FileManager.default.createDirectory(atPath: AppPaths.configDir,
                                                       withIntermediateDirectories: true)
-            try text.write(toFile: configPath, atomically: true, encoding: .utf8)
+            try ConfigTemplate.tomlText.write(toFile: configPath, atomically: true, encoding: .utf8)
+            try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: configPath)
             cfg = try? loadConfig()
         }
         guard var cfg else {
@@ -57,13 +49,11 @@ struct WeChatSetupCommand: AsyncParsableCommand {
             }
             print("Token 验证通过")
 
-            if cfg.wechat == nil {
-                cfg.wechat = WeChatConfig()
-            }
-            cfg.wechat?.token = token
-            cfg.wechat?.baseURL = base
-
-            try saveConfig(cfg, to: configPath)
+            // 就地改这两个键：用户自己在配置里写的注释要留着
+            try updateConfigValues(at: configPath, [
+                "wechat.token": .string(token),
+                "wechat.baseURL": .string(base),
+            ])
             print("配置已保存: \(configPath)")
             print("微信配置完成")
             return
@@ -143,18 +133,16 @@ struct WeChatSetupCommand: AsyncParsableCommand {
 
                 let apiBase = poll.baseurl?.isEmpty == false ? poll.baseurl! : base
 
-                if cfg.wechat == nil {
-                    cfg.wechat = WeChatConfig()
-                }
-                cfg.wechat?.token = botToken
-                cfg.wechat?.baseURL = apiBase
+                var values: [String: TOMLValue] = [
+                    "wechat.token": .string(botToken),
+                    "wechat.baseURL": .string(apiBase),
+                ]
                 if let userID = poll.ilinkUserID, !userID.isEmpty,
                    (cfg.wechat?.allowFrom ?? "").isEmpty {
-                    cfg.wechat?.allowFrom = userID
+                    values["wechat.allowFrom"] = .string(userID)
                     print("已设置允许用户 \(userID)")
                 }
-
-                try saveConfig(cfg, to: configPath)
+                try updateConfigValues(at: configPath, values)
                 print("配置已保存: \(configPath)")
                 print("登录成功，bot_id: \(botID)")
                 print("微信配置完成")

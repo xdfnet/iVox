@@ -87,7 +87,7 @@ final class TTSServer: SocketConnectionHandler {
             return
         }
 
-        let sourceID = meta["source"] ?? "default"
+        let sourceID = meta["source"] ?? VoiceSource.default
         let voiceID = meta["voice"] ?? config.sourceVoices[sourceID] ?? config.defaultVoice
         // 块号：主进程递过来的助理自编流水号，块的唯一身份。带在每行日志上，
         // 这一块在本进程的经历才能被归因工具跨文件串起来，而不是靠时间戳猜。

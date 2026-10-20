@@ -5,36 +5,24 @@ final class ConfigTests: XCTestCase {
 
     func testValidationFailsOnMissingDefaultVoice() {
         let config = Config(
-            models: nil,
-            defaultVoice: "missing",
-            sourceVoices: [:],
-            voices: [VoiceInfo(id: "voice", description: nil)],
-            configBaseDir: nil
+            sourceVoices: ["default": "missing"],
+            voices: [VoiceInfo(id: "voice", description: nil)]
         )
         XCTAssertThrowsError(try validate(config))
     }
 
     func testValidationFailsOnMissingSourceVoice() {
         let config = Config(
-            models: nil,
-            defaultVoice: "voice",
-            sourceVoices: ["pi": "missing"],
-            voices: [VoiceInfo(id: "voice", description: nil)],
-            configBaseDir: nil
+            sourceVoices: ["default": "voice", "pi": "missing"],
+            voices: [VoiceInfo(id: "voice", description: nil)]
         )
         XCTAssertThrowsError(try validate(config))
     }
 
     func testValidationPassesOnValidConfig() {
         let config = Config(
-            models: ModelConfig(
-                asrPath: "~/.config/ivox/model/Qwen3-ASR-1.7B-8bit",
-                ttsPath: "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
-            ),
-            defaultVoice: "v1",
-            sourceVoices: ["c": "v1"],
-            voices: [VoiceInfo(id: "v1", description: nil)],
-            configBaseDir: nil
+            sourceVoices: ["default": "v1", "c": "v1"],
+            voices: [VoiceInfo(id: "v1", description: nil)]
         )
         XCTAssertNoThrow(try validate(config))
     }

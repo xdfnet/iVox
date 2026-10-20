@@ -67,7 +67,13 @@ package: build
 	@cp -R integrations/. /tmp/$(PKG)/integrations/
 	@cp scripts/install-hooks.sh /tmp/$(PKG)/integrations/install-hooks.sh
 	@cp Sources/iVox/Resources/voices/*.wav /tmp/$(PKG)/voices/
-	@cd /tmp/$(PKG) && tar czf $(CURDIR)/.build/release/$(PKG).tar.gz ivox integrations voices
+	@for b in iVox_iVox.bundle mlx-swift_Cmlx.bundle; do \
+	  src="$(CURDIR)/.build/out/Products/Release/$$b"; \
+	  if [[ ! -d "$$src" ]]; then src=$$(find "$(CURDIR)/.build" -type d -name "$$b" -path "*elease*" | head -1); fi; \
+	  if [[ -n "$$src" && -d "$$src" ]]; then cp -R "$$src" /tmp/$(PKG)/; \
+	  else echo "⚠️  未找到 $$b（Web UI / TTS shader 会缺）"; fi; \
+	done
+	@cd /tmp/$(PKG) && tar czf $(CURDIR)/.build/release/$(PKG).tar.gz ivox integrations voices iVox_iVox.bundle mlx-swift_Cmlx.bundle
 	@rm -rf /tmp/$(PKG)
 	@echo "✓  .build/release/$(PKG).tar.gz"
 

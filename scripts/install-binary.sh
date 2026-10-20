@@ -61,6 +61,16 @@ curl -fL --progress-bar -o /tmp/ivox-pkg.tar.gz "$ASSET_URL"
 tar xzf /tmp/ivox-pkg.tar.gz -C "$BIN_DIR" ivox
 # 集成资产（旧包可能不含，失败不影响二进制安装）
 tar xzf /tmp/ivox-pkg.tar.gz -C "$CONFIG_DIR" integrations 2>/dev/null || true
+# 资源 bundle：iVox_iVox.bundle（Web UI 的 index.html、配置模板、voices）与
+# mlx-swift_Cmlx.bundle（Metal shader，**TTS 合成必需**）。缺了 Web 控制台打不开、
+# 合成直接起不来。旧包不含时解不出来不算错，但要提醒。
+for b in iVox_iVox.bundle mlx-swift_Cmlx.bundle; do
+  if tar xzf /tmp/ivox-pkg.tar.gz -C "$BIN_DIR" "$b" 2>/dev/null; then
+    ok "$b"
+  else
+    info "该版本包不含 $b（Web UI / TTS 可能不可用），建议从源码安装"
+  fi
+done
 # 音色参考音频：缺了播报合成会直接失败（参考音频读不到），所以必须随包带上。
 # 旧包不含 voices，解不出来不算错——只是提醒用户。
 # 解到 CONFIG_DIR（包内是 voices/ 目录，落点即 $VOICE_DIR）
@@ -99,41 +109,14 @@ section "配置初始化"
 mkdir -p "$CONFIG_DIR" "$VOICE_DIR" "$RUNTIME_DIR"
 
 # 默认配置
-if [[ ! -f "$CONFIG_DIR/config.json" ]]; then
-  cat > "$CONFIG_DIR/config.json" <<JSON
-{
-  "models": {
-    "asrPath": "${HOME}/.config/ivox/model/Qwen3-ASR-1.7B-8bit",
-    "ttsPath": "${HOME}/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
-  },
-  "tts": { "language": "Chinese", "streamingInterval": 0.08, "outputSampleRate": 48000 },
-  "mediaControl": { "enabled": true, "httpServerEnabled": true, "httpServerPort": 8888 },
-  "playback": { "captions": false },
-  "hotkeys": {
-    "translate": "cmd+d",
-    "openTerminal": "opt+z",
-    "openTerminalClaude": "opt+a",
-    "openTerminalCodex": "opt+x",
-    "openTerminalPi": "opt+q",
-    "copyPath": "opt+c",
-    "escInterrupt": "ctrl+2",
-    "skipBucket": "ctrl+1",
-    "skipPage": "ctrl+esc",
-    "voice": "rightcmd+rightctrl"
-  },
-  "speechInput": { "enabled": true, "language": "zh", "autoEnter": true, "maxRecordingSeconds": 30 },
-  "translation": { "enabled": true, "provider": "google", "baseURL": "https://api.openai.com/v1", "apiKey": "", "model": "gpt-5-mini", "speechEnabled": true, "speechVoice": null, "panelTimeoutSeconds": 60, "timeoutSeconds": 20, "proxyURL": "http://192.168.100.6:10808" },
-  "defaultVoice": "taozi",
-  "sourceVoices": { "claude": "taozi", "pi": "taozi" },
-  "voices": [
-    { "name": "甜妹桃子", "id": "taozi", "refText": "嗨，我是甜妹桃子。我有着活泼甜美的声线，听起来元气满满。如果你需要一位热情开朗的声音陪伴，选我就对了。", "refAudio": "~/.config/ivox/voices/ref_taozi.wav", "description": "Claude 音色" },
-    { "name": "湾湾小何", "id": "wanwan", "refText": "你好，我是湾湾小何。我的声音温柔知性。", "refAudio": "~/.config/ivox/voices/ref_wanwan.wav", "description": "温柔知性" },
-    { "name": "米仔", "id": "mizai", "refText": "大家好，我是米仔。我的声音温暖自然，适合日常播报和语音助手场景。无论是读书、讲故事，还是播报天气新闻，我都能轻松应对。", "refAudio": "~/.config/ivox/voices/ref_mizai.wav", "description": "备用音色" },
-    { "name": "大易", "id": "dayi", "refText": "大家好，我是大易。我有着沉稳可靠的男声，听起来踏实有力量。需要播报重要通知或者讲述深度内容，交给我就好。", "refAudio": "~/.config/ivox/voices/ref_dayi.wav", "description": "PI 音色" }
-  ]
-}
-JSON
-  ok "默认配置"
+if [[ ! -f "$CONFIG_DIR/config.toml" ]]; then
+  # 默认配置由二进制从代码仓模板生成（ivox init-config）——模板是唯一真源，
+  # 这里不再内嵌一份（内嵌的那份迟早跟模板漂移）
+  if "$BIN_DIR/ivox" init-config; then
+    ok "默认配置"
+  else
+    info "默认配置生成失败，可稍后手动执行 $BIN_DIR/ivox init-config"
+  fi
 else
   info "配置已存在"
 fi
@@ -221,8 +204,8 @@ echo ""
 echo -e "${GREEN}${BOLD}✓ iVox 安装完成！${RESET}"
 echo ""
 echo "   二进制: ${BIN_DIR}/ivox"
-echo "   配置:   ${CONFIG_DIR}/config.json"
-echo "   热键:   改配置里的 hotkeys 段（如 \"translate\": \"cmd+shift+d\"），改完跑 ivox restart"
+echo "   配置:   ${CONFIG_DIR}/config.toml"
+echo "   热键:   改 config.toml 里的 hotkeys 段（如 translate = \"cmd+shift+d\"），改完跑 ivox restart"
 echo "   日志:   ${LOG}"
 echo "   模型:   ${MODEL_DIR} $(du -sh "$MODEL_DIR" | cut -f1)"
 echo "   音色:   ${VOICE_DIR} $(ls -1 "$VOICE_DIR"/*.wav 2>/dev/null | wc -l | tr -d ' ') 个参考音频"

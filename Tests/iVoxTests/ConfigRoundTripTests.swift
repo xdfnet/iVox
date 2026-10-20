@@ -5,16 +5,10 @@ final class ConfigRoundTripTests: XCTestCase {
 
     func testSaveAndLoadRoundTrip() throws {
         let original = Config(
-            models: ModelConfig(
-                asrPath: "~/.config/ivox/model/Qwen3-ASR-1.7B-8bit",
-                ttsPath: "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
-            ),
-            defaultVoice: "v1",
-            sourceVoices: ["s": "v1"],
+            sourceVoices: ["default": "v1", "s": "v1"],
             voices: [
                 VoiceInfo(id: "v1", name: "测试", description: "desc"),
-            ],
-            configBaseDir: nil
+            ]
         )
 
         let tmpPath = NSTemporaryDirectory() + "ivox-test-config.json"
@@ -23,8 +17,6 @@ final class ConfigRoundTripTests: XCTestCase {
         let loaded = try loadConfig(from: tmpPath)
 
         XCTAssertEqual(loaded.defaultVoice, "v1")
-        XCTAssertEqual(loaded.models?.asrPath, "~/.config/ivox/model/Qwen3-ASR-1.7B-8bit")
-        XCTAssertEqual(loaded.models?.ttsPath, "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit")
         XCTAssertEqual(loaded.sourceVoices["s"], "v1")
         let v = try XCTUnwrap(loaded.voice(id: "v1"))
         XCTAssertEqual(v.name, "测试")
@@ -34,21 +26,22 @@ final class ConfigRoundTripTests: XCTestCase {
 
     func testVoiceAddAndRemoveRoundTrip() throws {
         let original = Config(
-            models: nil,
-            defaultVoice: "a",
-            sourceVoices: [:],
-            voices: [VoiceInfo(id: "a", name: "AA", description: nil)],
-            configBaseDir: nil
+            sourceVoices: ["default": "a"],
+            voices: [VoiceInfo(id: "a", name: "AA", description: nil)]
         )
         let tmpPath = NSTemporaryDirectory() + "ivox-test-voices.json"
         try saveConfig(original, to: tmpPath)
 
+        // 用户自建音色写在外部配置层（config.json 的 voices 段）；内置音色在代码里
         var reloaded = try loadConfig(from: tmpPath)
-        reloaded.voices.append(VoiceInfo(id: "b", name: "BB", description: "new"))
+        reloaded.voices = (reloaded.voices ?? []) + [VoiceInfo(id: "b", name: "BB", description: "new")]
         try saveConfig(reloaded, to: tmpPath)
 
         let final = try loadConfig(from: tmpPath)
-        XCTAssertEqual(final.voices.count, 2)
+        // 用户层：原有 "a" + 新加 "b"
+        XCTAssertEqual(final.voices?.count, 2)
+        // 生效清单 = 内置 4 个 + 用户层 2 个
+        XCTAssertEqual(final.resolvedVoices.count, VoiceCatalog.builtin.count + 2)
         XCTAssertNotNil(final.voice(id: "b"))
         XCTAssertEqual(final.voice(id: "b")?.name, "BB")
 

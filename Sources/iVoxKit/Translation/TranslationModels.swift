@@ -87,7 +87,7 @@ public struct TranslationConfig: Codable, Sendable {
         "You are a translation engine. Follow the user's translation instruction exactly. Return only the final translation."
     public static let userPromptTemplate = "将下面的文本翻译为自然、准确的简体中文，只返回译文：\n{{text}}"
 
-    private enum CodingKeys: String, CodingKey {
+    enum CodingKeys: String, CodingKey, CaseIterable {
         case enabled, provider, baseURL, apiKey, model
         case speechEnabled, speechVoice, panelTimeoutSeconds, timeoutSeconds, proxyURL
     }
@@ -108,4 +108,7 @@ public struct TranslationConfig: Codable, Sendable {
             .trimmingCharacters(in: .whitespacesAndNewlines)
         proxyURL = (proxy?.isEmpty == false) ? proxy : nil
     }
+    /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份。
+    public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
+
 }

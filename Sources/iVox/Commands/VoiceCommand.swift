@@ -23,11 +23,14 @@ struct VoiceList: ParsableCommand {
             print("错误: 无法加载配置 \(AppPaths.configDir)/config.json")
             throw ExitCode.failure
         }
-        for v in config.voices {
+        let userIDs = Set((config.voices ?? []).map(\.id))
+        for v in config.resolvedVoices {
             let name = v.name ?? v.id
             let desc = v.description.map { " — \($0)" } ?? ""
             let isDefault = v.id == config.defaultVoice ? " (默认)" : ""
-            print("\(name) (\(v.id))\(isDefault)\(desc)")
+            // 内置音色在代码里（不可删）；自建音色在 config.json 里
+            let origin = userIDs.contains(v.id) ? "自建" : "内置"
+            print("\(name) (\(v.id))\(isDefault) [\(origin)]\(desc)")
         }
     }
 }
@@ -54,24 +57,32 @@ struct VoiceAdd: ParsableCommand {
     var description: String?
 
     func run() throws {
-        let configPath = NSString(string: "~/.config/ivox/config.json").expandingTildeInPath
-        var config = try loadConfig(from: configPath)
+        let configPath = ConfigFile.path
+        let config = try loadConfig(from: configPath)
 
-        guard config.voice(id: id) == nil else {
-            print("错误: 音色 ID \(id) 已存在")
+        let userIDs = Set((config.voices ?? []).map(\.id))
+        if userIDs.contains(id) {
+            print("错误: 音色 ID \(id) 已存在（自建音色）")
             return
         }
+        if VoiceCatalog.isBuiltin(id: id) {
+            // 内置音色同 id：允许覆盖（用户想改内置音色就写同名条目）
+            print("ℹ️  \(id) 是内置音色，将用你的设置覆盖它")
+        }
 
-        let voice = VoiceInfo(
-            id: id,
-            name: name ?? id,
-            refAudio: refAudio,
-            refText: refText,
-            description: description
-        )
-        config.voices.append(voice)
-        try saveConfig(config, to: configPath)
-        print("已添加音色: \(voice.name ?? id) (\(id))")
+        // 就地写进配置文件：**保留用户自己写的注释**（整体重排会把它冲掉）
+        let text = try String(contentsOfFile: configPath, encoding: .utf8)
+        let doc = try TOMLDocument.parse(text, order: ConfigAudit.sectionOrder)
+        var element: [String: TOMLValue] = ["id": .string(id)]
+        if let name { element["name"] = .string(name) }
+        if let refAudio { element["refAudio"] = .string(refAudio) }
+        if let refText { element["refText"] = .string(refText) }
+        if let description { element["description"] = .string(description) }
+        let updated = doc.appendingToArrayTable("voices", element: .table(element))
+        try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
+
+        let displayName = name ?? id
+        print("已添加音色: \(displayName) (\(id))")
     }
 }
 
@@ -85,11 +96,17 @@ struct VoiceRemove: ParsableCommand {
     var id: String
 
     func run() throws {
-        let configPath = NSString(string: "~/.config/ivox/config.json").expandingTildeInPath
-        var config = try loadConfig(from: configPath)
+        let configPath = ConfigFile.path
+        let config = try loadConfig(from: configPath)
 
-        guard let voice = config.voice(id: id) else {
-            print("错误: 音色 ID \(id) 不存在")
+        let userVoices = config.voices ?? []
+        guard let index = userVoices.firstIndex(where: { $0.id == id }) else {
+            if VoiceCatalog.isBuiltin(id: id) {
+                print("错误: \(id) 是内置音色（在代码里），删不掉；"
+                      + "要改它请在 config.toml 的 voices 段写同名条目覆盖")
+            } else {
+                print("错误: 音色 ID \(id) 不存在")
+            }
             return
         }
         guard id != config.defaultVoice else {
@@ -97,10 +114,19 @@ struct VoiceRemove: ParsableCommand {
             return
         }
 
-        config.voices.removeAll { $0.id == id }
-        config.sourceVoices = config.sourceVoices.filter { $0.value != id }
-        try saveConfig(config, to: configPath)
+        // 删掉 [[voices]] 里的这一条，并清掉 sourceVoices 里指向它的引用。
+        // 同样就地改，用户的注释留着。
+        let text = try String(contentsOfFile: configPath, encoding: .utf8)
+        let doc = try TOMLDocument.parse(text, order: ConfigAudit.sectionOrder)
+        let references = config.sourceVoices
+            .filter { $0.value == id }
+            .map { "sourceVoices.\($0.key)" }
+        let withoutRefs = doc.removingValues(forKeys: references)
+        let doc2 = try TOMLDocument.parse(withoutRefs, order: ConfigAudit.sectionOrder)
+        let updated = doc2.removingFromArrayTable("voices", index: index)
+        try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
 
+        let voice = userVoices[index]
         print("已删除音色: \(voice.name ?? id) (\(id))")
     }
 }

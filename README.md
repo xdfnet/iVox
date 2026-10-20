@@ -105,37 +105,58 @@ make clean     # 清除 .build
 
 ## 配置
 
-`~/.config/ivox/config.json` 主要字段：
+配置分三层，各管各的：
+
+| 层 | 位置 | 谁改 | 升级时 |
+|---|---|---|---|
+| **代码内配置** | `Sources/iVoxKit/Config.swift`：`ModelPaths`（模型路径）、`TTSConfig.default`（合成参数）、`VoiceCatalog`（内置音色） | 随代码发布 | 跟着升级更新 |
+| **外部配置** | `~/.config/ivox/config.toml`（**就这一个文件**，TOML 格式，能写注释） | 你手改 | 不动（安装脚本只做加法） |
+| **用户数据** | `~/.config/ivox/recordings/`、`wechat/context_token.json` | 程序写 | 保留 |
+
+判据：**凭据**（微信 token、翻译 apiKey）、**你常改的**（开关、键位、端口、翻译服务与模型、选音色）放外部配置；
+**产品内容**（模型路径、合成参数、内置音色清单）写在代码里，不占你的配置。
+
+`~/.config/ivox/config.toml` 主要字段（**键名一律驼峰**）。格式是 **TOML**：`#` 后面是注释，
+方括号是段名，等号右边是值——比 JSON 好读，因为能写注释：
+
+```toml
+# 划词翻译
+[hotkeys]
+translate = "cmd+d"     # 我常用 cmd+shift+d，改完跑 ivox restart 生效
+```
+
+主要字段：
 
 | 字段 | 说明 |
 |------|------|
-| `models.ttsPath` / `models.asrPath` | 本地 MLX 模型路径 |
-| `tts.streamingInterval` | 流式输出间隔，默认 0.08s |
 | `speechInput.enabled` | 语音输入开关 |
 | `translation.provider` | 划词翻译服务：`google`（默认，免配置）/ `openai`（OpenAI 兼容） |
 | `translation.speechEnabled` | 划词翻译后是否朗读译文 |
 | `translation.proxyURL` | 直连不通时的兜底代理，如 `http://192.168.100.6:10808`（只在直连失败后才用） |
 | `mediaControl.httpServerEnabled` | Web UI（端口 8888） |
-| `hotkeys` | 热键覆盖（键位写法见下）；不写就用默认键位 |
-| `wechat.token` | 微信 ilink bot token |
-| `voice.xx.refAudio` | 音色参考音频路径 |
+| `hotkeys` | 热键（键位写法见下）；首次安装会写全量默认键位 |
+| `wechat.token` / `wechat.allowFrom` | 微信 ilink bot token / 允许发消息的那个用户 |
+| `sourceVoices` | 按接入方分别选音色；其中 `default` 键就是**默认音色**（没有来源时用它） |
+| `voices` | **只放你自建或覆盖的音色**；内置的四个在代码里（`ivox voice list` 会标出哪个是内置） |
 
-完整字段见 `Sources/iVoxKit/Config.swift`。
+**写错的键不会静默**：守护进程启动时会把「写了但没人认领」的键打进 `daemon.log`，
+还会猜你是不是想写别的名字（如 `allow_from` → 「是不是想写 allowFrom？」）；
+`ivox status` 里也直接列出来。
+
+完整字段见 `Sources/iVoxKit/Config.swift`，默认模板见 `Sources/iVoxKit/ConfigTemplate.swift`
+（`ivox init-config` 写的就是它）。
 
 ### 改快捷键
 
-热键写在配置 `~/.config/ivox/config.json` 的 `hotkeys` 段。**首次安装会写全量默认键位**（下表那些），
+热键写在配置 `~/.config/ivox/config.toml` 的 `hotkeys` 段。**首次安装会写全量默认键位**（下表那些），
 改哪一行改哪一行；没写的项用内置默认值。
 改完跑 `ivox restart` 生效（守护进程重读配置；`restart` 只重启进程，不动登录自启开关）。
 
-```json
-{
-  "hotkeys": {
-    "translate": "cmd+shift+d",
-    "skipPage": "ctrl+alt+right",
-    "voice": "rightcmd"
-  }
-}
+```toml
+[hotkeys]
+translate = "cmd+shift+d"
+skipPage = "ctrl+alt+right"
+voice = "rightcmd"
 ```
 
 | 动作名 | 默认键位 | 干什么 |

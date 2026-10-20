@@ -345,7 +345,7 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 2. SpeakCommand → Unix Socket `{source:claude}文本`
 3. ConnectionHandler.handle():
    - 解析前缀 → source="claude"
-   - voice = sourceVoices["claude"] ?? defaultVoice
+   - voice = sourceVoices["claude"] ?? sourceVoices["default"]
    - 显式 `{voice:xxx}` 可覆盖
    - cleanText() 清洗 Markdown + 行内噪音
 4. PlaybackQueue.enqueue(job) → PlaybackSession.appendPlain / appendGrouped
@@ -402,13 +402,13 @@ pi 扩展（`integrations/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在
 
 ## 音色匹配
 
-优先级：`显式 voice > sourceVoices 映射 > defaultVoice`
+优先级：`显式 voice > sourceVoices 映射 > sourceVoices["default"]`（默认音色就并在这一段里）
 
 ```
 ConnectionHandler.extractVoicePrefix():
   if {voice:xxx} in payload  → xxx
-  else if {source:s}         → sourceVoices[s] ?? defaultVoice
-  else                       → defaultVoice
+  else if {source:s}         → sourceVoices[s] ?? sourceVoices["default"]
+  else                       → sourceVoices["default"]
 ```
 
 ## 部署结构
@@ -417,7 +417,7 @@ ConnectionHandler.extractVoicePrefix():
 
 ```
 ~/.local/bin/ivox                          # CLI 与守护进程同一个二进制（约 61MB，ad-hoc 签名）
-~/.config/ivox/config.json                 # 配置
+~/.config/ivox/config.toml                 # 配置（TOML，可写注释）
 ~/.config/ivox/integrations/               # 集成资产权威源（随发布包解包，分发器读这里）
 ~/.config/ivox/hook.sh                     # 分发后的 hook（Claude 挂载引用它）
 ~/.config/ivox/model/                      # TTS/ASR MLX 模型

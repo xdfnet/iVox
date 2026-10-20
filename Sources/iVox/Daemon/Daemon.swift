@@ -29,7 +29,7 @@ actor Daemon {
     /// 初始化：创建 TTS 引擎、ASR 引擎、播放队列、微信平台等所有子服务。
     init(config: Config) {
         self.config = config
-        let asrPath = config.models?.asrPath ?? NSHomeDirectory() + "/.config/ivox/model/Qwen3-ASR-1.7B-8bit"
+        let asrPath = (ModelPaths.asr as NSString).expandingTildeInPath
         self.keyTap = GlobalKeyTap(config: config.hotkeys)
 
         // 引擎选谁：**默认远程**——MLX 的 Metal 命令编码器析构时会重复释放 GPU 命令
@@ -47,7 +47,7 @@ actor Daemon {
         }
         self.engine = ttsEngine
         self.asrEngine = ASREngine(modelPath: asrPath)
-        self.mediaController = MediaController(config: config.resolvedMediaControl)
+        self.mediaController = MediaController()
         self.queue = PlaybackQueue(
             engine: ttsEngine,
             mediaController: mediaController
@@ -83,12 +83,12 @@ actor Daemon {
 
         let socketPath = AppPaths.socketPath
         let dir = AppPaths.configDir
-        // 目录里躺着 config.json（含微信 token）与 daemon.log（含播报原文），只给本人
+        // 目录里躺着 config.toml（含微信 token）与 daemon.log（含播报原文），只给本人
         try? FileManager.default.createDirectory(
             atPath: dir, withIntermediateDirectories: true, attributes: nil)
         try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: dir)
         // 目录权限只约束**新建**的文件；已经躺在里面的，每次启动补收一次
-        for name in ["config.json", "daemon.log", "daemon.log.old"] {
+        for name in ["config.toml", "config.json", "daemon.log", "daemon.log.old"] {
             let path = (dir as NSString).appendingPathComponent(name)
             if FileManager.default.fileExists(atPath: path) {
                 try? FileManager.default.setAttributes(
@@ -197,7 +197,7 @@ actor Daemon {
                 quickActions: quickActionsHealth,
                 wechat: wechatHealth,
                 // 媒体控制的入口就是 Web 服务，健康度即它
-                mediaControl: mc.enabled ? webUI : "off"
+                mediaControl: webUI
             ),
             permissions: .init(
                 microphone: mic,
@@ -254,7 +254,7 @@ actor Daemon {
 
     /// /health 运行态快照：TTS 引擎状态 + 模型名 + 播放队列
     func makeHealthSnapshot() async -> HealthSnapshot {
-        let ttsPath = config.models?.ttsPath ?? "~/.config/ivox/model/Qwen3-TTS-12Hz-1.7B-Base-8bit"
+        let ttsPath = ModelPaths.tts
         let expanded = (ttsPath as NSString).expandingTildeInPath
         let modelName = expanded.split(separator: "/").last.map { String($0) } ?? ttsPath
         let engineState: String
