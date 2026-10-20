@@ -140,7 +140,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - `actor` 保证线程安全
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
 - **轮次（turn）语义**：队列**按轮排队，播全播完**——同一 `turnID` 的分块并入同一段顺序 append；新 turn 在队尾追加新段（`enqueue` 的新 turn / `beginTurn`），**不再 bargeIn**；**无 turn 的普通播报（`ivox speak` / hook.sh）也独立成段排队**。`processNext` 播完队首段才前移。（容器与游标见 [playback/queue.md](playback/queue.md)：一段 = 一摞，游标指向当前块但不把它弹出容器。）
-- 某段 sealed（`sealTurn` / `Stop` 的 `finishTurn` / 宽限的 `sealIdle()` 标记）才允许空段前移；流动中（未 sealed）空段挂起等下一批，不封口；全部段都封且空才收尾（收字幕，打「播报收尾」）。**收尾主力是 `Stop` 钩子**（按 `session_id` 反查出 turn_id 精确收）；**空闲宽限**兜底：先等设备把已排队音频播完，再最多等 2 秒，等不到新块就判「这一摞说完了」。
+- 某段 sealed（`sealTurn` / `Stop` 的 `finishTurn` / 宽限的 `sealIdle()` 标记）才允许空段前移；流动中（未 sealed）空段挂起等下一批，不封口；全部段都封且空才收尾（收字幕，打「播报结束」）。**收尾主力是 `Stop` 钩子**（按 `session_id` 反查出 turn_id 精确收）；**空闲宽限**兜底：先等设备把已排队音频播完，再最多等 2 秒，等不到新块就判「这一摞说完了」。
 - 用户快捷键共 **5 个入口**（手动打断三档 + 插队 + 说话），每个带**来源**标识：
   | 用户动作 | 入口 | 来源 |
   |---------|------|------|
@@ -215,7 +215,8 @@ TTS 合成完成 [claude-B5AAC5] 2.2s         # 本句合成完
 打断（来源=esc）：取消在播、清空队列…     # 快捷键打断（speech/esc/dict 之一）、作废管道序号
 TTS 合成已取消（打断来源=esc）             # 引擎底层取消也能对上同一来源
 TTS 合成作废（MLX 不响应中途取消…）[…]（打断来源=esc）  # 被掐的这句跑完但已作废
-播放收尾完成: 尾音=0.8s                    # 整轮播完
+播放开始                                 # 首个块被设备读出（真的出声了）
+播放结束: 尾音=0.8s                      # 声音停了
 ```
 
 打断来源与播报来源成对地出现在日志里：`TTS 合成开始 [<source>-<batch>]` 回答「谁在说」，`打断（来源=<origin>）` 与 `TTS 合成已取消/作废（打断来源=<origin>）` 回答「这次谁掐的」。`<origin>` 只可能是 `speech` / `esc` / `dict` / `skip` / `skipPage`（全来自用户快捷键或其
@@ -251,7 +252,7 @@ codesign -dv ~/.local/bin/ivox 2>&1 | grep -E 'Signature|flags'
 | 日志空 | daemon 是否在运行？`pgrep -fl "ivox serve"` |
 | 日志有收到但没播放 | 代码签名失效？`codesign -dv ~/.local/bin/ivox`（期望 `Signature=adhoc`） |
 | 日志有播放但没声音 | AudioPlayer 引擎异常？音量设置？扬声器？ |
-| 播完字幕不收 / 队列不判收尾 | 日志里有没有「播报收尾: 队列已空，字幕收起」；Web 服务在不在 `curl http://127.0.0.1:8888/health` |
+| 播完字幕不收 / 队列不判收尾 | 日志里有没有「播报结束: 队列已空，字幕收起」；Web 服务在不在 `curl http://127.0.0.1:8888/health` |
 | Hook 不触发 | `~/.claude/settings.json` 配置是否正确？Shell 权限？ |
 
 ## 参考

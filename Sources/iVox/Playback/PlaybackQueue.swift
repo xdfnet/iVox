@@ -391,7 +391,7 @@ actor PlaybackQueue {
             await session.retireSpentSegments(afterSilence: true)
             invalidateIdleGrace()
             onCaption?(nil)
-            Log.info("播报收尾: 队列已空，字幕收起")
+            Log.info("播报结束: 队列已空，字幕收起")
         }
     }
 

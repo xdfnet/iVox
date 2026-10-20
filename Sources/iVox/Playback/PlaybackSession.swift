@@ -556,7 +556,7 @@ actor PlaybackSession {
     /// 而 Claude 那一摞往往**还在继续送页**（一次输入 = 好几页），墓碑一立，后续页全被静默丢弃。
     /// 每次泵顺手清一次，`segments` 才不会既虚胖又误导起点。
     ///
-    /// - Parameter afterSilence: 调用方已确认**设备真静音**（`播报收尾` 那条路径，
+    /// - Parameter afterSilence: 调用方已确认**设备真静音**（`播报结束` 那条路径，
     ///   它前面跑过 `waitUntilQuiet`）。这时连「正在响」的块也已经响完了，可以连它一起清——
     ///   发声点本身永远停在最后一块上（没有下一块来推进它），不给这条后门，`/health` 就会一直撒谎。
     @discardableResult

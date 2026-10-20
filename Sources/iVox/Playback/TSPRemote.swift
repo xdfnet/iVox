@@ -21,6 +21,13 @@ actor TSPRemote: TTSProviding {
     /// 拉起子进程用的可执行文件路径
     private let executablePath: String
     private var child: Process?
+    /// 连续拉起失败次数：退避间隔的来源。
+    private var consecutiveLaunchFailures = 0
+    /// 下一次允许拉起的时间。退避未到点就直接判失败，不再 fork。
+    private var nextLaunchAllowedAt = Date.distantPast
+    /// 已就位但引擎没用的那一次报错是不是已经说过。说过了就不再逐块刷——
+    /// 队列在引擎坏掉时会把每块都试一遍，每块一条同款错误既刷屏又不带新信息。
+    private var lastUnavailableNote: String?
     /// 打断纪元：cancelActiveSynthesis 递增，进行中的合成比对不上就停止 yield。
     /// 独立于 actor 锁，因为读取方（阻塞读循环）跑在全局队列上。
     private let cancelToken = CancelToken()
@@ -91,6 +98,18 @@ actor TSPRemote: TTSProviding {
         return AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    // 引擎没就绪就别浪费一次连接往返：先问状态，失败当场作废这一块。
+                    // 顺带治刷屏——队列在引擎坏掉时会把每块都试一遍，每块一条
+                    // 「誊清员无响应」既占屏又不带任何新信息（2026-10-19 23:32 那次
+                    // 满屏都是同一句话）。这里只在状态**变了**时说一次。
+                    if case .failed(let msg) = await self.state {
+                        await self.noteFailedAndScheduleReplacement(msg)
+                        throw TTSRemoteError.unavailable
+                    }
+                    if self.lastUnavailableNote != nil {
+                        Log.info("誊清员恢复就绪")
+                        self.lastUnavailableNote = nil
+                    }
                     try await Self.pump(
                         text: text, voiceID: voiceID, trace: trace,
                         socketPath: self.socketPath, token: self.cancelToken, epoch: epoch,
@@ -129,10 +148,55 @@ actor TSPRemote: TTSProviding {
         if SocketClient.isRunning(path: socketPath) { return true }
         if let child, child.isRunning {
             // 进程在但 socket 还没起来：刚拉起，等它绑
-            return await waitForSocket(seconds: 60)
+            if await waitForSocket(seconds: 60, child: child) { return true }
         }
+        return await replaceChild(reason: "socket 不可达")
+    }
+
+    /// **拉起/更换子进程的唯一入口**。退避计数只在这里动。
+    ///
+    /// 收敛是刻意的：三个触发点（连不上 socket、状态报 failed、崩溃后重拉）原先各自
+    /// startChild 一次，退避计数就无从对齐——一处成功会把别处的失败数清零，于是退避
+    /// 形同虚设。现在它们都走这里，谁成功谁把计数归零。
+    private func replaceChild(reason: String) async -> Bool {
+        let now = Date()
+        guard now >= nextLaunchAllowedAt else {
+            let wait = Int(nextLaunchAllowedAt.timeIntervalSinceNow.rounded(.up))
+            Log.debug("誊清员更换退避中（\(reason)，\(wait)s 后再试）")
+            return false
+        }
+        // **占位必须在这一步做完，且必须在动手拉起之前**。
+        // 下面 `waitForSocket` 要 await 最多 90 秒，actor 在 await 处让出——
+        // 那段时间里合成、/health、启动握手都可能涌进来，各自都读到「还没到退避点」，
+        // 于是各拉一个子进程。实测退避形同虚设、每秒拉一个（2026-10-20）。
+        // 先把下次允许的时间推进，后来的调用就只能看着了。
+        let next = min(pow(2.0, Double(consecutiveLaunchFailures + 1)), 60.0)
+        nextLaunchAllowedAt = now.addingTimeInterval(next)
+        Log.info("拉起誊清员（原因：\(reason)）")
         startChild()
-        return await waitForSocket(seconds: 90)
+        if await waitForSocket(seconds: 90, child: child) {
+            // socket 通了只说明「有进程在监听」，**不等于模型好了**——子进程是先绑 socket
+            // 再后台加载模型的。此处不必清零退避：真正判断健康的是 state，
+            // 若它随后报 failed，noteFailedAndScheduleReplacement 会再换一个，
+            // 那时退避计数接着往上加，连续性才对。
+            consecutiveLaunchFailures = 0
+            return true
+        }
+        consecutiveLaunchFailures += 1
+        Log.warn("誊清员拉起失败（连续第 \(consecutiveLaunchFailures) 次），\(Int(next))s 后再试")
+        return false
+    }
+
+    /// 状态报 failed = **当前这个实例不行，换一个**。这才是退避该挂的地方——
+    /// 子进程是「先绑 socket、再后台加载模型」，所以加载失败时 socket 一直通着，
+    /// 「连不上」这条路径根本不会触发；真信号只有 failed。
+    /// （2026-10-20 第一版把退避挂在连不上的判断上，一次都没触发过。）
+    private func noteFailedAndScheduleReplacement(_ msg: String) async {
+        if lastUnavailableNote != msg {
+            Log.error("誊清员未就绪，将换一个重试：\(msg)")
+            lastUnavailableNote = msg
+        }
+        await replaceChild(reason: "状态 failed：\(msg)")
     }
 
     private func startChild() {
@@ -165,10 +229,18 @@ actor TSPRemote: TTSProviding {
         // socket 文件不删：`SocketServer.start` 开头就 unlink，下次 bind 会覆盖
     }
 
-    private func waitForSocket(seconds: Double) async -> Bool {
-        let deadline = Date().addingTimeInterval(seconds)
+    private func waitForSocket(seconds: Double, child: Process? = nil) async -> Bool {
+        let began = Date()
+        let deadline = began.addingTimeInterval(seconds)
         while Date() < deadline {
             if SocketClient.isRunning(path: socketPath) { return true }
+            // **起来即退**：子进程在 socket 挂上之前就没了（模型加载失败走的就是这条路，
+            // 加载失败即退出——见 TTSCommand）。干等满 90 秒毫无意义，立刻判失败交给退避。
+            // 留 0.5 秒宽限：spawn 到 exec 之间 isRunning 可能瞬时为假。
+            if let child, Date().timeIntervalSince(began) > 0.5, !child.isRunning {
+                Log.warn("誊清员起来即退（pid=\(child.processIdentifier)），不等了")
+                return false
+            }
             if Task.isCancelled { return false }
             try? await Task.sleep(for: .milliseconds(200))
         }
@@ -181,8 +253,7 @@ actor TSPRemote: TTSProviding {
               posix.code == .ECONNREFUSED || posix.code == .ECONNRESET || posix.code == .ENOENT
         else { return }
         Log.warn("誊清员不可达，重启它")
-        startChild()
-        _ = await waitForSocket(seconds: 90)
+        _ = await replaceChild(reason: "连接中断（疑似崩溃）")
     }
 
     // MARK: - 传输

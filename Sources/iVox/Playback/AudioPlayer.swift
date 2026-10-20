@@ -42,6 +42,8 @@ final class AudioPlayer: @unchecked Sendable {
     /// 已经上报过发声的最大块号：同一块的多个 buffer 只报一次，
     /// 不给 actor 制造可观测抖动（一次 80 字块的 PCM 可能分好几个 buffer）。
     private var lastReportedSeq: UInt = 0
+    /// 本轮（自设备上次播空起）是否已报过「播放开始」。与 `播放结束` 一一对应，每轮各一次。
+    private var reportedStartSinceEmpty = false
     private var needsPrime = true  // 是否需要先调度前导静音 buffer 唤醒 player node
     // 背压水位：排队音频超过 4s 暂停合成，降到 2s 再放行（留足预取掩盖下一句合成启动）
     private let highWaterFrames: Int
@@ -179,6 +181,14 @@ final class AudioPlayer: @unchecked Sendable {
                     // 发声点：同一块只报一次（一个块的 PCM 常拆成多个 buffer）
                     if let seq, seq > self.lastReportedSeq {
                         self.lastReportedSeq = seq
+                        // **播放开始**——与末尾的 `播放结束` 成对的那一头。
+                        // 位置必须在**设备真读出数据**这一刻，而不是 write 入队那一刻：
+                        // 管道预取领先发声 2~4 秒，拿入队当开始会把整段时间算错。
+                        // prime 静音不带 seq，所以这里天然只认真正的第一块。
+                        if !self.reportedStartSinceEmpty {
+                            self.reportedStartSinceEmpty = true
+                            Log.info("播放开始")
+                        }
                         self.onBlockConsumed?(seq)
                     }
                 }
@@ -248,9 +258,10 @@ final class AudioPlayer: @unchecked Sendable {
         }
         if pendingCount == 0 {
             needsPrime = true   // 设备真正播空：下次写入重新唤醒（覆盖电源管理休眠）
+            reportedStartSinceEmpty = false   // 本轮播完，重置；下一轮出声时再报一次开始
             if let cont = drainedContinuation {
                 drainedContinuation = nil
-                Log.info(String(format: "播放收尾完成: 尾音=%.2fs", drainTailSec))
+                Log.info(String(format: "播放结束: 尾音=%.2fs", drainTailSec))
                 cont.resume()
             }
         }
@@ -275,7 +286,7 @@ final class AudioPlayer: @unchecked Sendable {
                 return drainSeq
             }
             guard let mySeq = pending else {
-                Log.info(String(format: "播放收尾完成: 尾音=%.2fs", tailSecAtEntry))
+                Log.info(String(format: "播放结束: 尾音=%.2fs", tailSecAtEntry))
                 continuation.resume()
                 return
             }

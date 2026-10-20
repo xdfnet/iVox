@@ -64,7 +64,14 @@ struct TTSCommand: AsyncParsableCommand {
                 await engine.warmup(voiceID: config.defaultVoice)
                 Log.info("誊清员: 模型就绪")
             } catch {
-                Log.error("誊清员: 模型加载失败: \(error)")
+                // 加载失败就退出，**不留在那儿假装活着**。
+                // 主进程判断「引擎能不能用」的唯一凭据是 socket 在不在；我占着 socket
+                // 却干不了活，那个信号就是假的 —— 于是主进程永远不重试、不降级，
+                // 每合成一块刷一条同款错误（2026-10-19 23:32 真实卡过一次：
+                // 「誊清员无响应」直到重启 daemon 才恢复）。退出去，主进程下一次
+                // 连接失败就会按退避重新拉我——退出本身就是那句话。
+                Log.error("誊清员: 模型加载失败，退出让主进程重拉: \(error)")
+                Darwin.exit(1)   // 不用裸 exit：ArgumentParser 有个同名静态成员会抢解析
             }
         }
 

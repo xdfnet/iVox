@@ -328,7 +328,7 @@ async function waitReady(log) {
   throw new Error("等待 engine=ready 超时");
 }
 
-// 等播放管道收尾：health 空闲 且 窗口内出现「播报收尾」（双条件）
+// 等播放管道收尾：health 空闲 且 窗口内出现「播报结束」（双条件）
 // 锚点原先是 `媒体控制: 恢复`——播报不再借还背景音乐后那条日志不再出现，
 // 改用 PlaybackQueue 显式打的收尾标记（语义更准：它只在"队列真收尾"时打）。
 async function waitSettled(log, sinceTs, { timeout = 60000 } = {}) {
@@ -336,11 +336,11 @@ async function waitSettled(log, sinceTs, { timeout = 60000 } = {}) {
   let settledAt = 0;
   while (nowMs() < deadline) {
     await log.poll(sinceTs);
-    // 取**最新**一条「播报收尾」，不是第一次见到的那条：锁死第一次会算出一个负间隔
+    // 取**最新**一条「播报结束」，不是第一次见到的那条：锁死第一次会算出一个负间隔
     //（用例先探测音频时长会留下一次早收尾，真收尾在几秒后，2026-10-17 `A-tail` 假红）。
     // 健康检查同时要求队列真空着，所以中途那次早收尾不会被误当成「已收尾」返回。
     {
-      const r = log.grep(/播报收尾: 队列已空/, sinceTs).at(-1);
+      const r = log.grep(/播报结束: 队列已空/, sinceTs).at(-1);
       if (r) settledAt = r.ts;
     }
     const h = await health();
@@ -703,7 +703,7 @@ const cases = [
       // 播报生命周期仍在：该 source 有新的合成开始 → 之后队列收尾。
       // （原先还断言「媒体控制: 暂停 → 恢复」这对音乐动作；播报不再借还背景音乐，那对已不存在。）
       const synthStart = ctx.log.grep(new RegExp(`TTS 合成开始 \\[${ctx.source}`), tSpeak)[0];
-      const settle = ctx.log.grep(/播报收尾: 队列已空/, tSpeak).at(-1);
+      const settle = ctx.log.grep(/播报结束: 队列已空/, tSpeak).at(-1);
       ctx.check(!!synthStart, "打断后没有新的合成开始（队列死了）");
       ctx.check(!!settle && (!synthStart || settle.ts >= synthStart.ts), "收尾早于合成开始（生命周期错乱）");
       // 模型通道也活着
@@ -742,8 +742,8 @@ const cases = [
       const tDone = dones.at(-1)?.ts ?? 0;
       const tSettled = settled?.settledAt ?? 0;
       const gap = (tSettled - tDone) / 1000;
-      const finish = ctx.log.grep(/播放收尾完成/, ctx.t0).at(-1);
-      ctx.check(!!finish, "缺「播放收尾完成」日志");
+      const finish = ctx.log.grep(/播放结束: 尾音=/, ctx.t0).at(-1);
+      ctx.check(!!finish, "缺「播放结束」日志");
       // 基准是日志里的**真实尾音**（收尾那一刻还排在播放器里的秒数），不是「单独再合成
       // 一遍测出的完整时长」。原判据假设「最后一块合成完时它还没开始播」，可管道本来就
       // 预取领先播放（`B-synthesis-leads-playback` 验的就是这个），合成完时那块早播了
@@ -1045,8 +1045,8 @@ async function probeAudio(log) {
   while (nowMs() < deadline) {
     await log.poll(t0);
     if (log.grep(/AudioEngine 启动失败/, t0).length || log.grep(/drain 超时强制返回/, t0).length) { bad = true; break; }
-    // 「播报收尾」出现 = 这条探测短句真的走完了设备（原先借「媒体控制: 恢复」判断，同因失效）
-    if (log.grep(/播报收尾: 队列已空/, t0).length) { settled = true; break; }
+    // 「播报结束」出现 = 这条探测短句真的走完了设备（原先借「媒体控制: 恢复」判断，同因失效）
+    if (log.grep(/播报结束: 队列已空/, t0).length) { settled = true; break; }
     await sleep(200);
   }
   // 等收尾，避免污染后续窗口
