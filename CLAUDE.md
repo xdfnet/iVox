@@ -67,7 +67,7 @@ integrations/          — 各外部 agent 的对接适配层（安装时由脚�
 
 docs/                  — README.md（索引 + 分类规则）· architecture.md · hook-chain.md · socket-api.md · native-bridge.md（微信链路实测依据）；playback/ 放播报五层：paper.md（比喻，**建立直觉但不裁决**）· purpose.md（取舍，**有分歧听它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研
 scripts/               — runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）
-                        · open_soda.py（**调试媒体控制用**：走 ESP32 真实 HID 打开汽水音乐，好观察音乐暂停/恢复/切歌是否奏效）
+                        · open_soda.py（**`open` 打开不了时的替补**：走 ESP32 真实 HID 敲 Cmd+Space 搜名字打开汽水音乐——调试媒体控制时用它开一个真实播放器）
 ```
 
 ## 架构
