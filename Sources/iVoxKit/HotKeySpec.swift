@@ -17,7 +17,6 @@ public enum HotKeyAction: String, CaseIterable, Sendable {
     case openTerminalCodex    // 开终端跑 codex
     case openTerminalPi       // 开终端跑 pi
     case copyPath             // 复制 Finder 选中路径
-    case paste                // 粘贴：把剪贴板内容贴到当前光标处
     case escInterrupt         // 闭嘴（全掀）
     case skipBucket           // 跳整摞
     case skipPage             // 读下一页（掀页）
@@ -147,7 +146,6 @@ public enum HotKeySpec {
         case .openTerminalCodex:  return chord(keyName: "x", modifiers: .option)    // Opt+X
         case .openTerminalPi:     return chord(keyName: "q", modifiers: .option)    // Opt+Q
         case .copyPath:           return chord(keyName: "c", modifiers: .option)    // Opt+C
-        case .paste:              return chord(keyName: "s", modifiers: .option)    // Opt+S
         case .escInterrupt:       return chord(keyName: "2", modifiers: .control)   // Ctrl+2
         case .skipBucket:         return chord(keyName: "1", modifiers: .control)   // Ctrl+1
         case .skipPage:           return chord(keyName: "esc", modifiers: .control) // Ctrl+Esc

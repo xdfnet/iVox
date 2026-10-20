@@ -263,18 +263,6 @@ actor MediaController {
         return AXIsProcessTrustedWithOptions(options)
     }
 
-    /// **向别的 app 投递合成按键**的授权——macOS 把它与「辅助功能」分成两项独立的 TCC 记录
-    /// （`kTCCServicePostEvent`）。缺了它：监听键盘正常、AX 查询正常，
-    /// 但 `CGEvent.post` 出去的按键**静默丢失**（不报错，目标 app 收不到）——
-    /// 2026-10-21 实测踩过：粘贴动作触发了，键却没送达。
-    /// 重签名（换了 cdhash）后这项最容易掉档，status 里单列出来才看得见。
-    static func checkPostEventPermission() -> Bool {
-        if #available(macOS 14.0, *) {
-            return CGPreflightPostEventAccess()
-        }
-        return true
-    }
-
     // MARK: - 权限包装器
 
     private static func withPermissionCheck<T>(

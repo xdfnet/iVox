@@ -20,7 +20,7 @@
 | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f5e3.svg"><br>**自动播报** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f39b.svg"><br>**媒体控制** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f399.svg"><br>**语音输入** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4d6.svg"><br>**划词翻译** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/26a1.svg"><br>**快速操作** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4ac.svg"><br>**微信桥接** |
 |---|---|---|---|---|---|
 | AI 回复边生成边念，跳过代码与噪音；可开屏幕字幕（贴底跟随声音）；手动打断三档：`Ctrl+Esc` 掀页 · `Ctrl+1` 掀摞 · `Ctrl+2` 全掀 | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 按住说话，松开识别粘贴，浮窗实时显示波形 | 选中即译，屏幕下方歌词式浮窗出译文并可朗读 | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制 Finder 选中路径 | 微信消息直通常驻 Claude，回复以文字转发回微信（**不念**） |
-| 装好即用 | 打开 `127.0.0.1:8888`，手机同局域网用 `http://<本机IP>:8888` | 右 ⌘ / 右 ⌃ | `Cmd+D` | `Opt+Z` · `Opt+A` · `Opt+X` · `Opt+Q` · `Opt+C` · `Opt+S` | `ivox wechat setup` |
+| 装好即用 | 打开 `127.0.0.1:8888`，手机同局域网用 `http://<本机IP>:8888` | 右 ⌘ / 右 ⌃ | `Cmd+D` | `Opt+Z` · `Opt+A` · `Opt+X` · `Opt+Q` · `Opt+C` | `ivox wechat setup` |
 
 ---
 
@@ -166,7 +166,6 @@ voice = "rightcmd"
 | `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
 | `openTerminalPi` | `opt+q` | 开终端跑 `pi` |
 | `copyPath` | `opt+c` | 复制 Finder 选中路径 |
-| `paste` | `opt+s` | 粘贴：把剪贴板贴到当前光标（配 `opt+c` 用，一步到位） |
 | `escInterrupt` | `ctrl+2` | 闭嘴（全掀） |
 | `skipBucket` | `ctrl+1` | 跳整摞 |
 | `skipPage` | `ctrl+esc` | 读下一页（掀页） |
