@@ -74,7 +74,22 @@ install_voices() {
   done
 }
 
+# 签名：**稳定身份优先**。
+#
+# 为什么：macOS 的 TCC（麦克风/辅助功能/输入监控）认的是「签名要求」。
+# ad-hoc 签名（-s -）的要求里含 cdhash（= 二进制内容哈希）——每次重编译内容就变、
+# 要求就变，旧的授权自动作废，于是每次部署都得手动重新勾一遍。
+# 用一张固定的代码签名证书签，要求变成「这张证书的指纹」，指纹不变 → 权限跨版本保留。
+# 设置 IVOX_SIGN_IDENTITY="证书名" 即启用；没设或签不了就回落 ad-hoc。
 sign_bin() {
+  local identity="${IVOX_SIGN_IDENTITY:-}"
+  if [[ -n "${identity}" ]]; then
+    if codesign --force --sign "${identity}" "${LAUNCHER}" 2>/dev/null; then
+      echo "✓  签名完成（身份: ${identity}）"
+      return
+    fi
+    echo "⚠️  用身份「${identity}」签名失败，回落 ad-hoc"
+  fi
   if codesign --force --sign - "${LAUNCHER}" 2>/dev/null; then
     echo "✓  ad-hoc 签名完成"
   else

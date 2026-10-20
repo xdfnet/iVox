@@ -67,7 +67,9 @@ struct InitConfigCommand: ParsableCommand {
         let target = AppPaths.configDir + "/runtime-files.md"
         try FileManager.default.createDirectory(
             atPath: AppPaths.configDir, withIntermediateDirectories: true, attributes: nil)
-        try FileManager.default.copyItem(at: source, to: URL(fileURLWithPath: target))
+        // 覆盖写（不是 copyItem——目标已存在会直接报错，而说明是要刷新的）
+        let data = try Data(contentsOf: source)
+        try data.write(to: URL(fileURLWithPath: target), options: .atomic)
         print("✓  已放好家当说明: \(target)")
     }
 
