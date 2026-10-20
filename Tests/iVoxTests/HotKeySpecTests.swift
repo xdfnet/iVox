@@ -90,7 +90,7 @@ final class HotKeySpecTests: XCTestCase {
         XCTAssertEqual(HotKeySpec.defaultChord(for: .openTerminalCodex).display, "opt+x")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .openTerminalPi).display, "opt+q")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .copyPath).display, "opt+c")
-        XCTAssertEqual(HotKeySpec.defaultChord(for: .paste).display, "opt+p")
+        XCTAssertEqual(HotKeySpec.defaultChord(for: .paste).display, "opt+s")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .escInterrupt).display, "ctrl+2")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .skipBucket).display, "ctrl+1")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .skipPage).display, "ctrl+esc")

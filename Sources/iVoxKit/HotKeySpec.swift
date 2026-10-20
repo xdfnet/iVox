@@ -147,7 +147,7 @@ public enum HotKeySpec {
         case .openTerminalCodex:  return chord(keyName: "x", modifiers: .option)    // Opt+X
         case .openTerminalPi:     return chord(keyName: "q", modifiers: .option)    // Opt+Q
         case .copyPath:           return chord(keyName: "c", modifiers: .option)    // Opt+C
-        case .paste:              return chord(keyName: "p", modifiers: .option)    // Opt+P
+        case .paste:              return chord(keyName: "s", modifiers: .option)    // Opt+S
         case .escInterrupt:       return chord(keyName: "2", modifiers: .control)   // Ctrl+2
         case .skipBucket:         return chord(keyName: "1", modifiers: .control)   // Ctrl+1
         case .skipPage:           return chord(keyName: "esc", modifiers: .control) // Ctrl+Esc
