@@ -22,6 +22,14 @@
   - `MediaController.config`：存着不读的属性连同 init 参数一起去掉。
   - `Config.configBaseDir`：赋值了从没被读过。
 
+- **语音键默认只要右⌘** — 飞哥「`voice = "rightcmd"`，只要这个」。默认语音键从
+  「右⌘ 或右⌃」改成**只要右⌘**（`VoiceKeySpec.default`），模板与用户配置同步；
+  配置里仍可写 `rightctrl` / `rightcmd+rightctrl` / `none`。
+
+- **`mediaControl` 挪进代码内配置** — 飞哥裁决。Web 控制台的开关与端口是**产品的一部分**
+  （一直在 8888），不是「你常改的」——外部配置里不再有 `mediaControl` 段，
+  写了会被忽略并被配置审计点名。`MediaControlConfig.default` 是唯一真源。
+
 - **默认音色并进 `sourceVoices`** — 飞哥「`defaultVoice` 和 `sourceVoices` 能在一个里吗」。
   现在只有 `sourceVoices` 一段，其中 **`default` 键就是默认音色**（没有来源时用它），
   顶层不再单设 `defaultVoice` 字段——一处说清，别两处各写一遍。

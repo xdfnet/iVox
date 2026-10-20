@@ -34,31 +34,29 @@ public struct TTSConfig: Codable, Sendable {
 
 }
 
-/// 媒体控制/Web UI 的配置。
+/// 媒体控制（Web 控制台）的配置：**代码内配置**，不进外部配置。
 ///
-/// 这里**没有** `enabled` 总开关：原先有，但没有任何代码读它（`MediaController` 存了配置
-/// 也没用），写 true/false 都一样——是个骗人的死字段，2026-10-21 删掉。
+/// 端口与开关是产品的一部分（Web 控制台一直在 8888），不是「你常改的」——
+/// 2026-10-21 飞哥裁决从外部配置挪进代码。外部配置里再写 `mediaControl` 段会被忽略，
+/// 并被配置审计点名（写了不生效）。
 public struct MediaControlConfig: Codable, Sendable {
-    public var httpServerEnabled: Bool?
-    public var httpServerPort: Int?
+    /// 是否开 Web 控制台
+    public var httpServerEnabled: Bool
+    /// Web 控制台端口
+    public var httpServerPort: Int
 
-    public init(httpServerEnabled: Bool? = nil, httpServerPort: Int? = nil) {
+    public init(httpServerEnabled: Bool = true, httpServerPort: Int = 8888) {
         self.httpServerEnabled = httpServerEnabled
         self.httpServerPort = httpServerPort
     }
 
-    public var resolvedHTTPServerEnabled: Bool { httpServerEnabled ?? true }
-    public var resolvedHTTPServerPort: Int { httpServerPort ?? 8888 }
-
+    /// 生效值：代码内配置就是它自己
     public static let `default` = MediaControlConfig()
-    /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
-    public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case httpServerEnabled
         case httpServerPort
     }
-
 }
 
 public struct PlaybackConfig: Codable, Sendable {
@@ -214,7 +212,6 @@ public enum VoiceSource {
 }
 
 public struct Config: Codable, Sendable {
-    public var mediaControl: MediaControlConfig? = nil
     public var playback: PlaybackConfig? = nil
     /// 来源 → 音色 id 的映射。**`"default"` 键就是默认音色**（没有来源时用它），
     /// 所以不再单设一个 `defaultVoice` 字段——一处说清，别两处各写一遍。
@@ -253,7 +250,6 @@ public struct Config: Codable, Sendable {
 
     /// 合成参数是**代码内配置**（`TTSConfig.default`），外部配置不提供。
     public var resolvedTTS: TTSConfig { .default }
-    public var resolvedMediaControl: MediaControlConfig { mediaControl ?? .default }
     public var resolvedPlayback: PlaybackConfig { playback ?? .default }
     public var resolvedTranslation: TranslationConfig { translation ?? .default }
 
@@ -262,7 +258,6 @@ public struct Config: Codable, Sendable {
         case speechInput
         case translation
         case playback
-        case mediaControl
         case sourceVoices
         case wechat
         case voices

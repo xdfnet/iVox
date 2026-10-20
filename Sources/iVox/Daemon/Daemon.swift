@@ -106,7 +106,7 @@ actor Daemon {
         try await server.start(path: socketPath, handler: handler)
 
         Log.info("iVox 已启动，监听 \(socketPath)")
-        if config.resolvedMediaControl.resolvedHTTPServerEnabled {
+        if MediaControlConfig.default.httpServerEnabled {
             startMediaHTTPServer()
         }
         startModelLoading()
@@ -159,9 +159,8 @@ actor Daemon {
             wechatHealth = "error:长轮询未运行"
         }
 
-        let mc = config.resolvedMediaControl
         let webUI: String
-        if !mc.resolvedHTTPServerEnabled {
+        if !MediaControlConfig.default.httpServerEnabled {
             webUI = "off"
         } else if mediaHTTPServer?.isRunning == true {
             webUI = "ok"
@@ -332,7 +331,7 @@ actor Daemon {
     }
 
     private func startMediaHTTPServer() {
-        let port = UInt16(config.resolvedMediaControl.resolvedHTTPServerPort)
+        let port = UInt16(MediaControlConfig.default.httpServerPort)
         let httpServer = MediaHTTPServer(port: port) { [weak self] in
             await self?.makeHealthSnapshot()
         }

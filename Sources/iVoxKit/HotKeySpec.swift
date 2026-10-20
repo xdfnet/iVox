@@ -71,7 +71,9 @@ public struct VoiceKeySpec: Sendable, Equatable {
         self.rightControl = rightControl
     }
 
-    public static let `default` = VoiceKeySpec(rightCommand: true, rightControl: true)
+    /// 默认语音键：**只要右⌘**（2026-10-21 飞哥裁决，右⌃ 不再作默认）。
+    /// 配置里可改成 `rightctrl` / `rightcmd+rightctrl` / `none`。
+    public static let `default` = VoiceKeySpec(rightCommand: true, rightControl: false)
 
     /// 一个都不启用时，语音层等于关掉。
     public var isEmpty: Bool { !rightCommand && !rightControl }

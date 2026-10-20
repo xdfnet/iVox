@@ -31,7 +31,7 @@ copyPath = "opt+c"             # 复制 Finder 里选中的路径
 escInterrupt = "ctrl+2"        # 闭嘴（全掀：掐断当前播报 + 丢弃全部待播）
 skipBucket = "ctrl+1"          # 跳整摞（掐断 + 丢弃这一摞的全部内容）
 skipPage = "ctrl+esc"          # 读下一页（掐断 + 掀掉当前页剩余的块）
-voice = "rightcmd+rightctrl"   # 语音输入：按住右⌘ 或右⌃ 说话
+voice = "rightcmd"            # 语音输入：按住右⌘ 说话（可改 rightctrl / rightcmd+rightctrl / none）
 
 # ── 语音输入 ───────────────────────────────────────────
 [speechInput]
@@ -56,11 +56,6 @@ proxyURL = ""                  # 兜底代理（如 http://192.168.100.6:10808�
 # ── 播报 ───────────────────────────────────────────────
 [playback]
 captions = false               # 是否显示播报字幕
-
-# ── 媒体控制（Web 控制台）────────────────────────────
-[mediaControl]
-httpServerEnabled = true       # 是否开 Web 控制台
-httpServerPort = 8888          # 端口
 
 # ── 音色 ───────────────────────────────────────────────
 # default = 没有指定来源时用哪个音色；下面几行是「按接入方分别选音色」。

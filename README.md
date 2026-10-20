@@ -24,12 +24,12 @@
 
 ---
 
-**手感上的几处讲究**（都不需要你操作，只是别以为是卡了）：按住右⌘/右⌃ 不足 0.15 秒就松手会被当作误触
+**手感上的几处讲究**（都不需要你操作，只是别以为是卡了）：按住右⌘ 不足 0.15 秒就松手会被当作误触
 忽略掉；麦克风没插时按右⌘，播报不中断、音乐不停，只有 `daemon.log` 里留一句原因（它会写清是没插设备
 还是没给授权）；Cmd+D 连按是「换了个选区再译一次」而非丢弃，所以翻译请求会等浮窗稳 0.2 秒才发——误触最多
 闪一个空窗，不会白花一次请求；同一段文字反复译只发一次请求。
 
-播报**不打断你在听的背景音乐**——只有你按住右⌘/右⌃ 说话时，音乐才让开给麦克风（录音需要安静）。一条命令安装，用 `ivox on/off` 控制启停（LaunchAgent 托管：登录自启 + 崩溃自动重启）。
+播报**不打断你在听的背景音乐**——只有你按住右⌘ 说话时，音乐才让开给麦克风（录音需要安静）。一条命令安装，用 `ivox on/off` 控制启停（LaunchAgent 托管：登录自启 + 崩溃自动重启）。
 
 ## 安装
 
@@ -75,7 +75,7 @@ ivox wechat setup              # 扫码登录微信机器人的 ilink bot
 ivox wechat status             # 查看配置状态
 ```
 
-音色匹配：`--voice` 指定 > `sourceVoices` 映射 > `defaultVoice`
+音色匹配：`--voice` 指定 > `sourceVoices` 映射 > `sourceVoices.default`
 
 | 音色 | 说明 |
 |------|------|
@@ -133,7 +133,6 @@ translate = "cmd+d"     # 我常用 cmd+shift+d，改完跑 ivox restart 生效
 | `translation.provider` | 划词翻译服务：`google`（默认，免配置）/ `openai`（OpenAI 兼容） |
 | `translation.speechEnabled` | 划词翻译后是否朗读译文 |
 | `translation.proxyURL` | 直连不通时的兜底代理，如 `http://192.168.100.6:10808`（只在直连失败后才用） |
-| `mediaControl.httpServerEnabled` | Web UI（端口 8888） |
 | `hotkeys` | 热键（键位写法见下）；首次安装会写全量默认键位 |
 | `wechat.token` / `wechat.allowFrom` | 微信 ilink bot token / 允许发消息的那个用户 |
 | `sourceVoices` | 按接入方分别选音色；其中 `default` 键就是**默认音色**（没有来源时用它） |
@@ -170,7 +169,7 @@ voice = "rightcmd"
 | `escInterrupt` | `ctrl+2` | 闭嘴（全掀） |
 | `skipBucket` | `ctrl+1` | 跳整摞 |
 | `skipPage` | `ctrl+esc` | 读下一页（掀页） |
-| `voice` | 右 ⌘ / 右 ⌃ | 长按说话；可写 `rightcmd` / `rightctrl` / `rightcmd+rightctrl` / `none` |
+| `voice` | 右 ⌘ | 长按说话；可写 `rightcmd`（默认）/ `rightctrl` / `rightcmd+rightctrl` / `none` |
 
 写法：修饰键 `cmd` `ctrl` `opt` `shift`（也认 `command` `control` `option` `alt`），用 `+` 连主键；
 主键可用 `a-z`、`0-9`、`esc`、`space`、`tab`、`return`、`backspace`、`delete`、`f1`-`f12`、方向键。

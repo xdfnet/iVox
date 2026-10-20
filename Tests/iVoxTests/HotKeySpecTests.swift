@@ -70,7 +70,10 @@ final class HotKeySpecTests: XCTestCase {
                        VoiceKeySpec(rightCommand: false, rightControl: true))
         XCTAssertEqual(try HotKeySpec.parseVoice("rightcmd+rightctrl"),
                        VoiceKeySpec(rightCommand: true, rightControl: true))
-        XCTAssertEqual(try HotKeySpec.parseVoice("both"), VoiceKeySpec.default)
+        // "both" = 两个键都开；默认只要右⌘
+        XCTAssertEqual(try HotKeySpec.parseVoice("both"),
+                       VoiceKeySpec(rightCommand: true, rightControl: true))
+        XCTAssertEqual(VoiceKeySpec.default, VoiceKeySpec(rightCommand: true, rightControl: false))
     }
 
     func testRejectsUnknownVoiceSpec() {

@@ -35,7 +35,6 @@ public enum ConfigAudit {
         "speechInput": SpeechInputConfig.CodingKeys.allCases.map(\.stringValue),
         "translation": TranslationConfig.CodingKeys.allCases.map(\.stringValue),
         "playback": PlaybackConfig.CodingKeys.allCases.map(\.stringValue),
-        "mediaControl": MediaControlConfig.CodingKeys.allCases.map(\.stringValue),
         "sourceVoices": ["default"],
         "wechat": WeChatConfig.CodingKeys.allCases.map(\.stringValue),
         "voices": VoiceInfo.CodingKeys.allCases.map(\.stringValue),
