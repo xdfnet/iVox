@@ -156,7 +156,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 `Sources/iVox/MediaControl/MediaController.swift`
 
 - **本地直接控制**：`MRMediaRemoteSendCommand`（播放 / 暂停 / 切歌）与 `CGEvent`（音量 / 静音 / 方向键 / 锁屏）
-- **只给麦克风让路**：语音输入按下 `pause()`、松手 `resume()`（录音要干净，音乐会串进麦克风）。**播报不再经由它**——播报不碰背景音乐
+- **只给麦克风让路**：语音输入按下 `pause()`、松手 `resume()`（录音要干净，音乐会串进麦克风）。**播报不经由它**——播报不改音乐的播放状态（播报期间压汽水音乐音量走 `SodaVolumeDucker`，改的是数值不是状态）
 - 不需要媒体控制时可设置 `mediaControl.enabled = false`
 - 只有 play/pause/next/prev 免权限；音量 / 静音 / 方向键 / 锁屏要「设备控制与数据访问」（`MediaHTTPServer` 对这几个动作会做权限校验）
 

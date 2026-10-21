@@ -54,7 +54,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
 | 划词翻译 | `Sources/iVox/Translation/` | Translation |
 | 快速操作 | `Sources/iVox/QuickActions/` | QuickActions |
 | 微信桥接 | `Sources/iVox/WeChat/` | WeChatPlatform、ClaudeAskService |
-| 媒体控制 | `Sources/iVox/MediaControl/` | MediaHTTPServer、MediaController |
+| 媒体控制 | `Sources/iVox/MediaControl/` | MediaHTTPServer、MediaController、SodaVolumeDucker |
 | （基础设施） | `HotKey/` `Network/` `Daemon/` `Commands/` | GlobalKeyTap、SocketServer、Daemon |
 
 六个能力域**彼此平级**——运行时互相协作（语音输入会打断播报并给麦克风让出背景音乐、划词翻译借播报念译文），但代码上无主从，各占一个目录。基础设施跨域共用，不归任何能力域。
@@ -218,9 +218,20 @@ Daemon (actor)
 
 - `MRMediaRemoteSendCommand` 系统框架直接控制媒体播放
 - 播放 / 暂停 / 切歌走 `MRMediaRemoteSendCommand`（免权限）；音量 / 静音 / 方向键 / 锁屏走 `CGEvent`，要「设备控制与数据访问」
-- **只给麦克风让路**（外加 Web 控制台的手动控制）：录音要干净、背景音乐会串进麦克风干扰识别，所以录的时候让它停；说完则继续 —— 它不是"控制你的播放器"。**播报不再经由它**（播报不碰背景音乐）。只认抖音 / 汽水音乐两个 App（`AudioAppRegistry`），其它播放器一概不碰；`MediaController` 是 `actor`，记着"这次暂停是我们发的"，恢复只对自己发过的暂停生效
+- **只给麦克风让路**（外加 Web 控制台的手动控制）：录音要干净、背景音乐会串进麦克风干扰识别，所以录的时候让它停；说完则继续 —— 它不是"控制你的播放器"。**播报不经由它**（播报不改音乐的播放状态；播报期间改汽水音乐音量的是另一条路，见 `SodaVolumeDucker`）。只认抖音 / 汽水音乐两个 App（`AudioAppRegistry`），其它播放器一概不碰；`MediaController` 是 `actor`，记着"这次暂停是我们发的"，恢复只对自己发过的暂停生效
 - 语义是**「说完继续」，不是「恢复原状」**：你若本来就把音乐暂停着，录音结束会**把它放起来** —— 这是设计意图（"让路"预设了"对方本来在走"），不是缺陷
 - 曾想把判据做得更"精确"（暂停前先查"是否真有媒体在播"）：MediaRemote 那条是**回调式私有 API**，在 Swift 6 下连踩两坑（`@convention(block)` 被判 sending → 区域隔离编译错；绕开后闭包逃逸 → 运行期崩、daemon 崩循环），已撤。也考虑过用"**静音**代替暂停"—— 不成立：系统音量是全局的，会把 iVox 自己的播报一起静掉（macOS 没有按 App 调音量的公开接口）
+
+### SodaVolumeDucker — 播报时给汽水音乐让路
+
+`Sources/iVox/MediaControl/SodaVolumeDucker.swift`
+
+- **播报开始 → 汽水音乐降 5 格，播报结束 → 升 5 格**，每格间隔 500ms（汽水音乐反应慢，再密它跟不上）
+- **走 ESP32-S3 的真 HID**（`POST http://192.168.100.3/key`）：汽水音乐**丢弃 CGEvent 合成键**（实测），只有真硬件事件才被它当用户操作。设备接口 token 读 esp32-hid-lab 仓里那一份（就是烧进板子里的同一个值）
+- **改数值、不切播放状态**——所以不会重演旧「借还背景音乐」的抖动（借了还、还了借，状态来回切）
+- **相对调节，不读当前格数**：汽水音乐那 20 格是**应用内**音量（不是系统输出音量），本机读不到。音量本来就低时会触底，播完升回去不等于原值——已知取舍
+- 只在汽水音乐**正在运行**时动手：这些键会同时送到前台 App，它没开时按下去只会误伤当前窗口
+- 播报侧只发两个时刻（`PlaybackSignal.started` / `.ended`），按键在后台发，**不占播报主流程**
 
 ### SpeechInput — 语音输入
 

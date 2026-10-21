@@ -4,5 +4,15 @@
 <dict>
     <key>NSMicrophoneUsageDescription</key>
     <string>iVox 语音助手需要访问麦克风，用于按住 ⌘ 键时的语音输入。</string>
+    <key>NSLocalNetworkUsageDescription</key>
+    <string>iVox 需要访问局域网里的 ESP32 键鼠注入器，用于在播报时调节汽水音乐音量。</string>
+    <!-- 少了这两条，请求局域网设备（http://192.168.100.3）会被系统拦下来，
+         报的是一句误导人的「网络似乎已离线」（-1009），不是 ATS 自己的 -1022。
+         NSAllowsLocalNetworking 放开「局域网内明文 HTTP」，不动全局的明文策略。 -->
+    <key>NSAppTransportSecurity</key>
+    <dict>
+        <key>NSAllowsLocalNetworking</key>
+        <true/>
+    </dict>
 </dict>
 </plist>

@@ -112,6 +112,7 @@ actor Daemon {
         startModelLoading()
         await setUpHotKeys()
         await setUpCaption()
+        await setUpSodaVolume()
 
         // 启动微信轮询
         if let wechat {
@@ -328,6 +329,16 @@ actor Daemon {
             Task { @MainActor in panel.update(text) }
         }
         Log.info("播报字幕: 已开启")
+    }
+
+    /// 播报期间给汽水音乐让路：播报开始降几格音量、播完升回去。
+    /// 队列只管发「要开始播了 / 播完了」两个时刻，具体怎么让是这里的事（见 `SodaVolumeDucker`）。
+    private func setUpSodaVolume() async {
+        let ducker = SodaVolumeDucker()
+        await queue.setSignalSink { signal in
+            Task { await ducker.handle(signal) }
+        }
+        Log.info("汽水音乐音量: 已接上（播报时降音量，播完升回）")
     }
 
     private func startMediaHTTPServer() {

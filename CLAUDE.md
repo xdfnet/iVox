@@ -37,13 +37,13 @@ Sources/iVox/          — 主程序 target
   EntryPoint.swift     — @main, ArgumentParser 子命令
 
   ── 六个能力域（目录与 README 功能表、ivox status 一一对应）──
-  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（播报字幕，config 可开关）
+  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（播报字幕，config 可开关）+ PlaybackSignal（播报起落信号，给「给背景让路」用）
     TTS/               — 合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
   SpeechInput/         — 语音输入：右⌘ 录音 + ASR + 浮窗（事件由 HotKey 层送来）+ ClaudeAskService（ASR 出文后送问 Claude）
   Translation/         — 划词翻译（Cmd+D）：复制 → 翻译 → 浮窗 + 朗读
   QuickActions/        — 快速操作：Finder/终端快捷（Opt+Z/A/Q/X/C）
   WeChat/              — 微信桥接：ilink HTTP 客户端 + 长轮询平台
-  MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI + HTTPResponseHandler）+ MediaController + AudioAppRegistry + HealthSnapshot
+  MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI + HTTPResponseHandler）+ MediaController + AudioAppRegistry + HealthSnapshot + SodaVolumeDucker（播报时给汽水音乐压音量）
 
   ── 基础设施（跨能力域）──
   HotKey/              — GlobalKeyTap：键盘事件层（独占 tap，按归属路由给上面几家）
@@ -115,7 +115,7 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
 
 - **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者：右⌘（默认；配置可改成右⌃ 或两者）→ `SpeechInputService`，`Cmd+D` → `TranslationService`，`Opt+Z/A/Q/X/C` → `QuickActionsService`，`Ctrl+2`/`Ctrl+1`/`Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掐+全掀 / 掐+掀摞 / 掐+掀页）（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `iVoxKit/HotKeySpec.swift` 的 `HotKeyAction` 加一个动作 + `defaultChord` 给默认键位 + 在 `setUpHotKeys` 加一个消费者**（`GlobalKeyTap` 里不再有键位表，它只消费）。**键位可在配置 `hotkeys` 段按动作名改**（TOML 写法 `translate = "cmd+shift+d"`；首次安装会写全量默认键位）；⚠️ 默认键位有**两份副本**：代码兜底 `HotKeySpec.defaultChord` 与模板 `iVoxKit/ConfigTemplate.swift`（安装脚本不再内嵌第三份，改默认要同步这两处）；配错时启动日志会写明（哪个动作、错在哪、退回哪个默认），生效的键位逐行打「热键: 动作 = 键位」。改完跑 `ivox restart`（只重启进程，不动登录自启开关）。 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Cmd+D 毫无反应"。
 - **防误触也在 tap 层判，一处判完**：① **同键冷却，按键分档**——`Cmd+D` 0.2s（它靠后写胜出连按，冷却只挡连击）、三个打断键 0.3s（翻页掀摞本就该能连按）、其余 1s；冷却中**仍然吃掉事件**只是不执行（漏给目标 app 更糟），走 `systemUptime`，只在 tap 线程读写。② **语音键（右⌘，默认只有它）有 150ms 长按阈值**——按下不足就松开判为误触，按下沿直接丢弃（很多 App 用右⌘，碰一下就打断播报+暂停音乐+开麦代价太大）。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」的第二句吃掉。
-- **右⌘ 语音：副作用发生在「真的在录」之后**——按下经阈值与授权检查后**先试录**，`record()` 成功了才 `cancelAll`（打断播报）→ `pause`（暂停音乐）→ 浮窗「聆听中…」+ Tink + 波形。**不做设备预检**：耳机类麦克风按需唤醒，预检「设备在不在」会误判、把本来能用的设备焊死；按下就试这一下、试活了算数。失败时播报不中断、音乐不停，只在日志写清原因（**授权层与设备层分开报**：TCC 状态 vs CoreAudio 的默认输入设备名，`AVAudioSession` 是 iOS 独有的、macOS 走 CoreAudio）。失败路径的 recorder 进**隔离区**延迟 1 秒释放——`record()` 返回 false 时 audio queue 的回调线程已经起来了，立刻析构会 `objc_loadWeak` 野指针（2026-10-19 实测 SIGSEGV）。**全项目借还背景音乐只此一家**：播报链路完全不碰音乐，只有说话时才借（按下 pause、松开 resume）。
+- **右⌘ 语音：副作用发生在「真的在录」之后**——按下经阈值与授权检查后**先试录**，`record()` 成功了才 `cancelAll`（打断播报）→ `pause`（暂停音乐）→ 浮窗「聆听中…」+ Tink + 波形。**不做设备预检**：耳机类麦克风按需唤醒，预检「设备在不在」会误判、把本来能用的设备焊死；按下就试这一下、试活了算数。失败时播报不中断、音乐不停，只在日志写清原因（**授权层与设备层分开报**：TCC 状态 vs CoreAudio 的默认输入设备名，`AVAudioSession` 是 iOS 独有的、macOS 走 CoreAudio）。失败路径的 recorder 进**隔离区**延迟 1 秒释放——`record()` 返回 false 时 audio queue 的回调线程已经起来了，立刻析构会 `objc_loadWeak` 野指针（2026-10-19 实测 SIGSEGV）。**全项目借还背景音乐只此一家**：只有说话时借（按下 pause、松开 resume）。**播报链路不改音乐的播放状态**——它做的是另一码事：播报开始把汽水音乐音量降 5 格、播完升回（改数值不切状态，所以不会抖，见 `MediaControl/SodaVolumeDucker.swift`）。
 
 - **合成引擎有两个实现，装点在 `Daemon.init`**：`any TTSProviding` 默认是 `TSPRemote`（跨进程到
   誊清员 `ivox tts --serve`）；设环境变量 `IVOX_TTS=local` 退回进程内 `TTSEngine`，仅供调试期对照。

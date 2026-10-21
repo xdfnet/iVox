@@ -3,7 +3,9 @@ import iVoxKit
 
 // 播报播放层：只管「怎么把字念出来」——连续播放管道（合成/播放两条并发 task + 有界 PCM 流）、
 // 掐（断在播）与字幕。谁在说话、说到哪、哪层被作废全归 `PlaybackSession`（身份层）。
-// **不碰背景音乐**——暂停/恢复只归语音输入（录音时音乐会串进麦克风、干扰识别）。
+// **不碰音乐的播放状态**——暂停/恢复只归语音输入（录音时音乐会串进麦克风、干扰识别）；
+// 播报期间给汽水音乐压音量是另一码事：那是改数值、不切状态，由 `PlaybackSignal`
+// 把「要开始播了 / 播完了」两个时刻告诉外面（见 `SodaVolumeDucker`）。
 // 播报四层文档见 docs/playback/：purpose（目的/取舍）→ sources（接入方）→ requirements（需求）→ queue（实现）。
 
 /// 一条待播报的文本。身份字段（摞/页）原样带给 Session，本层不做判断。
@@ -111,6 +113,9 @@ actor PlaybackQueue {
     /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播该句文本，收起广播 nil。
     /// 在**本 actor 上**被调用，实现方自己切回主线程再碰 UI。
     private var onCaption: (@Sendable (String?) -> Void)?
+    /// 播报起落信号接收端：起管道时发 `.started`、这一轮真的结束（队列空 + 宽限 + 静默）时发 `.ended`。
+    /// 播报之外的「给背景让路」靠它（见 `SodaVolumeDucker`）——播放层自己不碰音乐。
+    private var onSignal: (@Sendable (PlaybackSignal) -> Void)?
     private let player: AudioPlayer
     private let engine: any TTSProviding
     private let media: MediaController
@@ -148,6 +153,11 @@ actor PlaybackQueue {
     /// 合成领先播放一两句，从那儿取会让字幕比声音早。
     func setCaptionSink(_ sink: (@Sendable (String?) -> Void)?) {
         onCaption = sink
+    }
+
+    /// 注入播报起落信号接收端（`nil` = 不关心）。形状与 `setCaptionSink` 一致。
+    func setSignalSink(_ sink: (@Sendable (PlaybackSignal) -> Void)?) {
+        onSignal = sink
     }
 
     /// 音频侧报「这句开始响」→ 转发给字幕（已在本 actor 上）。
@@ -391,6 +401,7 @@ actor PlaybackQueue {
             await session.retireSpentSegments(afterSilence: true)
             invalidateIdleGrace()
             onCaption?(nil)
+            onSignal?(.ended)
             Log.info("播报结束: 队列已空，字幕收起")
         }
     }
@@ -486,6 +497,11 @@ actor PlaybackQueue {
         let seq = pipelineSeq
         currentTaskSeq = seq
         invalidateIdleGrace()   // 有活要播了，宽限不必再等
+        // 「要开始播了」这一刻：给背景让路的人（汽水音乐压音量）从这里知道。
+        // 打在**起管道**而不是「设备真的出声」——合成领先播放一两秒，早动手，
+        // 第一句出来时背景已经压下去了。打断后重起管道也会再发一次，
+        // 接收端自己按「已让过路就别重复让」处理（见 SodaVolumeDucker）。
+        onSignal?(.started)
         currentTask = Task { await processNext(seq: seq) }
     }
 
