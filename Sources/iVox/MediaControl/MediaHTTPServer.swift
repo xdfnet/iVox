@@ -131,7 +131,7 @@ final class MediaHTTPServer: @unchecked Sendable {
         let target = path.split(separator: "?", maxSplits: 1).first.map(String.init) ?? path
         if target == "/health" {
             await handleHealth(connection)
-        } else if path == "/" || path == "/index.html" {
+        } else if target == "/" || target == "/index.html" {
             HTTPResponseHandler.sendHTML(connection, Self.loadHTML())
         } else if path.hasPrefix("/api/") {
             handleAPI(path: path, connection: connection)
