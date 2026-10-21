@@ -459,49 +459,6 @@
         }
     </script>
 
-    <!-- 临时诊断：?debug=1 时显示，用来核对 iOS 安全区与居中几何 -->
-    <div id="dbg" style="display:none;position:fixed;left:0;right:0;top:0;z-index:999;
-         background:#000c;color:#0f0;font:11px/1.4 ui-monospace,monospace;padding:4px 6px;white-space:pre-wrap"></div>
-    <script>
-        // 顶部占位区：独占式 Web App（主屏幕图标启动）时，页面最上面那截是系统状态栏+刘海，
-        // 内容必须让开它。env(safe-area-inset-top) 在局域网 http 下拿不到真值，
-        // 所以按实测差值算：屏幕高 - 可视视口高 = 被系统占掉的那一截。
-        (function () {
-            const standalone = (navigator.standalone === true) ||
-                (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
-            if (!standalone) return;                 // Safari 里打开：状态栏本来就在地址栏外面
-            function layout() {
-                const vv = window.visualViewport;
-                const visible = vv ? vv.height : window.innerHeight;
-                const gap = Math.max(0, Math.round(window.screen.height - visible));
-                document.documentElement.style.height = window.screen.height + 'px';
-                document.body.style.setProperty('--gap-top', gap + 'px');
-                document.getElementById('statusGap').style.height = gap + 'px';
-            }
-            layout();
-            window.addEventListener('resize', layout);
-            window.addEventListener('orientationchange', () => setTimeout(layout, 200));
-        })();
-    </script>
-
-    <script>
-        if (location.search.indexOf('debug=1') >= 0) {
-            const probe = document.createElement('div');
-            probe.style.cssText = 'position:fixed;top:0;left:0;height:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);visibility:hidden';
-            document.body.appendChild(probe);
-            const cs = getComputedStyle(probe);
-            const b = document.body.getBoundingClientRect();
-            const c = document.querySelector('.container').getBoundingClientRect();
-            document.getElementById('dbg').style.display = 'block';
-            document.getElementById('dbg').textContent = [
-                'inner ' + innerWidth + 'x' + innerHeight + '  screen ' + screen.width + 'x' + screen.height + '  dpr ' + devicePixelRatio,
-                'env top=' + cs.paddingTop + ' bottom=' + cs.paddingBottom,
-                'body pad ' + getComputedStyle(document.body).paddingTop + '/' + getComputedStyle(document.body).paddingBottom + '  bodyH=' + b.height.toFixed(1),
-                'container top=' + c.top.toFixed(1) + ' h=' + c.height.toFixed(1) + '  (屏幕中心=' + (innerHeight / 2).toFixed(1) + ')',
-                'visualViewport ' + (visualViewport ? visualViewport.height.toFixed(1) + ' offY=' + visualViewport.offsetTop.toFixed(1) : 'n/a')
-            ].join('\n');
-        }
-    </script>
 </body>
 
 </html>
