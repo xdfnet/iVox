@@ -424,6 +424,28 @@
             t = setTimeout(() => el.className = e ? 'toast error' : 'toast', 2000);
         }
     </script>
+
+    <!-- 临时诊断：?debug=1 时显示，用来核对 iOS 安全区与居中几何 -->
+    <div id="dbg" style="display:none;position:fixed;left:0;right:0;top:0;z-index:999;
+         background:#000c;color:#0f0;font:11px/1.4 ui-monospace,monospace;padding:4px 6px;white-space:pre-wrap"></div>
+    <script>
+        if (location.search.indexOf('debug=1') >= 0) {
+            const probe = document.createElement('div');
+            probe.style.cssText = 'position:fixed;top:0;left:0;height:0;padding-top:env(safe-area-inset-top);padding-bottom:env(safe-area-inset-bottom);visibility:hidden';
+            document.body.appendChild(probe);
+            const cs = getComputedStyle(probe);
+            const b = document.body.getBoundingClientRect();
+            const c = document.querySelector('.container').getBoundingClientRect();
+            document.getElementById('dbg').style.display = 'block';
+            document.getElementById('dbg').textContent = [
+                'inner ' + innerWidth + 'x' + innerHeight + '  screen ' + screen.width + 'x' + screen.height + '  dpr ' + devicePixelRatio,
+                'env top=' + cs.paddingTop + ' bottom=' + cs.paddingBottom,
+                'body pad ' + getComputedStyle(document.body).paddingTop + '/' + getComputedStyle(document.body).paddingBottom + '  bodyH=' + b.height.toFixed(1),
+                'container top=' + c.top.toFixed(1) + ' h=' + c.height.toFixed(1) + '  (屏幕中心=' + (innerHeight / 2).toFixed(1) + ')',
+                'visualViewport ' + (visualViewport ? visualViewport.height.toFixed(1) + ' offY=' + visualViewport.offsetTop.toFixed(1) : 'n/a')
+            ].join('\n');
+        }
+    </script>
 </body>
 
 </html>
