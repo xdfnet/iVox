@@ -9,6 +9,9 @@
     <meta name="mobile-web-app-capable" content="yes">
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
     <meta name="apple-mobile-web-app-title" content="iVox Remote">
+    <!-- iOS 要 manifest + display:standalone 才进入全屏渲染模式，
+         否则安全区 env() 全部返回 0，页面被 letterbox 进安全区。 -->
+    <link rel="manifest" href="/assets/manifest.json">
     <meta name="theme-color" content="#000000">
     <title>iVox Remote</title>
     <style>
@@ -29,15 +32,24 @@
         }
 
         body {
-            position: absolute;
+            /* 必须用 fixed 而不是 absolute：absolute 的定位基准是 html，
+               而 html 的 height:100% 在 iOS 上只解析到「扣掉顶部状态栏」的可视高度，
+               页面铺不到屏幕底部 → env(safe-area-inset-bottom) 一直返回 0，
+               内容区少扣了底部手势条，整体就偏上。
+               fixed + inset:0 直接铺满整个视口（刘海区与手势条区都在里面），
+               两个 env 才是真值，剩下的区域再上下居中。 */
+            position: fixed;
             inset: 0;
             overscroll-behavior: none;
             margin: 0;
-            /* 顶部留出刘海区，内容在「扣掉刘海与底部手势条」之后的区域里上下居中。
-               max() 是兜底：万一 env() 在某些 iOS 版本上返回 0（表现为内容整体往上挤），
-               至少还留 44px，不会把控件顶到刘海底下。 */
-            padding-top: max(env(safe-area-inset-top), 44px);
-            padding-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
+            /* 底部留出 Home 指示条（iPhone X 之后固定 34pt，老设备没有）。
+               顶部**不留**：position:fixed 的定位基准是「可视视口」，
+               它本身就已经排除了状态栏与刘海（实测 iPhone 13 Pro：
+               screen 844 / visualViewport 797，差的 47px 就是刘海+状态栏），
+               再补一次就成了内容被往下推——那正是「整体往上挤」的真凶。
+               env() 优先：有真值就用真值，没有就按 34 兜底。 */
+            padding-bottom: max(env(safe-area-inset-bottom, 0px), 34px);
+            overflow-y: auto;
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
             background: transparent;
             color: #fff;
@@ -59,13 +71,13 @@
         .container {
             width: 100%;
             max-width: 480px;
-            padding: 24px 16px;
+            padding: 18px 16px;
             box-sizing: border-box;
             display: flex;
             flex-direction: column;
             align-items: center;
             justify-content: center;
-            gap: 34px;
+            gap: 22px;
         }
 
         /* ---------- 触控反馈：统一按压缩放，所有按压态一致 ---------- */
@@ -96,7 +108,7 @@
             width: 100%;
             max-width: 360px;
             height: 78px;
-            margin: 0 auto 14px;
+            margin: 0 auto 8px;
             border-radius: 39px;
             background: rgba(255, 255, 255, .07);
             box-shadow: inset 0 0 0 1px rgba(255, 255, 255, .1);

@@ -135,6 +135,9 @@ final class MediaHTTPServer: @unchecked Sendable {
             HTTPResponseHandler.sendHTML(connection, Self.loadHTML())
         } else if path.hasPrefix("/api/") {
             handleAPI(path: path, connection: connection)
+        } else if path == "/manifest.json" {
+            // manifest 要在站点根（浏览器按规范从根路径找），assets 那份是给 link 用的
+            HTTPResponseHandler.sendJSON(connection, Self.manifestJSON)
         } else if path.hasPrefix("/assets/") {
             Self.serveAsset(path: path, connection: connection)
         } else {
@@ -291,6 +294,20 @@ final class MediaHTTPServer: @unchecked Sendable {
         let ext = (filename as NSString).pathExtension
         HTTPResponseHandler.sendDataResponse(connection, code: 200, data: data, contentType: Self.contentType(for: ext))
     }
+
+    /// manifest：告诉 iOS「这是独立 App，用全屏渲染」。
+    /// 缺了它 Safari 会把页面 letterbox 进安全区，env(safe-area-inset-*) 全部返回 0。
+    nonisolated static let manifestJSON = """
+    {
+      "name": "iVox Remote",
+      "short_name": "iVox",
+      "start_url": "/",
+      "display": "standalone",
+      "orientation": "portrait",
+      "background_color": "#000000",
+      "theme_color": "#000000"
+    }
+    """
 
     /// 从 Bundle 查找资源
     /// SPM 路径: Bundle.module.resourceURL/Resources/assets/<filename>
