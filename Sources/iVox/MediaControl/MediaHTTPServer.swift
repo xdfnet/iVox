@@ -234,6 +234,8 @@ final class MediaHTTPServer: @unchecked Sendable {
                 return ("failed", "屏幕已锁定，无法通过软件唤醒")
             }
             return await lockScreenAction()
+        case "unlock":
+            return await unlockScreenAction()
         case "lock_status":
             return (MediaController.isScreenLocked() ? "locked" : "unlocked", nil)
         case "toggle_douyin":
@@ -251,8 +253,17 @@ final class MediaHTTPServer: @unchecked Sendable {
     }
 
     private static func lockScreenAction() async -> (String, String?) {
-        if case .success = await MediaController.lockScreen() { return ("lock_success", nil) }
-        return ("failed", "锁屏失败")
+        switch await ScreenControl.lock() {
+        case .success: return ("lock_success", nil)
+        case .failure(let error): return ("failed", error.errorDescription ?? "锁屏失败")
+        }
+    }
+
+    private static func unlockScreenAction() async -> (String, String?) {
+        switch await ScreenControl.unlock() {
+        case .success: return ("unlock_success", nil)
+        case .failure(let error): return ("failed", error.errorDescription ?? "解锁失败")
+        }
     }
 
     private static func toggleAppAction(_ name: String, display: String) async -> (String, String?) {

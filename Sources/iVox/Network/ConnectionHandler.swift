@@ -112,6 +112,10 @@ actor ConnectionHandler: SocketConnectionHandler {
             handleSkip(fd: fd, header: header)
         } else if header.contains("type:quick") {
             handleQuick(fd: fd, header: header)
+        } else if header.contains("type:lock") {
+            handleScreen(fd: fd, unlock: false)
+        } else if header.contains("type:unlock") {
+            handleScreen(fd: fd, unlock: true)
         } else {
             handleTTS(fd: fd, data: data)
         }
@@ -408,6 +412,26 @@ actor ConnectionHandler: SocketConnectionHandler {
             } catch {
                 Log.error("ASR 识别失败: \(error)")
             }
+        }
+    }
+
+    /// 锁屏 / 解锁（请求-响应）。
+    ///
+    /// **要回复**：这两件事是「开门」动作，失败必须让人知道——不像 skip/quick 那样
+    /// 打完就忘。回一行 JSON：`{"result":"ok"}` 或 `{"result":"failed","error":"…"}`。
+    private nonisolated func handleScreen(fd: Int32, unlock: Bool) {
+        Task {
+            defer { Darwin.close(fd) }
+            let result = unlock ? await ScreenControl.unlock() : await ScreenControl.lock()
+            let payload: [String: String]
+            switch result {
+            case .success:
+                payload = ["result": "ok"]
+            case .failure(let error):
+                payload = ["result": "failed", "error": error.errorDescription ?? "未知原因"]
+            }
+            guard let data = try? JSONSerialization.data(withJSONObject: payload) else { return }
+            _ = writeAll(data, to: fd)
         }
     }
 

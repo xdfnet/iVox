@@ -8,8 +8,8 @@ public struct DaemonStatus: Codable, Sendable {
     public var version: String
 
     /// 每项功能的健康结论：ok(正常) | off(未启用) | 以 "error:" 开头的异常原因
-    /// 六个能力域，彼此平级——它们之间有协作（语音输入会打断播报并独占麦克风、
-    /// 划词翻译借播报念译文…），但没有主从，所以这里也是六项并列。
+    /// 七个能力域，彼此平级——它们之间有协作（语音输入会打断播报并独占麦克风、
+    /// 划词翻译借播报念译文…），但没有主从，所以这里也是七项并列。
     public struct Features: Codable, Sendable {
         public var playback: String
         public var speechInput: String
@@ -17,14 +17,17 @@ public struct DaemonStatus: Codable, Sendable {
         public var quickActions: String
         public var wechat: String
         public var mediaControl: String
+        /// 屏幕锁（ivox lock / ivox unlock）：健康度即注入设备在不在线
+        public var screen: String
 
-        public init(playback: String = "off", speechInput: String, translation: String = "off", quickActions: String = "off", wechat: String, mediaControl: String) {
+        public init(playback: String = "off", speechInput: String, translation: String = "off", quickActions: String = "off", wechat: String, mediaControl: String, screen: String = "off") {
             self.playback = playback
             self.speechInput = speechInput
             self.translation = translation
             self.quickActions = quickActions
             self.wechat = wechat
             self.mediaControl = mediaControl
+            self.screen = screen
         }
     }
 

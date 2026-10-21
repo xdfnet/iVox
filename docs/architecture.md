@@ -55,9 +55,10 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
 | 快速操作 | `Sources/iVox/QuickActions/` | QuickActions |
 | 微信桥接 | `Sources/iVox/WeChat/` | WeChatPlatform、ClaudeAskService |
 | 媒体控制 | `Sources/iVox/MediaControl/` | MediaHTTPServer、MediaController、SodaVolumeDucker |
+| 屏幕锁 | `Sources/iVox/Screen/` | ScreenControl |
 | （基础设施） | `HotKey/` `Network/` `Daemon/` `Commands/` | GlobalKeyTap、SocketServer、Daemon |
 
-六个能力域**彼此平级**——运行时互相协作（语音输入会打断播报并给麦克风让出背景音乐、划词翻译借播报念译文），但代码上无主从，各占一个目录。基础设施跨域共用，不归任何能力域。
+七个能力域**彼此平级**——运行时互相协作（语音输入会打断播报并给麦克风让出背景音乐、划词翻译借播报念译文），但代码上无主从，各占一个目录。基础设施跨域共用，不归任何能力域。
 
 下面按子系统逐个说明。
 
@@ -233,6 +234,21 @@ Daemon (actor)
 - 只在汽水音乐**正在运行**时动手：这些键会同时送到前台 App，它没开时按下去只会误伤当前窗口
 - 播报侧只发两个时刻（`PlaybackSignal.started` / `.ended`），按键在后台发，**不占播报主流程**
 
+### ScreenControl — 锁屏 / 解锁
+
+`Sources/iVox/Screen/ScreenControl.swift`
+
+- **`ivox lock` / `ivox unlock`**：锁屏是 `Ctrl+Cmd+Q`；解锁是「按一下 Ctrl 唤醒 → 等 2 秒 → 输密码 → 等 500ms → 回车」
+- **走 HID 真键**（`HidInjector` → 常驻 ESP32-S3 注入器）：**macOS 锁屏后不把 CGEvent 合成键交给
+  loginwindow** —— 合成键能锁屏，**醒不来**。所以锁屏与解锁都发真硬件事件
+- 锁屏**只有这一个实现**：Web 控制台的锁屏按钮也走它（原来那条 CGEvent 路已删）
+- **覆盖范围**：只做「锁屏」这一种。**重启后的解锁不在范围内**——重启后要先进系统才有 daemon，
+  daemon 没起来就发不出解锁键。解锁还要求系统**没睡眠**（睡眠了进程被冻结）
+- 登录密码是 **AES-GCM 密文，写死在代码里**（`ScreenControl.swift`），运行时解开。
+  **安全边界**：密文与密钥都在二进制里 → 挡住的是「明文出现在源码/日志/命令行」，**挡不住逆向**。
+  另：密码以明文走局域网 HTTP 到板子（固件无 TLS），同一 WiFi 上抓到包的人能还原它
+- Web 控制台上是**一个滑块、两个方向**：右滑锁定、左滑解锁（滑块位置即锁屏状态）
+
 ### SpeechInput — 语音输入
 
 `Sources/iVox/SpeechInput/`
@@ -320,7 +336,7 @@ Daemon (actor)
 |------|------|
 | `Config.swift` | JSON 配置模型（TTS/ASR 路径、音色、媒体控制、播报字幕、微信、划词翻译等） |
 | `Logger.swift` | 日志工具，输出到 daemon.log（0600），5MB 轮转 |
-| `DaemonStatus.swift` | `{type:status}` 的返回体：六个能力域的健康度 + 权限 |
+| `DaemonStatus.swift` | `{type:status}` 的返回体：七个能力域的健康度 + 权限 |
 | `SocketClient.swift` | `AppPaths`（socket / 配置目录）+ socket 客户端 |
 | `TextCleaner.swift` | Markdown AST 过滤（跳过代码块）+ 行内噪音（URL/路径/哈希/UUID/JSON/ANSI/进度）+ emoji |
 | `TextSplitter.swift` | 切句（句末边界，合并到 ≤80 字） |

@@ -57,7 +57,6 @@ private enum MediaKey: Int32 {
     case playPause = 16, nextTrack = 17, prevTrack = 18
     case volumeUp = 0, volumeDown = 1, mute = 7
     case arrowUp = 126, arrowDown = 125
-    case lockScreen = 12
     case space = 49
 }
 
@@ -198,7 +197,6 @@ actor MediaController {
     static func arrowUp() async -> Result<Void, MediaControllerError> { await simulateArrowKey(.arrowUp) }
     static func arrowDown() async -> Result<Void, MediaControllerError> { await simulateArrowKey(.arrowDown) }
     static func pressSpace() async -> Result<Void, MediaControllerError> { await simulateArrowKey(.space) }
-    static func lockScreen() async -> Result<Void, MediaControllerError> { await simulateLockScreen() }
 
     // MARK: - 应用管理
 
@@ -306,21 +304,6 @@ actor MediaController {
             guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key.rawValue), keyDown: true),
                   let keyUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(key.rawValue), keyDown: false)
             else { return .failure(.eventCreationFailed) }
-            keyDown.post(tap: .cghidEventTap)
-            keyUp.post(tap: .cghidEventTap)
-            return .success(())
-        }
-    }
-
-    /// 模拟锁屏（Control+Command+Q）
-    private static func simulateLockScreen() async -> Result<Void, MediaControllerError> {
-        await withPermissionCheck {
-            let source = CGEventSource(stateID: .hidSystemState)
-            guard let keyDown = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(MediaKey.lockScreen.rawValue), keyDown: true),
-                  let keyUp = CGEvent(keyboardEventSource: source, virtualKey: CGKeyCode(MediaKey.lockScreen.rawValue), keyDown: false)
-            else { return .failure(.eventCreationFailed) }
-            keyDown.flags = [.maskControl, .maskCommand]
-            keyUp.flags = [.maskControl, .maskCommand]
             keyDown.post(tap: .cghidEventTap)
             keyUp.post(tap: .cghidEventTap)
             return .success(())

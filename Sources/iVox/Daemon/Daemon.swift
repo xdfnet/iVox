@@ -113,6 +113,8 @@ actor Daemon {
         await setUpHotKeys()
         await setUpCaption()
         await setUpSodaVolume()
+        // 探一次注入设备在不在：屏幕锁这条能力全靠它，不探就没法在 status 里说真话
+        Task { await HidInjector.shared.probe() }
 
         // 启动微信轮询
         if let wechat {
@@ -197,7 +199,8 @@ actor Daemon {
                 quickActions: quickActionsHealth,
                 wechat: wechatHealth,
                 // 媒体控制的入口就是 Web 服务，健康度即它
-                mediaControl: webUI
+                mediaControl: webUI,
+                screen: await ScreenControl.health()
             ),
             permissions: .init(
                 microphone: mic,

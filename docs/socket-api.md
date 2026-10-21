@@ -267,7 +267,32 @@ daemon 没在跑就**静默返回**（随手按的快捷键不该因为服务不
 > ⚠️ 这里的 `codex` 是**开终端跑 codex**（QuickActions 能力域），与播报链路无关；
 > codex 的**播报**链路 2026-10-19 已整条删除。
 
-### 7. CLI 工具
+### 7. 锁屏 / 解锁 — 走 HID 真键
+
+请求头，无 body，**有回复**（这两件事是「开门」动作，失败必须让人知道）：
+
+```
+{type:lock}\n      # 锁屏（Ctrl+Cmd+Q）
+{type:unlock}\n    # 解锁：唤醒屏幕 → 输密码 → 回车
+```
+
+回复一行 JSON：
+
+```json
+{"result":"ok"}
+{"result":"failed","error":"设备不可达（…）"}
+```
+
+**为什么必须走 HID 真键而不是合成键**：macOS 锁屏后**不把 CGEvent 合成键交给 loginwindow**——
+合成键能锁屏，**醒不来**。所以锁屏与解锁都发真硬件事件（常驻 ESP32-S3 注入设备，
+见 `HidInjector`）。
+
+**覆盖范围**：只做「锁屏」这一种。**重启后的解锁不在范围内**——重启后要先进系统才有
+daemon，daemon 没起来就发不出解锁键。解锁还要求系统**没睡眠**（睡眠了进程被冻结）。
+
+密码是 AES-GCM 密文，写死在 `ScreenControl.swift` 里，运行时解开。
+
+### 8. CLI 工具
 
 ```bash
 # TTS
@@ -288,6 +313,10 @@ ivox skip --all                            # 全掀（Ctrl+2）
 # 快速操作（= {type:quick}，daemon 不在则静默返回）
 ivox quick terminal                        # Opt+Z
 ivox quick copy-path                       # Opt=C
+
+# 锁屏 / 解锁（= {type:lock} / {type:unlock}；daemon 不在则报错）
+ivox lock                               # 锁屏
+ivox unlock                             # 解锁（唤醒 + 输密码 + 回车）
 
 # 誊清员（一般由主进程 spawn，不用手敲）
 ivox tts --serve                           # 起合成子进程，监听 ~/.config/ivox/ivox-tts.sock

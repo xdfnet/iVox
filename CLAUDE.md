@@ -36,7 +36,7 @@ make run
 Sources/iVox/          — 主程序 target
   EntryPoint.swift     — @main, ArgumentParser 子命令
 
-  ── 六个能力域（目录与 README 功能表、ivox status 一一对应）──
+  ── 七个能力域（目录与 README 功能表、ivox status 一一对应）──
   Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（播报字幕，config 可开关）+ PlaybackSignal（播报起落信号，给「给背景让路」用）
     TTS/               — 合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
   SpeechInput/         — 语音输入：右⌘ 录音 + ASR + 浮窗（事件由 HotKey 层送来）+ ClaudeAskService（ASR 出文后送问 Claude）
@@ -44,9 +44,10 @@ Sources/iVox/          — 主程序 target
   QuickActions/        — 快速操作：Finder/终端快捷（Opt+Z/A/Q/X/C）
   WeChat/              — 微信桥接：ilink HTTP 客户端 + 长轮询平台
   MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI + HTTPResponseHandler）+ MediaController + AudioAppRegistry + HealthSnapshot + SodaVolumeDucker（播报时给汽水音乐压音量）
+  Screen/              — 屏幕锁：ScreenControl（ivox lock / ivox unlock + Web 滑块，走 HID 真键）
 
   ── 基础设施（跨能力域）──
-  HotKey/              — GlobalKeyTap：键盘事件层（独占 tap，按归属路由给上面几家）
+  HotKey/              — 键盘事件层：GlobalKeyTap（**收**键：独占 tap，按归属路由给上面几家）+ HidInjector（**发**键：往常驻 ESP32-S3 注入器发真硬件事件，串行队列）
   Network/             — SocketServer（Unix domain socket IPC）+ ConnectionHandler（帧解析与分派）
   Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop；装配与热键分派
   Commands/            — ServeCommand, SpeakCommand, TranslateCommand 等
@@ -57,7 +58,7 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   Config.swift         — JSON 配置模型（外部配置；键名一律驼峰）+ 内置音色 VoiceCatalog（代码内配置）
   ConfigAudit.swift    — 配置键名审计：报出「写了但没人认领」的键（已知键由各类型 CodingKeys 派生）
   Logger.swift         — Log.{info,debug,warn,error}
-  DaemonStatus.swift   — {type:status} 的返回体（六个能力域健康度）
+  DaemonStatus.swift   — {type:status} 的返回体（七个能力域健康度）
   SocketClient.swift   — AppPaths + socket 客户端
   TextCleaner.swift    — Markdown + 噪音过滤（给 TTS 用）
   TextSplitter.swift   — 流式文本分块
@@ -92,7 +93,10 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
                                                                    │    ├─ SpeechInputService (右⌘ + ASR)
                                                                    │    ├─ TranslationService (Cmd+D 划词翻译)
                                                                    │    └─ QuickActionsService (Opt+Z/A/Q/X/C)
-                                                                   └─ MediaHTTPServer (端口 8888, Web UI)
+                                                                   ├─ MediaHTTPServer (端口 8888, Web UI)
+                                                                   │    └─ ScreenControl (Web 滑块锁/解锁)
+                                                                   └─ ScreenControl (ivox lock / unlock)
+                                                                        └─ HidInjector (真 HID → ESP32-S3 注入器)
 ```
 
 关键模式：
