@@ -38,7 +38,10 @@
                内容区少扣了底部手势条，整体就偏上。
                fixed + inset:0 直接铺满整个视口（刘海区与手势条区都在里面），
                两个 env 才是真值，剩下的区域再上下居中。 */
-            position: fixed;
+            /* absolute + html 撑到整屏（由 JS 设 height = screen.height）：
+               独占式 Web App 里 html 的 100% 只解析到「扣掉状态栏」的高度，
+               铺不到刘海那一截，占位区就没地方放。 */
+            position: absolute;
             inset: 0;
             overscroll-behavior: none;
             margin: 0;
@@ -49,6 +52,10 @@
                再补一次就成了内容被往下推——那正是「整体往上挤」的真凶。
                env() 优先：有真值就用真值，没有就按 34 兜底。 */
             padding-bottom: max(env(safe-area-inset-bottom, 0px), 34px);
+            /* 顶部：独占式 Web App（主屏幕图标启动）时，页面顶部那截是系统状态栏/刘海，
+               由 JS 量出高度塞进 --gap-top，并铺一个占位区把内容整体推下去。
+               非独占模式（Safari 里打开）不推——Safari 自己的地址栏已经让开了。 */
+            padding-top: var(--gap-top, 0px);
             overflow-y: auto;
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
             background: transparent;
@@ -100,6 +107,18 @@
             transition: background .15s cubic-bezier(.4, 0, .2, 1),
                         transform .15s cubic-bezier(.4, 0, .2, 1),
                         box-shadow .15s cubic-bezier(.4, 0, .2, 1);
+        }
+
+        /* ---------- 顶部占位区：把系统状态栏/刘海那一截让出来 ---------- */
+        .status-gap {
+            position: absolute;
+            top: 0;
+            left: 0;
+            right: 0;
+            height: var(--gap-top, 0px);
+            background: transparent;
+            border-bottom: 1px solid rgba(255, 255, 255, .08);
+            pointer-events: none;
         }
 
         /* ---------- 滑动解锁（老 iPhone 那样）---------- */
@@ -295,6 +314,9 @@
     <div id="toast" class="toast">已发送</div>
     <main class="container">
 
+        <!-- 顶部占位区：高度由 JS 按本机实测填入（状态栏+刘海） -->
+        <div class="status-gap" id="statusGap"></div>
+
         <!-- 锁屏 / 解锁：一个滑块，两个方向（右滑锁定，左滑解锁），老 iPhone 那样 -->
         <div class="slide-row" id="slideLock">
             <div class="slide-hint" id="slideHint">右滑锁定屏幕</div>
@@ -440,6 +462,28 @@
     <!-- 临时诊断：?debug=1 时显示，用来核对 iOS 安全区与居中几何 -->
     <div id="dbg" style="display:none;position:fixed;left:0;right:0;top:0;z-index:999;
          background:#000c;color:#0f0;font:11px/1.4 ui-monospace,monospace;padding:4px 6px;white-space:pre-wrap"></div>
+    <script>
+        // 顶部占位区：独占式 Web App（主屏幕图标启动）时，页面最上面那截是系统状态栏+刘海，
+        // 内容必须让开它。env(safe-area-inset-top) 在局域网 http 下拿不到真值，
+        // 所以按实测差值算：屏幕高 - 可视视口高 = 被系统占掉的那一截。
+        (function () {
+            const standalone = (navigator.standalone === true) ||
+                (window.matchMedia && matchMedia('(display-mode: standalone)').matches);
+            if (!standalone) return;                 // Safari 里打开：状态栏本来就在地址栏外面
+            function layout() {
+                const vv = window.visualViewport;
+                const visible = vv ? vv.height : window.innerHeight;
+                const gap = Math.max(0, Math.round(window.screen.height - visible));
+                document.documentElement.style.height = window.screen.height + 'px';
+                document.body.style.setProperty('--gap-top', gap + 'px');
+                document.getElementById('statusGap').style.height = gap + 'px';
+            }
+            layout();
+            window.addEventListener('resize', layout);
+            window.addEventListener('orientationchange', () => setTimeout(layout, 200));
+        })();
+    </script>
+
     <script>
         if (location.search.indexOf('debug=1') >= 0) {
             const probe = document.createElement('div');
