@@ -33,8 +33,11 @@
             inset: 0;
             overscroll-behavior: none;
             margin: 0;
-            padding-top: env(safe-area-inset-top);
-            padding-bottom: env(safe-area-inset-bottom, 16px);
+            /* 顶部留出刘海区，内容在「扣掉刘海与底部手势条」之后的区域里上下居中。
+               max() 是兜底：万一 env() 在某些 iOS 版本上返回 0（表现为内容整体往上挤），
+               至少还留 44px，不会把控件顶到刘海底下。 */
+            padding-top: max(env(safe-area-inset-top), 44px);
+            padding-bottom: max(env(safe-area-inset-bottom, 0px), 16px);
             font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
             background: transparent;
             color: #fff;
