@@ -59,13 +59,13 @@ build:
 	$(SWIFT) build $(SWIFT_RELEASE_FLAGS)
 
 # 打发布包：二进制 + 自包含集成资产（install/upgrade 解包后自动分发 hook/pi）
-VERSION ?= $(shell sed -n 's/.*iVoxVersion = "\(.*\)"/\1/p' Sources/iVox/Utilities/Version.swift)
+VERSION ?= $(shell sed -n 's/.*iVoxVersion = "\(.*\)"/\1/p' Sources/iVox/Version.swift)
 PKG := ivox-v$(VERSION)-macos-arm64
 package: build
-	@rm -rf /tmp/$(PKG) && mkdir -p /tmp/$(PKG)/integrations /tmp/$(PKG)/voices
+	@rm -rf /tmp/$(PKG) && mkdir -p /tmp/$(PKG)/scripts/pi /tmp/$(PKG)/voices
 	@cp .build/release/ivox /tmp/$(PKG)/ivox
-	@cp -R integrations/. /tmp/$(PKG)/integrations/
-	@cp scripts/install-hooks.sh /tmp/$(PKG)/integrations/install-hooks.sh
+	@cp scripts/hook.sh scripts/install-hooks.sh /tmp/$(PKG)/scripts/
+	@cp scripts/pi/ivox.ts /tmp/$(PKG)/scripts/pi/
 	@cp Sources/iVox/Resources/voices/*.wav /tmp/$(PKG)/voices/
 	@for b in iVox_iVox.bundle mlx-swift_Cmlx.bundle; do \
 	  src="$(CURDIR)/.build/out/Products/Release/$$b"; \
@@ -73,7 +73,7 @@ package: build
 	  if [[ -n "$$src" && -d "$$src" ]]; then cp -R "$$src" /tmp/$(PKG)/; \
 	  else echo "⚠️  未找到 $$b（Web UI / TTS shader 会缺）"; fi; \
 	done
-	@cd /tmp/$(PKG) && tar czf $(CURDIR)/.build/release/$(PKG).tar.gz ivox integrations voices iVox_iVox.bundle mlx-swift_Cmlx.bundle
+	@cd /tmp/$(PKG) && tar czf $(CURDIR)/.build/release/$(PKG).tar.gz ivox scripts voices iVox_iVox.bundle mlx-swift_Cmlx.bundle
 	@rm -rf /tmp/$(PKG)
 	@echo "✓  .build/release/$(PKG).tar.gz"
 
@@ -99,8 +99,8 @@ version:
 		echo "用法: make version V=v1.x.x"; exit 1; \
 	fi
 	@echo "$(V)" | grep -qE '^v[0-9]+\.[0-9]+\.[0-9]+$$' || { echo "格式错误：需要 vX.Y.Z"; exit 1; }
-	$(SED_INPLACE) 's/let iVoxVersion = ".*"/let iVoxVersion = "$(subst v,,$(V))"/' Sources/iVox/Utilities/Version.swift
-	git add Sources/iVox/Utilities/Version.swift
+	$(SED_INPLACE) 's/let iVoxVersion = ".*"/let iVoxVersion = "$(subst v,,$(V))"/' Sources/iVox/Version.swift
+	git add Sources/iVox/Version.swift
 	git commit -m "chore: 版本号 $(V)"
 	-git tag -d "$(V)" 2>/dev/null; true
 	git tag "$(V)"

@@ -156,7 +156,7 @@ struct UpdateCommand: AsyncParsableCommand {
             print("旧版已备份到 \(backupPath)")
         }
 
-        // 6. 定向解包：ivox → binDir，integrations/ → 配置目录（自包含发布包）
+        // 6. 定向解包：ivox → binDir，scripts/ → 配置目录（自包含发布包）
         let configDir = AppPaths.configDir
         try? FileManager.default.createDirectory(atPath: configDir, withIntermediateDirectories: true)
         let tar = Process()
@@ -170,10 +170,10 @@ struct UpdateCommand: AsyncParsableCommand {
             print("错误: 解包后未找到 \(binPath)，可从备份恢复：\(backupPath)")
             throw ExitCode.failure
         }
-        // 集成资产（旧包可能不含，解包失败不阻断二进制升级）
+        // 接入资产（旧包可能不含，解包失败不阻断二进制升级）
         let tarInt = Process()
         tarInt.executableURL = URL(fileURLWithPath: "/usr/bin/tar")
-        tarInt.arguments = ["xzf", tarURL.path, "-C", configDir, "integrations"]
+        tarInt.arguments = ["xzf", tarURL.path, "-C", configDir, "scripts"]
         try? tarInt.run()
         tarInt.waitUntilExit()
 
@@ -188,8 +188,8 @@ struct UpdateCommand: AsyncParsableCommand {
             print("警告: ad-hoc 重签失败（退出码 \(sign.terminationStatus)），如遇权限异常可手动执行 codesign --force --sign - \(binPath)")
         }
 
-        // 7.5 同步集成资产（hook/pi）到各 agent；幂等，失败仅告警不阻断升级
-        let installer = configDir + "/integrations/install-hooks.sh"
+        // 7.5 同步接入资产（hook/pi）到各 agent；幂等，失败仅告警不阻断升级
+        let installer = configDir + "/scripts/install-hooks.sh"
         if FileManager.default.fileExists(atPath: installer) {
             let sync = Process()
             sync.executableURL = URL(fileURLWithPath: "/bin/bash")
@@ -197,7 +197,7 @@ struct UpdateCommand: AsyncParsableCommand {
             try? sync.run()
             sync.waitUntilExit()
             if sync.terminationStatus == 0 {
-                print("✓ 集成资产已同步（hook / pi）")
+                print("✓ 接入资产已同步（hook / pi）")
             } else {
                 print("警告: 集成资产同步失败（退出码 \(sync.terminationStatus)），可稍后重跑安装脚本")
             }

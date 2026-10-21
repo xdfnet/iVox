@@ -38,19 +38,19 @@ Sources/iVox/          — 主程序 target
 
   ── 六个能力域（目录与 README 功能表、ivox status 一一对应）──
   Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（播报字幕，config 可开关）
-                          合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
-  SpeechInput/         — 语音输入：右⌘ 录音 + ASR + 浮窗（事件由 HotKey 层送来）
+    TTS/               — 合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
+  SpeechInput/         — 语音输入：右⌘ 录音 + ASR + 浮窗（事件由 HotKey 层送来）+ ClaudeAskService（ASR 出文后送问 Claude）
   Translation/         — 划词翻译（Cmd+D）：复制 → 翻译 → 浮窗 + 朗读
   QuickActions/        — 快速操作：Finder/终端快捷（Opt+Z/A/Q/X/C）
   WeChat/              — 微信桥接：ilink HTTP 客户端 + 长轮询平台
-  MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI）+ MediaController
+  MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI + HTTPResponseHandler）+ MediaController + AudioAppRegistry + HealthSnapshot
 
   ── 基础设施（跨能力域）──
   HotKey/              — GlobalKeyTap：键盘事件层（独占 tap，按归属路由给上面几家）
   Network/             — SocketServer（Unix domain socket IPC）+ ConnectionHandler（帧解析与分派）
   Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop；装配与热键分派
   Commands/            — ServeCommand, SpeakCommand, TranslateCommand 等
-  Utilities/           — 只有 Version.swift（日志工具 Logger.swift 在 iVoxKit/，不在这里）
+  Version.swift        — 版本号常量（唯一真源，make version 写它）
   Resources/           — assets, 默认音色, Info.plist, 配置模板（编进二进制 bundle）
 
 Sources/iVoxKit/       — 共享库（无 MLX 依赖）
@@ -66,15 +66,13 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   AudioPipeline.swift  — 重采样
   Translation/         — 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗
 
-Tests/iVoxTests/       — 测试（仅依赖 iVoxKit，共 9 个文件：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config ×2 / Translation / PlaybackSessionStory）
-
-integrations/          — 各外部 agent 的对接适配层（安装时由脚本 cp，不编进二进制）
-  hook.sh              — Claude Code 的播报 hook（msgdisplay 送整页 / end 送收尾暗号）
-  pi/ivox.ts           — pi coding agent 流式扩展
+Tests/iVoxTests/       — 测试（14 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests 例外，@testable import iVox）
 
 docs/                  — README.md（索引 + 分类规则）· architecture.md · hook-chain.md · socket-api.md · native-bridge.md（微信链路实测依据）；playback/ 放播报五层：paper.md（比喻，**建立直觉但不裁决**）· purpose.md（取舍，**有分歧听它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研
-scripts/               — runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）
-                        · open_soda.py（**`open` 打开不了时的替补**：走 ESP32 真实 HID 敲 Cmd+Space 搜名字打开汽水音乐——调试媒体控制时用它开一个真实播放器）
+scripts/               — 装机与部署：runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）
+                        接入资产（各外部 agent 的对接层，安装时由 install-hooks.sh cp，不编进二进制）：
+                        · hook.sh（Claude Code 的播报 hook：msgdisplay 送整页 / end 送收尾暗号）
+                        · pi/ivox.ts（pi coding agent 流式扩展）
 ```
 
 ## 架构
@@ -85,7 +83,7 @@ scripts/               — runtime.sh（部署）· download-models.sh · fetch-
 
 ```
 Claude Code → hook.sh                   ┐
-pi 扩展(integrations/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬─ PlaybackQueue (actor)
+pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬─ PlaybackQueue (actor)
 微信 ilink 长轮询 → WeChatPlatform（**只发消息，不发声**，不进本图这条线）
                                            │   ├─ TSPRemote ─→ 誊清员子进程 `ivox tts --serve`（mlx-audio-swift）
                                                                    │   └─ AudioPlayer (AVAudioEngine)
@@ -226,7 +224,7 @@ DEBUG 不可见，会把靠 DEBUG 行吃饭的 `E3`/`A-tail` 降级为 skip 并�
 唯一那条 advisory 是 `B-synthesis-leads-playback`（合成领先播放 3.7s ≈ 4s 高水位）——跨进程后
 预取余量变薄的已知代价，**不是回归，别去"修"**。
 
-**跑之前必须落静音闸**：`touch /tmp/ivox-hook-muted`（跑完 `trash` 提起）。自检压的是真实 daemon，而**真人对话的播报走同一个队列**——你一边跟我聊，队列就被我的回复占满，用例要么被噪声检测 skip，要么因合成被挤成欠载而假红。2026-10-17 实测：有对话 `pass=14 fail=1 skip=4`，落闸后 `pass=19 fail=0 skip=0`。这个闸在 `integrations/hook.sh` 里，走**哨兵文件而不是环境变量**：hook 由 Claude Code 的 harness 拉起，环境在它启动时定死，改不动；文件每次执行都重新判断。闸在手上可见（`ls /tmp/ivox-hook-muted`），不怕忘。
+**跑之前必须落静音闸**：`touch /tmp/ivox-hook-muted`（跑完 `trash` 提起）。自检压的是真实 daemon，而**真人对话的播报走同一个队列**——你一边跟我聊，队列就被我的回复占满，用例要么被噪声检测 skip，要么因合成被挤成欠载而假红。2026-10-17 实测：有对话 `pass=14 fail=1 skip=4`，落闸后 `pass=19 fail=0 skip=0`。这个闸在 `scripts/hook.sh` 里，走**哨兵文件而不是环境变量**：hook 由 Claude Code 的 harness 拉起，环境在它启动时定死，改不动；文件每次执行都重新判断。闸在手上可见（`ls /tmp/ivox-hook-muted`），不怕忘。
 
 ## 版本号
 
@@ -234,7 +232,7 @@ DEBUG 不可见，会把靠 DEBUG 行吃饭的 `E3`/`A-tail` 降级为 skip 并�
 make version V=v1.2.0    # 更新 Version.swift, 提交并打 tag
 ```
 
-版本号定义在 `Sources/iVox/Utilities/Version.swift`。
+版本号定义在 `Sources/iVox/Version.swift`。
 
 ## 发布流程
 

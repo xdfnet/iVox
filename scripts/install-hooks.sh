@@ -4,17 +4,13 @@ set -euo pipefail
 
 HOOK_SH="${1:?用法: install-hooks.sh <hook-sh-path>}"
 
-# ── 素材源目录探测 ──
-# 部署态：本脚本就在 ~/.config/ivox/integrations/ 内，pi/、hook.sh 与它同级；
-# 源码态：本脚本在 scripts/，素材在 ../integrations。
-# 判据只看 pi/：原先要求 pi/ 与 dsh/ 同时存在，Qwen Code / DSH 下线删掉 dsh/ 后，
-# 该判据在部署态永远不成立 → 落到 else 找 ../integrations（部署态不存在）→ 素材源取空。
+# ── 素材源目录 ──
+# 分发器与被它分发的资产**永远同目录**（仓库 scripts/ ↔ 部署态 ~/.config/ivox/scripts/），
+# 所以素材源就是本脚本所在目录——不需要再探测。
+# 早先的探测逻辑（判 pi/ 是否同级、否则回退 ../integrations）是因为分发器在 scripts/
+# 而资产在仓库顶层 integrations/，两处分家才不得不猜；合到一处后整段删掉。
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-if [[ -d "$SCRIPT_DIR/pi" ]]; then
-  SRC="$SCRIPT_DIR"
-else
-  SRC="$(cd "$SCRIPT_DIR/../integrations" && pwd)"
-fi
+SRC="$SCRIPT_DIR"
 
 # hook.sh 本体从素材源铺到部署路径（挂载配置里写死引用 HOOK_SH）
 if [[ -f "$SRC/hook.sh" ]]; then

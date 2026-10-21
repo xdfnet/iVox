@@ -8,7 +8,7 @@ LAUNCHER="${HOME}/.local/bin/ivox"
 LABEL="com.user.ivox"
 CONFIG="${HOME}/.config/ivox/config.toml"
 HOOK_SH="${HOME}/.config/ivox/hook.sh"
-INTEGRATIONS_DIR="${HOME}/.config/ivox/integrations"
+SCRIPTS_DIR="${HOME}/.config/ivox/scripts"
 SOCKET="${HOME}/.config/ivox/ivox.sock"
 AUTOSTART_PLIST="${HOME}/Library/LaunchAgents/com.ivox.daemon.plist"
 VOICE_DIR="${HOME}/.config/ivox/voices"
@@ -42,17 +42,25 @@ init_config() {
     echo "[i] 配置已存在: ${CONFIG}"
   fi
 
-  sync_integrations
+  sync_scripts
 }
 
-# 组装集成资产权威源（~/.config/ivox/integrations）并幂等分发到各 agent。
+# 组装接入资产权威源（~/.config/ivox/scripts）并幂等分发到各 agent。
 # install（init）与 upgrade（deploy-bin）共用，保证升级即同步 hook/pi。
-sync_integrations() {
-  mkdir -p "${INTEGRATIONS_DIR}"
-  cp -R "${ROOT}/integrations/." "${INTEGRATIONS_DIR}/"
-  cp "${ROOT}/scripts/install-hooks.sh" "${INTEGRATIONS_DIR}/install-hooks.sh"
-  chmod 755 "${INTEGRATIONS_DIR}/hook.sh" "${INTEGRATIONS_DIR}/install-hooks.sh"
-  "${INTEGRATIONS_DIR}/install-hooks.sh" "${HOOK_SH}"
+# **只搬要分的三样**（hook.sh / pi/ / 分发器本身），不整目录 cp——
+# 仓里 scripts/ 还有一堆构建与调试脚本，它们不该落到用户机器上。
+sync_scripts() {
+  # 迁移：老版本把接入资产放在 ~/.config/ivox/integrations/，现统一到 scripts/。
+  # 用 mv 不用 rm：那是我们自己铺的文件，但移动比删除更安全（万一里面有别的东西）。
+  if [[ -d "${HOME}/.config/ivox/integrations" && ! -d "${SCRIPTS_DIR}" ]]; then
+    mv "${HOME}/.config/ivox/integrations" "${SCRIPTS_DIR}"
+  fi
+  mkdir -p "${SCRIPTS_DIR}/pi"
+  cp "${ROOT}/scripts/hook.sh" "${SCRIPTS_DIR}/hook.sh"
+  cp "${ROOT}/scripts/pi/ivox.ts" "${SCRIPTS_DIR}/pi/ivox.ts"
+  cp "${ROOT}/scripts/install-hooks.sh" "${SCRIPTS_DIR}/install-hooks.sh"
+  chmod 755 "${SCRIPTS_DIR}/hook.sh" "${SCRIPTS_DIR}/install-hooks.sh"
+  "${SCRIPTS_DIR}/install-hooks.sh" "${HOOK_SH}"
 }
 
 install_voices() {
@@ -136,10 +144,10 @@ deploy_bin() {
   fi
   sign_bin
 
-  # 升级也要刷新全部集成资产（make update 走这里，不走 init）：权威源 integrations/
+  # 升级也要刷新全部接入资产（make update 走这里，不走 init）：权威源 scripts/
   # 整体重铺，再幂等分发 hook/pi（挂载已存在则跳过，未安装的 agent 安全跳过）。
-  sync_integrations >/dev/null 2>&1 || true
-  echo "✓  集成资产已同步: hook / pi"
+  sync_scripts >/dev/null 2>&1 || true
+  echo "✓  接入资产已同步: hook / pi"
 }
 
 # 停止守护进程：交给 CLI 的 `ivox off`，这里不再自己拼 launchctl——两处各写一套已经吃过
@@ -160,12 +168,12 @@ start_daemon() {
 # ── 更新的备份/回滚 ──
 # 备份范围**等于部署范围**：`deploy-bin` 覆盖什么就备什么，多一分不备、少一分不漏。
 #   · 二进制 + 两个资源包（约 59M，SSD 上毫秒级）
-#   · 集成资产 hook.sh / integrations/（约 30K）
+#   · 接入资产 hook.sh / scripts/（约 30K）
 # 刻意**不**碰 settings.json 之类：install-hooks 对别人的配置是「只写不删」，
 # 回滚去改它就越界了（那份归各 agent 自己管）。
 ROLLBACK_DIR="${HOME}/.config/ivox/rollback"
 BIN_ITEMS=(ivox mlx-swift_Cmlx.bundle iVox_iVox.bundle)
-CONFIG_ITEMS=(hook.sh integrations)
+CONFIG_ITEMS=(hook.sh scripts)
 
 # 更新前：留一份当前部署态
 snapshot_bin() {

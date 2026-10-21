@@ -59,8 +59,8 @@ echo "   来自: $ASSET_URL"
 mkdir -p "$BIN_DIR" "$CONFIG_DIR" "$VOICE_DIR"
 curl -fL --progress-bar -o /tmp/ivox-pkg.tar.gz "$ASSET_URL"
 tar xzf /tmp/ivox-pkg.tar.gz -C "$BIN_DIR" ivox
-# 集成资产（旧包可能不含，失败不影响二进制安装）
-tar xzf /tmp/ivox-pkg.tar.gz -C "$CONFIG_DIR" integrations 2>/dev/null || true
+# 接入资产（旧包可能不含，失败不影响二进制安装）
+tar xzf /tmp/ivox-pkg.tar.gz -C "$CONFIG_DIR" scripts 2>/dev/null || true
 # 资源 bundle：iVox_iVox.bundle（Web UI 的 index.html、配置模板、voices）与
 # mlx-swift_Cmlx.bundle（Metal shader，**TTS 合成必需**）。缺了 Web 控制台打不开、
 # 合成直接起不来。旧包不含时解不出来不算错，但要提醒。
@@ -91,9 +91,9 @@ else
   info "ad-hoc 签名跳过（无 Xcode 命令行工具）"
 fi
 
-# ── 3.6 集成资产（hook/pi）幂等分发到各 agent ──
+# ── 3.6 接入资产（hook/pi）幂等分发到各 agent ──
 section "集成安装"
-INSTALLER="$CONFIG_DIR/integrations/install-hooks.sh"
+INSTALLER="$CONFIG_DIR/scripts/install-hooks.sh"
 if [[ -f "$INSTALLER" ]]; then
   if bash "$INSTALLER" "$CONFIG_DIR/hook.sh"; then
     ok "hook / pi 已同步（已安装的 agent 生效，未安装的自动跳过）"
@@ -101,7 +101,7 @@ if [[ -f "$INSTALLER" ]]; then
     info "集成同步有警告，可稍后手动重跑 bash $INSTALLER"
   fi
 else
-  info "该版本包不含集成资产，跳过（hook/pi 需从源码安装）"
+  info "该版本包不含接入资产，跳过（hook/pi 需从源码安装）"
 fi
 
 # ── 4. 配置 ──

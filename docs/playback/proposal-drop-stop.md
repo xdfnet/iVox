@@ -55,7 +55,7 @@ hook.sh end 分支  →  ivox speak --final  →  socket 帧 {end:1}
 
 | # | 地方 | 删什么 |
 |---|---|---|
-| 1 | `integrations/hook.sh` | `end` 分支（约 40 行，含 `lastturn/` 那套 session→摞 的反查与清理） |
+| 1 | `scripts/hook.sh` | `end` 分支（约 40 行，含 `lastturn/` 那套 session→摞 的反查与清理） |
 | 2 | `Sources/iVox/Commands/SpeakCommand.swift` | `--final` 参数与 `end:1` 帧的拼装 |
 | 3 | `Sources/iVox/Network/ConnectionHandler.swift` | `end:1` 分支（`isFinal` 的两处处理） |
 | 4 | `Sources/iVox/Playback/PlaybackQueue.swift` | `finishTurn()`（`sealTurn` 若无人调用则一并删） |

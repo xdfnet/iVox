@@ -55,7 +55,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
 | 快速操作 | `Sources/iVox/QuickActions/` | QuickActions |
 | 微信桥接 | `Sources/iVox/WeChat/` | WeChatPlatform、ClaudeAskService |
 | 媒体控制 | `Sources/iVox/MediaControl/` | MediaHTTPServer、MediaController |
-| （基础设施） | `HotKey/` `Network/` `Daemon/` `Commands/` `Utilities/` | GlobalKeyTap、SocketServer、Daemon |
+| （基础设施） | `HotKey/` `Network/` `Daemon/` `Commands/` | GlobalKeyTap、SocketServer、Daemon |
 
 六个能力域**彼此平级**——运行时互相协作（语音输入会打断播报并给麦克风让出背景音乐、划词翻译借播报念译文），但代码上无主从，各占一个目录。基础设施跨域共用，不归任何能力域。
 
@@ -361,7 +361,7 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 
 ### pi 流式播报（第二层流式）
 
-pi 扩展（`integrations/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在模型生成中逐 `text_delta` 转发**原文**（TS 侧不切句），经一条长连接按 `\n` 分帧送入 socket。**这条连接的边界是一个 agent run（= 一次输入）**，不是 turn —— pi 的结构是 `agent_start` 之后 N 个 turn 循环、每个 turn 恰好一条 assistant 消息（`packages/agent/src/agent-loop.ts`），整摞回复都落在同一个 `agent_start … agent_end` 之间，页的边界由每条 assistant `message_start` 的 `{page}` 帧给出：
+pi 扩展（`scripts/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在模型生成中逐 `text_delta` 转发**原文**（TS 侧不切句），经一条长连接按 `\n` 分帧送入 socket。**这条连接的边界是一个 agent run（= 一次输入）**，不是 turn —— pi 的结构是 `agent_start` 之后 N 个 turn 循环、每个 turn 恰好一条 assistant 消息（`packages/agent/src/agent-loop.ts`），整摞回复都落在同一个 `agent_start … agent_end` 之间，页的边界由每条 assistant `message_start` 的 `{page}` 帧给出：
 
 ```
 {type:stream,source:pi,turn:<id>}\n   首帧开流（beginTurn，登记轮次；新轮排队不打断）
@@ -418,7 +418,7 @@ ConnectionHandler.extractVoicePrefix():
 ```
 ~/.local/bin/ivox                          # CLI 与守护进程同一个二进制（约 61MB，ad-hoc 签名）
 ~/.config/ivox/config.toml                 # 配置（TOML，可写注释）
-~/.config/ivox/integrations/               # 集成资产权威源（随发布包解包，分发器读这里）
+~/.config/ivox/scripts/                   # 接入资产权威源（随发布包解包，分发器读这里）
 ~/.config/ivox/hook.sh                     # 分发后的 hook（Claude 挂载引用它）
 ~/.config/ivox/model/                      # TTS/ASR MLX 模型
 ~/.config/ivox/voices/                     # 参考音频
@@ -469,4 +469,4 @@ hooks reference 的 Stop 专属字段只有 `stop_hook_active` / `last_assistant
 结束就无用，此前只涨不清（实测堆到 30 个文件）；现在每轮 Stop 顺手扫一遍删掉 mtime 超过 7 天的——
 一轮一次、代价可忽略，七天内可能还会被反查，更早的会话不可能还在对话里。
 
-**集成资产随发布包自包含**：release tarball 除 `ivox` 外含整个 `integrations/`（含 `install-hooks.sh`），安装/升级时解包到权威源 `~/.config/ivox/integrations/`，再由分发器幂等铺到各 agent 位置。同步只发生在三个显式时机：`make update`（runtime.sh deploy-bin）、`ivox update`（UpdateCommand 解包后 Process 调分发器）、`install-binary.sh`（curl|bash 首次安装也补齐集成）；守护进程启动不自动同步。分发器按自身位置探测素材源：脚本在 `integrations/` 内（部署态）用同级目录，在 `scripts/`（源码态）用 `../integrations`。
+**接入资产随发布包自包含**：release tarball 除 `ivox` 外含 `scripts/`（hook.sh + pi/ + install-hooks.sh），安装/升级时解包到权威源 `~/.config/ivox/scripts/`，再由分发器幂等铺到各 agent 位置。同步只发生在三个显式时机：`make update`（runtime.sh deploy-bin）、`ivox update`（UpdateCommand 解包后 Process 调分发器）、`install-binary.sh`（curl|bash 首次安装也补齐接入）；守护进程启动不自动同步。分发器与被分发的资产**同目录**（部署态在 `~/.config/ivox/scripts/`，源码态在仓库 `scripts/`），素材源即自身所在目录，无需探测。
