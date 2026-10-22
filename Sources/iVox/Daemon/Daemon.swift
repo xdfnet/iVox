@@ -299,7 +299,7 @@ actor Daemon {
                 case .openTerminal, .openTerminalClaude,
                      .openTerminalCodex, .openTerminalPi, .copyPath:
                     await quickActionsService.handle(hotKey, at: location)
-                case .escInterrupt:
+                case .skipAll:
                     // 手动打断三档之「掀桌」：Ctrl+2 用户不想说话，只静音播报。
                     // **不碰背景音乐**——播报不再借音乐，这里也就没有"还"要补（见 PlaybackQueue 文件头）。
                     await self.queue.cancelAll(origin: .esc)

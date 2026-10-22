@@ -166,7 +166,7 @@ voice = "rightcmd"
 | `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
 | `openTerminalPi` | `opt+q` | 开终端跑 `pi` |
 | `copyPath` | `opt+c` | 复制 Finder 选中路径 |
-| `escInterrupt` | `ctrl+2` | 闭嘴（全掀） |
+| `skipAll` | `ctrl+2` | 闭嘴（全掀） |
 | `skipBucket` | `ctrl+1` | 跳整摞 |
 | `skipPage` | `ctrl+esc` | 读下一页（掀页） |
 | `voice` | 右 ⌘ | 长按说话；可写 `rightcmd`（默认）/ `rightctrl` / `rightcmd+rightctrl` / `none` |

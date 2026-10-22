@@ -62,7 +62,7 @@ final class GlobalKeyTap: @unchecked Sendable {
     private static func cooldown(for hotKey: HotKeyAction) -> TimeInterval {
         switch hotKey {
         case .translate: return 0.2
-        case .escInterrupt, .skipBucket, .skipPage: return 0.3
+        case .skipAll, .skipBucket, .skipPage: return 0.3
         default: return 1.0
         }
     }
