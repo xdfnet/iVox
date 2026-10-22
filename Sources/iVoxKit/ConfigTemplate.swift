@@ -22,17 +22,17 @@ public enum ConfigTemplate {
 # 写法：cmd / ctrl / opt / shift + 字母或数字，用 + 连接（大小写无所谓）。
 # 语音键（按住说话）单列在最后，取值 rightcmd / rightctrl / rightcmd+rightctrl / none。
 [hotkeys]
-# 快速操作：Opt 那一排，按键位字母排
-openTerminalClaude = "opt+a"   # 开终端并跑 claude
-copyPath = "opt+c"             # 复制 Finder 里选中的路径
-openTerminalPi = "opt+q"       # 开终端并跑 pi
-translate = "opt+s"            # 划词翻译：复制 → 翻译 → 浮窗 + 朗读
-openTerminalCodex = "opt+x"    # 开终端并跑 codex
+# 快速操作：四个「开终端」是一族，只差后面跑什么
 openTerminal = "opt+z"         # 开终端
-# 手动打断三档：Ctrl，按力度从大到小排（全掀 → 掀摞 → 掀页）
-skipAll = "ctrl+2"             # 闭嘴（全掀：掐断当前播报 + 丢弃全部待播）
-skipBucket = "ctrl+1"          # 跳整摞（掐断 + 丢弃这一摞的全部内容）
+openTerminalClaude = "opt+a"   # 开终端并跑 claude
+openTerminalCodex = "opt+x"    # 开终端并跑 codex
+openTerminalPi = "opt+q"       # 开终端并跑 pi
+copyPath = "opt+c"             # 复制 Finder 里选中的路径
+translate = "opt+s"            # 划词翻译：复制 → 翻译 → 浮窗 + 朗读
+# 手动打断三档：Ctrl，力度从轻到重（掀页 → 掀摞 → 全掀）
 skipPage = "ctrl+esc"          # 读下一页（掐断 + 掀掉当前页剩余的块）
+skipBucket = "ctrl+1"          # 跳整摞（掐断 + 丢弃这一摞的全部内容）
+skipAll = "ctrl+2"             # 闭嘴（全掀：掐断当前播报 + 丢弃全部待播）
 # 语音：单列在最后（要长按，与上面「点一下就触发」的不同）
 voice = "rightcmd"             # 按住右⌘ 说话（可改 rightctrl / rightcmd+rightctrl / none）
 

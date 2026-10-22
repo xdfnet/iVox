@@ -160,15 +160,15 @@ voice = "rightcmd"
 
 | 动作名 | 默认键位 | 干什么 |
 |---|---|---|
-| `openTerminalClaude` | `opt+a` | 开终端跑 `claude` |
-| `copyPath` | `opt+c` | 复制 Finder 选中路径 |
-| `openTerminalPi` | `opt+q` | 开终端跑 `pi` |
-| `translate` | `opt+s` | 划词翻译 |
-| `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
 | `openTerminal` | `opt+z` | 在当前目录开终端 |
-| `skipAll` | `ctrl+2` | 闭嘴（全掀） |
-| `skipBucket` | `ctrl+1` | 跳整摞 |
+| `openTerminalClaude` | `opt+a` | 开终端跑 `claude` |
+| `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
+| `openTerminalPi` | `opt+q` | 开终端跑 `pi` |
+| `copyPath` | `opt+c` | 复制 Finder 选中路径 |
+| `translate` | `opt+s` | 划词翻译 |
 | `skipPage` | `ctrl+esc` | 读下一页（掀页） |
+| `skipBucket` | `ctrl+1` | 跳整摞 |
+| `skipAll` | `ctrl+2` | 闭嘴（全掀） |
 | `voice` | 右 ⌘ | 长按说话；可写 `rightcmd`（默认）/ `rightctrl` / `rightcmd+rightctrl` / `none` |
 
 写法：修饰键 `cmd` `ctrl` `opt` `shift`（也认 `command` `control` `option` `alt`），用 `+` 连主键；

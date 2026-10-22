@@ -11,15 +11,15 @@ import Foundation
 
 /// 一个热键动作：与配置 `hotkeys` 段里的 key 一一对应。
 public enum HotKeyAction: String, CaseIterable, Sendable {
-    case openTerminalClaude   // 开终端跑 claude
-    case copyPath             // 复制 Finder 选中路径
-    case openTerminalPi       // 开终端跑 pi
-    case translate            // 划词翻译
-    case openTerminalCodex    // 开终端跑 codex
     case openTerminal         // 开终端
-    case skipAll              // 闭嘴（全掀）
-    case skipBucket           // 跳整摞
+    case openTerminalClaude   // 开终端跑 claude
+    case openTerminalCodex    // 开终端跑 codex
+    case openTerminalPi       // 开终端跑 pi
+    case copyPath             // 复制 Finder 选中路径
+    case translate            // 划词翻译
     case skipPage             // 读下一页（掀页）
+    case skipBucket           // 跳整摞
+    case skipAll              // 闭嘴（全掀）
 }
 
 /// 修饰键集合。用自有位掩码而非 CGEventFlags，好让解析与测试都不依赖 CoreGraphics。
@@ -140,15 +140,15 @@ public enum HotKeySpec {
     /// 各动作的默认键位。**默认只写这一处**，配置文件是它的覆盖。
     public static func defaultChord(for action: HotKeyAction) -> KeyChord {
         switch action {
-        case .openTerminalClaude: return chord(keyName: "a", modifiers: .option)    // Opt+A
-        case .copyPath:           return chord(keyName: "c", modifiers: .option)    // Opt+C
-        case .openTerminalPi:     return chord(keyName: "q", modifiers: .option)    // Opt+Q
-        case .translate:          return chord(keyName: "s", modifiers: .option)    // Opt+S
-        case .openTerminalCodex:  return chord(keyName: "x", modifiers: .option)    // Opt+X
         case .openTerminal:       return chord(keyName: "z", modifiers: .option)    // Opt+Z
-        case .skipAll:            return chord(keyName: "2", modifiers: .control)   // Ctrl+2
-        case .skipBucket:         return chord(keyName: "1", modifiers: .control)   // Ctrl+1
+        case .openTerminalClaude: return chord(keyName: "a", modifiers: .option)    // Opt+A
+        case .openTerminalCodex:  return chord(keyName: "x", modifiers: .option)    // Opt+X
+        case .openTerminalPi:     return chord(keyName: "q", modifiers: .option)    // Opt+Q
+        case .copyPath:           return chord(keyName: "c", modifiers: .option)    // Opt+C
+        case .translate:          return chord(keyName: "s", modifiers: .option)    // Opt+S
         case .skipPage:           return chord(keyName: "esc", modifiers: .control) // Ctrl+Esc
+        case .skipBucket:         return chord(keyName: "1", modifiers: .control)   // Ctrl+1
+        case .skipAll:            return chord(keyName: "2", modifiers: .control)   // Ctrl+2
         }
     }
 
