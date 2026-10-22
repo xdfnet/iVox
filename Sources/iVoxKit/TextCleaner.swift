@@ -57,7 +57,8 @@ private struct TextCollector: MarkupWalker {
     mutating func visitStrong(_ node: Strong)       { descendInto(node) }
 
     mutating func visitInlineCode(_ node: InlineCode) {
-        let code = node.code.cleanedForTTS
+        // 行内代码只走删除线：`a && b` 不该被翻成「a 和 b」，那是给听众添噪音
+        let code = node.code.cleanedCodeForTTS
         if code.isEmpty { return }
         appendSeparator(nextFirst: code.first)
         output.append(code)
@@ -112,39 +113,52 @@ private struct TextCollector: MarkupWalker {
 // MARK: - 行内清洗
 
 private extension String {
-    /// 播报前的完整行内清洗：URL → 噪音 → emoji 口语化 → emoji 剔除。
+    /// 播报前的完整行内清洗：**删除线 → 改写线**，两条线职责不交叉。
     ///
-    /// 顺序不可调换：
-    /// - **URL 必须在噪音之前** —— 否则 URL 会被路径规则当成路径砍成 `https:b` 这类残片；
-    /// - **噪音必须在 removingEmoji 之前** —— 符号清理会把 `:` `/` `[` 换成空格，正则就匹配不到了；
-    /// - **replacingEmojiSpeech 必须在 removingEmoji 之前** —— 先把常见 emoji 换成口语词，没命中的再剔除。
+    /// 备菜只有两个动作，所以清洗也只有两类规则（2026-10-22 重新设计）：
+    /// - **删除线（只删不改）**：`removingUnhearable`。删「眼睛能看、耳朵听不出」的——URL、ANSI、
+    ///   UUID、hash、JSON、路径、传输进度。这一线一个字都不新增，删掉的换不来新词。
+    /// - **改写线（把符号变成念法）**：`normalizingForSpeech`。保留「念得出来」的，
+    ///   把「念不出来」的落地成汉字或清掉——符号读法表、emoji 口语表、兜底删符号。
+    ///   emoji 之所以在这条线（而不是删除线）：它一体两面，**命中的改写、未命中的删**，
+    ///   拆开就会漏。兜底删符号同理——它问的是「这字符念得出来吗」，是念法问题。
+    ///
+    /// 顺序只在这一处有意义：**删除线必须在改写线之前**——URL/路径正则要在符号还认得出来时匹配，
+    /// 否则 `https://x` 会先被 `/` 规则改写，URL 规则就匹配不到了。
     var cleanedForTTS: String {
-        // 逐级记录「哪一步改动了文本」：清洗是静默的，日志里只剩一个
-        // 「46字 → 0字」的结果，出了「念出来少了一截」这类问题根本无从定位到具体规则。
-        let afterURL = removingURLs
-        let afterNoise = afterURL.removingNoise
-        let afterSpeech = afterNoise.replacingEmojiSpeech
-        let afterEmoji = afterSpeech.removingEmoji
+        let afterDelete = removingUnhearable
+        let afterRewrite = afterDelete.normalizingForSpeech
         var trace: [String] = []
-        if afterURL != self { trace.append("去URL") }
-        if afterNoise != afterURL { trace.append("去噪音") }
-        if afterSpeech != afterNoise { trace.append("emoji口语化") }
-        if afterEmoji != afterSpeech { trace.append("去emoji") }
+        if afterDelete != self { trace.append("删噪音") }
+        if afterRewrite != afterDelete { trace.append("念稿改写") }
         if !trace.isEmpty {
-            Log.debug("清洗命中: \(trace.joined(separator: "→")) （\(count)字 → \(afterEmoji.count)字）")
+            Log.debug("清洗命中: \(trace.joined(separator: "→")) （\(count)字 → \(afterRewrite.count)字）")
         }
-        return afterEmoji
+        return afterRewrite
     }
 
-    /// 剔除「眼睛能看、耳朵听不出」的噪音
-    var removingNoise: String {
-        removingANSI
+    /// 行内代码专用：只删噪音、**跳过改写线**。
+    ///
+    /// 源码没有「念法」可言，`a && b` 翻成「a 和 b」纯属给听众添噪音（2026-10-22 实测）。
+    /// 代码块是整段跳过（见 visitCodeBlock）；行内代码只占几个词、压缩后仍值得念出来，
+    /// 但不该参与符号改写。
+    var cleanedCodeForTTS: String {
+        removingUnhearable
+    }
+
+    /// 删除线：只删「眼睛能看、耳朵听不出」的东西，**一个字都不新增**。
+    ///
+    /// 这条链里曾经混过一个 `replacingArrows`（`→` → `到」）——那是**翻译**，不是删除，
+    /// 混进来会让「删」和「改」两类规则散在两处，将来加符号不知道该跟谁排。
+    /// 它已搬去改写线 normalizingForSpeech（2026-10-22 重新设计）。
+    var removingUnhearable: String {
+        removingURLs
+            .removingANSI
             .removingUUIDs
             .removingHexHashes
             .removingJSONObjects
             .removingPaths
             .removingProgressNoise
-            .replacingArrows
     }
 
     // MARK: URL
@@ -286,11 +300,6 @@ private extension String {
         return s
     }
 
-    /// 「→」念成「到」，否则 TTS 会把箭头符号跳过，导致前后词莫名连读
-    var replacingArrows: String {
-        replacingOccurrences(of: "→", with: "到")
-    }
-
     // MARK: emoji 口语化
 
     /// 常见 emoji → 中文口语词（保留情绪，避免直接删成沉默）；未命中的留给 removingEmoji 剔除。
@@ -347,12 +356,141 @@ private extension String {
 
     // MARK: 符号过滤
 
+    /// 改写线：**符号读法 + emoji 口语 + 兜底删符号**，三步都在这儿，位置唯一。
+    ///
+    /// 三步同属一线，因为问的都是同一个问题——「这字符，嘴念得出来吗」：
+    /// 符号有读法的落地成汉字（symbolRules）；emoji 命中的换口语词
+    /// （replacingEmojiSpeech）；剩下没有读法的符号兜底清掉（removingEmoji）。
+    /// emoji 与兜底删除都**含删**，但它们不是「删除线」——它们问的是读法，不是取舍。
+    ///
+    /// 顺序：符号与 emoji 先落地成汉字，兜底删除最后——否则兜底会把还没翻译的
+    /// `+` `=` 之类先当成噪音删掉（2026-10-22 实测 `+75%` 只剩「百分之七十五」）。
+    var normalizingForSpeech: String {
+        // 整段没有实质内容（只有符号与空白，如 `*** ### +++ &&&`）时直接清空：
+        // 这类文本是分隔线/占位符，念出来纯是噪音。必须在改写之前判——
+        // 否则 `+++` 会先被翻成「加加加」，段落就伪装成有内容，混不进噪音里（2026-10-22，
+        // F-pcm-duration 用例抓到的真实回归：原来被清成 0 PCM，改写后反而出声了）。
+        guard containsSubstance else { return "" }
+        return applyingSymbolRules.replacingEmojiSpeech.removingEmoji
+    }
+
+    /// 去掉符号与空白后还剩东西，才算「有实质内容」。
+    ///
+    /// emoji 的判据是**「口语表里查得到」**而不是 Unicode 的 isEmoji 属性——
+    /// `*` 和 `#` 本身带 Emoji 属性（键盘键名 📱*、#️⃣），
+    /// 按属性判会把 `*** ###` 这种分隔线当成实质内容（2026-10-22 F-pcm-duration 实测）。
+    /// 按口语表判才对：`🚀` 查得到「起飞」算实质，翻不出词的才是死符号。
+    private var containsSubstance: Bool {
+        self.contains { ch in
+            if ch.isLetter || ch.isNumber { return true }
+            guard ch.isEmojiLike, let base = ch.emojiSpeechBase else { return false }
+            return Self.emojiSpeech[base] != nil
+        }
+    }
+
+    /// 把「眼睛用的写法」翻成「嘴巴用的写法」，**不删任何东西**。
+    ///
+    /// 存在的理由：合成引擎是个神经网络 TTS，只认汉字与常见中文标点，
+    /// 碰上没读法的符号（`/`、`①`、`+`）就只能自由发挥或直接吞掉——
+    /// `59/79` 每次念法都不一样、`①` 念成「括号一」、`+75%` 只剩「百分之七十五」。
+    /// 所以规则一律在这里落地成汉字，引擎不需要猜。
+    ///
+    /// 同形异义的判据（`<` `>` 尤其明显）：这里看到 `>` 就一定是「大于」，
+    /// 因为 Markdown 引用块 `> ` 与内联 HTML `<b>` 都被上游吃掉了——
+    /// `cleanText` 短文本捷径的 `markdownChars` 里有 `>` 和 `<`，
+    /// 凡带它们的文本必定走 AST 解析，标记到不了这一层（2026-10-22 查证）。
+    var applyingSymbolRules: String {
+        var result = ""
+        var cursor = startIndex
+        var skipNext = false
+        while cursor < endIndex {
+            let ch = self[cursor]
+            let next = index(after: cursor)
+            // 前面紧邻的字符（跳过空白）——判「数字前缀的增减号」要用
+            let prevSignificant = result.last(where: { !$0.isWhitespace })
+            let prevIsWordChar = prevSignificant.map {
+                $0.isLetter || $0.isNumber || $0 == "." || $0 == "/" || $0 == "-"
+            } ?? false
+            let followedByDigit = next < endIndex && self[next].isNumber
+            switch ch {
+            case "+", "-":
+                // 只有「前面不是字母数字、后面紧跟数字」才是增减号：
+                // `x86-64` / `2026-10-22` / `a-b` 的连字符用法原样保留。
+                if !prevIsWordChar, followedByDigit {
+                    result += (ch == "+" ? "增加" : "减少")
+                } else if ch == "+" {
+                    // 其余 `+` 念「加」：C++ 念成 C 加加、a+b 念成 a 加 b。
+                    // 以前这里直接把 `+` 留给 removingEmoji 删成空格，`C++` 只剩「C」（实测）。
+                    result += "加"
+                } else {
+                    result.append(ch)
+                }
+            case "=":
+                // `x = 5` 以前念成「x 5」，等号连同两侧语义一起没了
+                result += "等于"
+            case "<":
+                result += "小于"
+            case ">":
+                result += "大于"
+            case "&":
+                // `a && b` 念「a 和 b」；连续的 `&&` 只念一次，免得「和和」
+                if next < endIndex, self[next] == "&" {
+                    skipNext = true
+                }
+                result += "和"
+            case "@":
+                // `@param` 念「at param」。`at` 是拉丁字母，前后必须留空格——
+                // 否则拼成 `atparam` 会被引擎当成一个词念（2026-10-22 实测）。
+                // 中文替换词（加、等于、和）不需要，中文贴字母天然断开。
+                result += " at "
+            case "\u{2192}":
+                // 箭头念「到」，否则 TTS 跳过它导致前后词莫名连读（从删除线搬来，2026-10-22）
+                result += "到"
+            case "/":
+                // 斜杠统一当分隔：换成引擎认识的顿号，读作停顿。
+                // 念稿层无从判断 `59/79` 是列表还是比值，猜错代价比读含糊更大（2026-10-22 裁决）。
+                result += "、"
+            default:
+                // 带圈编号 ①(2460) – ⑳(2473)：不是 emoji，过得了 removingEmoji，
+                // 但引擎没读法，映射成「第几项」。
+                if let ordinal = Self.circledOrdinals[ch] {
+                    result += ordinal
+                } else {
+                    result.append(ch)
+                }
+            }
+            cursor = skipNext ? self.index(after: next) : next
+            skipNext = false
+        }
+        return result
+    }
+
+    /// ①-⑳ → 第一项 … 第二十项
+    private static let circledOrdinals: [Character: String] = {
+        let numerals = ["一", "二", "三", "四", "五", "六", "七", "八", "九"]
+        var table: [Character: String] = [:]
+        for n in 1...20 {
+            let value: String
+            if n < 10 {
+                value = numerals[n - 1]
+            } else if n == 10 {
+                value = "十"
+            } else {
+                value = numerals[n / 10 - 1] + "十" + (n % 10 == 0 ? "" : numerals[n % 10 - 1])
+            }
+            table[UnicodeScalar(0x2460 + n - 1).map(Character.init) as! Character] = "第\(value)项"
+        }
+        return table
+    }()
+
     /// 过滤 emoji + 非文字符号，只保留文字（字母/数字/中文）+ 语气标点。
     /// 各类空白（Tab / NBSP / 全角空格 / 连续半角空格）统一折叠成一个空格；emoji 修饰符直接砍。
     /// 半角 `~` 与全角 `～` 统一转空格（语气号不发声，避免前后词粘连）。
     var removingEmoji: String {
-        // . / ! % ? , - : ; " ' + 中文句末/语气标点。冒号分号是停顿标记，保留给 TTS 断句
-        let allowedPunct: Set<UInt32> = [46, 47, 33, 37, 63, 44, 45, 58, 59, 34, 39, 12290, 65281, 65311, 8212]
+        // . ! % ? , - : ; " ' + 中文句末/语气标点。冒号分号是停顿标记，保留给 TTS 断句。
+        // 刻意不含 `/`(47)：斜杠的读法归 normalizingForSpeech，这里再留一条只是冗余，
+        // 却是「将来谁动了念稿改写、裸 / 悄悄漏进 TTS」的定时炸弹（2026-10-22 删）。
+        let allowedPunct: Set<UInt32> = [46, 33, 37, 63, 44, 45, 58, 59, 34, 39, 12290, 65281, 65311, 8212]
         // 各类 Unicode 空白：NBSP、各宽空格、零宽空白（部分）
         let unicodeSpaces: Set<UInt32> = [0x00A0, 0x2000, 0x2001, 0x2002, 0x2003, 0x2004, 0x2005, 0x2006, 0x2007, 0x2008, 0x2009, 0x200A, 0x202F, 0x205F, 0x3000, 0xFEFF]
         var result = ""

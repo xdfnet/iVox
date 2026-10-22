@@ -255,4 +255,104 @@ final class TextCleanerTests: XCTestCase {
         XCTAssertTrue(got.contains("结果"))
         XCTAssertTrue(got.contains("以上"))
     }
+
+    // MARK: - 念稿改写（2026-10-22）
+
+    func testCircledNumbersBecomeOrdinals() {
+        XCTAssertEqual(cleanText("① ② ③"), "第一项 第二项 第三项")
+        XCTAssertEqual(cleanText("⑩ ⑳"), "第十项 第二十项")
+    }
+
+    func testPlusAndMinusSpeakAsIncreaseAndDecrease() {
+        XCTAssertEqual(cleanText("+75%"), "增加75%")
+        XCTAssertEqual(cleanText("-3.5"), "减少3.5。")  // 含 `.` 走 AST 捷径，补句末句号
+    }
+
+    func testSlashBecomesPause() {
+        // 斜杠没有稳定读法（实测 59/79 每次念法都不一样），统一当分隔读
+        XCTAssertEqual(cleanText("59/79"), "59、79")
+    }
+
+    func testHyphenInWordsIsNotSpokenAsDecrease() {
+        // 连字符用法必须原样：日期、架构名、a+b（后面不是数字就不是增减号）
+        XCTAssertEqual(cleanText("**x86-64**"), "x86-64。")
+        XCTAssertTrue(cleanText("2026-10-22").contains("2026-10-22"), "实际: \(cleanText("2026-10-22"))")
+        // 非数字语境的 `+` 念「加」，不再被 removingEmoji 删成空格（2026-10-22 修）
+        XCTAssertEqual(cleanText("a+b"), "a加b")  // 中文替换词贴紧字母，不加空格
+        XCTAssertEqual(cleanText("C++ 基础"), "C加加 基础")
+    }
+
+    func testOrdinaryDigitsUntouched() {
+        // 没被点名的场景不许乱动：顿号列表本来就稳，数字串保持原样
+        XCTAssertEqual(cleanText("59、79"), "59、79")
+        XCTAssertEqual(cleanText("3/4"), "3、4")
+    }
+
+func testComparisonOperatorsSpeak() {
+        // 以前 `x = 5` 念成「x 5」，等号连同语义一起没了
+        XCTAssertEqual(cleanText("x = 5"), "x 等于 5")
+        XCTAssertTrue(cleanText("a < b").contains("小于"))
+        XCTAssertTrue(cleanText("a > b").contains("大于"))
+    }
+
+    func testMarkdownQuoteMarkerIsNotSpokenAsGreaterThan() {
+        // 同形异义的关键防线：`> ` 是 Markdown 引用块，到不了念稿层（cleanText 的
+        // markdownChars 含 `>`，带它的文本必走 AST 解析）
+        let got = cleanText("> 这是引用")
+        XCTAssertTrue(got.contains("这是引用"), "实际: \(got)")
+        XCTAssertFalse(got.contains("大于"), "实际: \(got)")
+    }
+
+    func testLogicalAndSpeaksOnce() {
+        XCTAssertEqual(cleanText("a && b"), "a 和 b")  // 原文两侧有空格
+        XCTAssertEqual(cleanText("a & b"), "a 和 b")
+    }
+
+    func testAtSignSpeaks() {
+        XCTAssertEqual(cleanText("@param"), "at param")
+    }
+
+    func testCleaningPipelineStillNormalizesEmojiSpeech() {
+        // 念稿改写插进了 emoji 口语化之前，别把 👌→好的 这一步顶掉（2026-10-22 回归）
+        XCTAssertEqual(cleanText("搞定了👌"), "搞定了好的")
+    }
+
+    // MARK: - 两条线分工（2026-10-22 重新设计）
+
+    func testInlineCodeSkipsRewriteLine() {
+        // 行内代码只走删除线：`&&` 不该被翻成「和」——源码翻成口语是给听众添噪音
+        let got = cleanText("运行 `a && b` 结束")
+        XCTAssertFalse(got.contains("和"), "行内代码不该出现「和」: \(got)")
+        XCTAssertTrue(got.contains("a"), "实际: \(got)")
+        XCTAssertTrue(got.contains("结束"), "实际: \(got)")
+    }
+
+    func testProseStillRewritesLogicalAnd() {
+        // 散文里 `&&` 照旧念「和」——改写线只对非代码节点生效
+        XCTAssertEqual(cleanText("a && b"), "a 和 b")
+    }
+
+    func testArrowIsRewrittenAsDao() {
+        // `→` 属于改写线（从删除线搬来），念「到」
+        XCTAssertTrue(cleanText("A → B").contains("到"), "实际: \(cleanText("A → B"))")
+    }
+
+    func testDeleteLineRunsBeforeRewriteLine() {
+        // 顺序是回归点：若改写先跑，`https://x.com` 的 `/` 会先被改写，URL 规则就匹配不到
+        let got = cleanText("见 https://example.com/a 完成")
+        XCTAssertFalse(got.contains("example"), "URL 应整条删掉: \(got)")
+        XCTAssertTrue(got.contains("完成"), "实际: \(got)")
+    }
+
+    func testSymbolOnlyTextIsClearedAsNoise() {
+        // 回归点（F-pcm-duration 抓到的）：纯符号段是分隔线/占位符，念出来纯噪音。
+        // 改写规则不能把它「翻译」成「加加加」「和」——那样它反而伪装成有内容而混进播报。
+        XCTAssertEqual(cleanText("*** ### +++ &&&"), "")
+        XCTAssertEqual(cleanText("- - -"), "")
+    }
+
+    func testEmojiOnlyLineIsNotClearedAsNoise() {
+        // emoji 能翻成实词（起飞/赞），不能跟分隔线一起清掉（`containsSubstance` 要算 emoji）
+        XCTAssertEqual(cleanText("**🚀**"), "起飞。")
+    }
 }
