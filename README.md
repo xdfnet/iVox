@@ -160,12 +160,12 @@ voice = "rightcmd"
 
 | 动作名 | 默认键位 | 干什么 |
 |---|---|---|
-| `translate` | `opt+s` | 划词翻译 |
-| `openTerminal` | `opt+z` | 在当前目录开终端 |
 | `openTerminalClaude` | `opt+a` | 开终端跑 `claude` |
-| `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
-| `openTerminalPi` | `opt+q` | 开终端跑 `pi` |
 | `copyPath` | `opt+c` | 复制 Finder 选中路径 |
+| `openTerminalPi` | `opt+q` | 开终端跑 `pi` |
+| `translate` | `opt+s` | 划词翻译 |
+| `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
+| `openTerminal` | `opt+z` | 在当前目录开终端 |
 | `skipAll` | `ctrl+2` | 闭嘴（全掀） |
 | `skipBucket` | `ctrl+1` | 跳整摞 |
 | `skipPage` | `ctrl+esc` | 读下一页（掀页） |
