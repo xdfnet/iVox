@@ -45,7 +45,7 @@ struct RestartCommand: ParsableCommand {
             }
             Thread.sleep(forTimeInterval: 0.25)
         }
-        print("⚠️  daemon 30s 内未就绪，请查看 \(AppPaths.configDir)/daemon.log")
+        print("⚠️  daemon 30s 内未就绪，请查看 \(AppPaths.daemonLogPath)")
         throw ExitCode.failure
     }
 }

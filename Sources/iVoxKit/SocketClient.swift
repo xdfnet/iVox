@@ -10,6 +10,10 @@ public enum AppPaths {
     /// 誊清员进程的 socket。独立于主 daemon —— 它跑 MLX 合成，是唯一会崩的一层，
     /// 崩了不该带走主进程里的队列与字条。
     public static var ttsSocketPath: String { configDir + "/ivox-tts.sock" }
+    /// 日志文件名只有这一处定义。三个进程各写各的，「哪个文件里有现场就是哪个角色的错」
+    /// （见 CLAUDE.md）——所以文件名与位置必须是单一真源，散开写迟早漂。
+    public static var daemonLogPath: String { configDir + "/daemon.log" }
+    public static var ttsLogPath: String { configDir + "/tts.log" }
     public static var binDir: String { expandTilde("~/.local/bin") }
 
     static func expandTilde(_ path: String) -> String {

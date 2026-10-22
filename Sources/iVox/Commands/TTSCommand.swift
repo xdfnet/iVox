@@ -29,8 +29,27 @@ struct TTSCommand: AsyncParsableCommand {
         // 日志与崩溃现场各落各的文件。三个进程混在一份日志里，出了事就只能靠时间戳
         // 猜是谁干的 —— 2026-10-19 晚上从「pi 没出声」查到「MLX 崩了」翻了三轮，
         // 根子就在那儿。拆开的收益之一是：哪个文件里有现场，就是哪个角色的错。
-        setenv("IVOX_LOG_FILE", "~/.config/ivox/tts.log", 1)
+        setenv("IVOX_LOG_FILE", AppPaths.ttsLogPath, 1)
         setenv("IVOX_ROLE", "tts", 1)
+        // 把裸 stdout/stderr 也接进 tts.log——**Logger 只管得住自己写的那部分**。
+        // MLX 那些库动辄自己 print（模型加载进度、Audio ID…），不经过 Logger，
+        // 顺着继承来的 stdout 全部灌进 daemon.log：实测 4.6 万行里约 3.5 千行是
+        // 这类噪音，把 daemon.log 顶到 5M 就轮转一次，主进程自己的日志被冲掉
+        // （2026-10-22 才发现）。上面「哪个文件里有现场就是哪个角色的错」那条
+        // 正是被这个漏洞破掉的——合成引擎的现场躺在 daemon.log 里。
+        //
+        // 必须在 Logger 首次被访问之前做完（它一次性读 IVOX_LOG_FILE 定死路径），
+        // 越早越好：早于此的 print 已经落到 daemon.log 去了，收不回来。
+        // 副作用：此后本进程不再往终端输出——手工调试请用 `IVOX_TTS=local`
+        //（那种模式没有誊清员进程，合成直接在主进程里跑）。
+        let ttsLogPath = AppPaths.ttsLogPath
+        if !FileManager.default.fileExists(atPath: ttsLogPath) {
+            FileManager.default.createFile(atPath: ttsLogPath, contents: nil)
+        }
+        // 追加模式：不能截断，Logger 之后还要往同一个文件写
+        if freopen(ttsLogPath, "a", stdout) == nil || freopen(ttsLogPath, "a", stderr) == nil {
+            print("⚠️ 誊清员: 接不了 \(ttsLogPath)，裸输出会漏进 daemon.log")
+        }
 
         let socketPath = AppPaths.ttsSocketPath
         if SocketClient.isRunning(path: socketPath) {

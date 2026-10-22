@@ -25,7 +25,7 @@ public enum Log {
         if let override = ProcessInfo.processInfo.environment["IVOX_LOG_FILE"], !override.isEmpty {
             return NSString(string: override).expandingTildeInPath
         }
-        return NSString(string: "~/.config/ivox/daemon.log").expandingTildeInPath
+        return AppPaths.daemonLogPath   // 文件名只在 AppPaths 一处定义
     }()
 
     /// 本进程的角色（daemon / queue / tts / …）。写进每一行，是「谁犯的错」的
