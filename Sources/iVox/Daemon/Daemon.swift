@@ -50,7 +50,8 @@ actor Daemon {
         self.mediaController = MediaController()
         self.queue = PlaybackQueue(
             engine: ttsEngine,
-            mediaController: mediaController
+            mediaController: mediaController,
+            idleGraceSeconds: config.resolvedPlayback.resolvedIdleGraceSeconds
         )
 
         let siConfig = config.speechInput ?? .default

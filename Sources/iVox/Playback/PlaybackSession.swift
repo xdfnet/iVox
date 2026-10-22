@@ -83,8 +83,13 @@ struct PlaybackCursor: Sendable {
 
 actor PlaybackSession {
     /// 空闲宽限期（秒）：**声音停下之后**再等这么久没新内容，就判「说完了」。
-    /// 取值理由：一轮里页与页之间夹工具调用，间隔是秒级；太长会让字幕迟迟不收。2 秒是飞哥定的手感。
-    static let idleGraceSeconds: Double = 2
+    /// 由外部配置 `playback.idleGraceSeconds` 喂进来（默认值见 `PlaybackConfig`），改完 `ivox restart` 生效。
+    private let idleGraceSeconds: Double
+
+    /// - Parameter idleGraceSeconds: 空闲宽限秒数；不传用 `PlaybackConfig` 的默认。
+    init(idleGraceSeconds: Double = PlaybackConfig.defaultIdleGraceSeconds) {
+        self.idleGraceSeconds = idleGraceSeconds
+    }
     /// 墓碑容量上限：只用来拦「被用户显式作废的摞的后续增量」，用完丢最老的。
     private static let tombstoneCapacity = 32
 
@@ -656,11 +661,12 @@ actor PlaybackSession {
     ///   传的是**轮询到静音**的实现（自带上限，设备卡死也不会把宽限的起点带死）。
     func waitForContent(afterQuiet: @Sendable () async -> Void) async -> Bool {
         await afterQuiet()
+        let grace = idleGraceSeconds   // 先取进局部：下面的 Task 里 self 可空，取不动 actor 属性
         return await withCheckedContinuation { (continuation: CheckedContinuation<Bool, Never>) in
             let waiter = Waiter(continuation)
             waiters.append(waiter)
             Task { [weak self] in
-                try? await Task.sleep(for: .seconds(Self.idleGraceSeconds))
+                try? await Task.sleep(for: .seconds(grace))
                 await self?.expire(waiter: waiter)
             }
         }
@@ -689,7 +695,7 @@ actor PlaybackSession {
         guard !ids.isEmpty else { return [] }
         for i in segments.indices { segments[i].sealed = true }
         for i in front.indices { front[i].sealed = true }
-        Log.info("空闲 \(Int(Self.idleGraceSeconds))秒无新内容，判定说完了：盖上 \(ids.joined(separator: ","))")
+        Log.info("空闲 \(Int(idleGraceSeconds))秒无新内容，判定说完了：盖上 \(ids.joined(separator: ","))")
         signal()
         return ids
     }

@@ -62,16 +62,26 @@ public struct MediaControlConfig: Codable, Sendable {
 public struct PlaybackConfig: Codable, Sendable {
     /// 播报字幕：念到哪句就在屏幕下方显示哪句（常驻，默认关）
     public var captions: Bool?
+    /// 空闲宽限期（秒）：声音停下后再等这么久没新内容，才判「说完了」并收字幕/还音量
+    public var idleGraceSeconds: Double?
 
-    public static let `default` = PlaybackConfig(captions: false)
+    /// 空闲宽限的默认值（秒），也是全仓唯一一处写着这个数的地方。
+    /// 取值理由：一轮里页与页之间夹工具调用，Bash / 读文件这类常见几秒；再往上加只会让
+    /// 字幕与汽水音量迟迟不收，不值——工具调用更久时下一页到来会揭封续播，宽限只盖印不埋碑。
+    public static let defaultIdleGraceSeconds: Double = 8
+
+    public static let `default` = PlaybackConfig(captions: false, idleGraceSeconds: defaultIdleGraceSeconds)
 
     /// 默认关：字幕会一直占着屏幕下方，只在你明确要看时才开
     public var resolvedCaptions: Bool { captions ?? false }
+    /// 未配置时的回退见 `defaultIdleGraceSeconds`
+    public var resolvedIdleGraceSeconds: Double { idleGraceSeconds ?? Self.defaultIdleGraceSeconds }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case captions
+        case idleGraceSeconds
     }
 
 }

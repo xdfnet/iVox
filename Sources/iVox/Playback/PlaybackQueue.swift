@@ -84,7 +84,7 @@ enum InterruptSource: Sendable, CustomStringConvertible {
 
 actor PlaybackQueue {
     /// 身份层：段→页→块的容器与全部身份记账（墓碑、盖印、空闲宽限）。
-    private let session = PlaybackSession()
+    private let session: PlaybackSession
 
     private var currentTask: Task<Void, Never>?
     /// 管道代号：起新管道 / 掐断时递增。在跑管道靠「自己的代号是否已过期」判断
@@ -119,10 +119,12 @@ actor PlaybackQueue {
     private let player: AudioPlayer
     private let engine: any TTSProviding
     private let media: MediaController
-    init(engine: any TTSProviding, mediaController: MediaController) {
+    init(engine: any TTSProviding, mediaController: MediaController,
+         idleGraceSeconds: Double = PlaybackConfig.defaultIdleGraceSeconds) {
         self.engine = engine
         self.player = AudioPlayer()
         self.media = mediaController
+        self.session = PlaybackSession(idleGraceSeconds: idleGraceSeconds)
         // 字幕跟**播放**走（不是合成）：句首块被设备读出时才报，与声音对齐。
         // 回调在播放器的 serialQueue 上，跳回本 actor 再转发（onCaption 是本 actor 状态）。
         player.onSentenceStarted = { [weak self] text in
