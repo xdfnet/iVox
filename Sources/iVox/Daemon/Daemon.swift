@@ -315,7 +315,7 @@ actor Daemon {
         // 处理器都装好了，这时才开 tap（顺序反了会让启动瞬间的按键落到 nil handler 上）
         keyTap.start()
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
-        // 键位本身不写在这里：各动作实际绑了哪组键，由键盘事件层逐行打「热键: xxx = cmd+d」，
+        // 键位本身不写在这里：各动作实际绑了哪组键，由键盘事件层逐行打「热键: xxx = <键位>」，
         // 改过配置后那里就是真相（这里再写一遍就成了第二份、还会漂移）。
         Log.info("热键已装配（划词翻译 \(speak)；QuickActions 五项；手动打断三档：跳整摞 / 掀桌 / 读下一页）")
     }

@@ -22,7 +22,7 @@ public enum ConfigTemplate {
 # 写法：cmd / ctrl / opt / shift + 字母或数字，用 + 连接（大小写无所谓）。
 # 语音键（按住说话）单列在最后，取值 rightcmd / rightctrl / rightcmd+rightctrl / none。
 [hotkeys]
-translate = "cmd+d"             # 划词翻译：复制 → 翻译 → 浮窗 + 朗读
+translate = "opt+s"             # 划词翻译：复制 → 翻译 → 浮窗 + 朗读
 openTerminal = "opt+z"         # 开终端
 openTerminalClaude = "opt+a"   # 开终端并跑 claude
 openTerminalCodex = "opt+x"    # 开终端并跑 codex

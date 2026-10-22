@@ -37,7 +37,7 @@ public struct KeyModifiers: OptionSet, Sendable, Hashable {
 ///
 /// `keyName` 是**按写法记的**（"d" / "2" / "esc"），不是从键码反查的——`1` 与 `u`、
 /// `2` 与 `i` 键码相同，反查出来的名字会变成 "ctrl+u"，用户看着莫名其妙。
-/// 显示名与配置里的写法一致（`cmd+d`），看到日志就知道该往配置里写什么。
+/// 显示名与配置里的写法一致（`opt+s`），看到日志就知道该往配置里写什么。
 public struct KeyChord: Sendable, Hashable {
     public let keyCode: Int64
     public let modifiers: KeyModifiers
@@ -140,7 +140,7 @@ public enum HotKeySpec {
     /// 各动作的默认键位。**默认只写这一处**，配置文件是它的覆盖。
     public static func defaultChord(for action: HotKeyAction) -> KeyChord {
         switch action {
-        case .translate:          return chord(keyName: "d", modifiers: .command)   // Cmd+D
+        case .translate:          return chord(keyName: "s", modifiers: .option)     // Opt+S
         case .openTerminal:       return chord(keyName: "z", modifiers: .option)    // Opt+Z
         case .openTerminalClaude: return chord(keyName: "a", modifiers: .option)    // Opt+A
         case .openTerminalCodex:  return chord(keyName: "x", modifiers: .option)    // Opt+X

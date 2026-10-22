@@ -122,7 +122,7 @@ make clean     # 清除 .build
 ```toml
 # 划词翻译
 [hotkeys]
-translate = "cmd+d"     # 我常用 cmd+shift+d，改完跑 ivox restart 生效
+translate = "opt+s"     # 改完跑 ivox restart 生效
 ```
 
 主要字段：
@@ -160,7 +160,7 @@ voice = "rightcmd"
 
 | 动作名 | 默认键位 | 干什么 |
 |---|---|---|
-| `translate` | `cmd+d` | 划词翻译 |
+| `translate` | `opt+s` | 划词翻译 |
 | `openTerminal` | `opt+z` | 在当前目录开终端 |
 | `openTerminalClaude` | `opt+a` | 开终端跑 `claude` |
 | `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
