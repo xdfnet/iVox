@@ -75,6 +75,27 @@ struct TTSCommand: AsyncParsableCommand {
             }
         }
 
+        // 盯爸：父进程没了就自己走人。
+        //
+        // 主进程正常退出时 SIGTERM 走 `Daemon.cleanup()` → `stopChild()`，本进程被带走；
+        // **主进程崩溃时那条路来不及跑**，本进程被 init 收养成孤儿——3 GB 内存和一块 GPU
+        // 一直挂着干等到下次重启（2026-10-22 实测挂了 9 小时才发现，症状是「怎么有两个
+        // ivox 进程」）。launchd 只监督主进程那一个 job，孤儿不在它的视野里。
+        //
+        // 用 `getppid()` 认「爹还在不在」：父进程一死，本进程被 init 收养，ppid 变成 1。
+        // 间隔 5 秒足够——孤儿只是占资源，晚几秒回收没有区别，而误判成自杀才是真的坏。
+        Task {
+            let parent = Darwin.getppid()
+            while true {
+                try? await Task.sleep(for: .seconds(5))
+                let now = Darwin.getppid()
+                if now != parent {
+                    Log.info("誊清员: 父进程没了（父=\(parent) 现在=\(now)），自己退出")
+                    Darwin.exit(0)   // 不是出错，是「该下班了」，故不用 1
+                }
+            }
+        }
+
         // 常驻：等主进程 SIGTERM。默认处置就是终止，不必另装信号源。
         // 不用 dispatchMain() 是因为它在 async 上下文中会占死协作线程池的线程。
         while true {
