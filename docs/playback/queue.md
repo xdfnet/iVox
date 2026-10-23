@@ -93,7 +93,7 @@
   ——两份各写一遍就会各自漂移，2026-10-20 那次键位全反正是这么来的）：
   - 掀页 `Ctrl+Esc` → `claimCurrentPage`（在 Session 内**占位**领走当前页）→ 掐 → 删这一页
   - 掀摞 `Ctrl+1` → `discardCurrentSegment`（后续分块立墓碑，连没印出来的也不印）
-  - 全掀 `Ctrl+2` → `cancelAll`；右⌘ 说话同理。背景音乐不归它管
+  - 全掀 `Ctrl+2` → `cancelAll`；右⌘ 说话走同一条路但**不挂墓碑**（说话是「闭一下嘴」，不是「这摞我不要了」——2026-10-23 修：埋了碑，Claude 这一摞后续送来的页被静默丢弃，实测丢过 891 字 / 15 块）。背景音乐不归它管
   - 译文插队 → `speakUserInitiated`（译文进独立的「加急段」列表）
   > **掀页的靶心必须占位，不能只读一次**：`claimCurrentPage` 与「删这一页」之间隔着 `await`（等播放器退净），actor 在挂起点可重入，第二次按压会插进来、又领到同一个页号，两次都去删同一页（2026-10-17 `P2` 实测两下都报同一页，随后 daemon 崩）。**领走即焚 + 占位**两半都要：领走后第二次按压拿不到靶心，退化成「只掐在播」。
 - **⚠️ 调用顺序必须先于状态判定：连接内的四个操作要按帧序落地**（`ConnectionHandler.StreamOpChain` 串成一链）。`{type:stream}` 首帧、每个入队块、`{end}`/`{cancel}` 原先各自 `Task {}` 投递到本 actor，**落地顺序全凭调度器**。实测 `{end}` 的 Task 抢在同一连接后一个入队 Task 之前执行：`endTurn` 已把该轮盖印，迟到的**同轮** `enqueue` 又把它揭回未收尾，而此时再无帧可关它——分块全部播完后那一摞永远收不掉：`/health` 恒 `playing=true`、`queued=0`、无「播放结束」，而**两把兜底都够不着**（背压看门狗要求 `pendingCount>0`，此刻已 0；drain 还没轮到）。
@@ -101,9 +101,9 @@
 - **轮次身份靠「轮次栈 + 墓碑」判定**（`turnStack` / `deadTurns`，都在 `PlaybackSession` 里），**消费靠游标**：
   - **`turnStack` 只做 pi 双流的空流 `{cancel}` 认证**（回答「这个 turnID 是不是合法新轮、属主该不该交还」）；消费视角是「游标之后那一块」，二者解耦、正交。已作废轮的迟到帧静默丢弃。
   - **`{cancel}` 的轮出栈**：被取消的轮没有内容需要保护，属主交还给被它顶掉的那一轮。**这条是 pi 「整轮没声音」的修复关键**：pi 一个用户消息会开两条流、其中一条刚开就被 `{cancel}`，而承载正文的是先开的那条——若取消的轮继续占着栈顶，正文那条就被永久判成过期旧轮、整轮哑掉。
-  - **墓碑 `deadTurns`**：`{cancel}`、用户开口（`cancelAll()`）、Ctrl+1 跳过（`skipCurrentBucket`）之后该轮不再开口，含客户端关闭连接后 EOF 兜底补出的残尾。容量 32（`PlaybackSession.tombstoneCapacity`），防止无限增长。
+  - **墓碑 `deadTurns`**：用户**显式放弃内容**时该轮不再开口——Ctrl+2 全掀（`cancelAll(buryTurns: true)`）、Ctrl+1 掀摞（`takeHeadStack`）、pi 的 `{cancel}`，含客户端关闭连接后 EOF 兜底补出的残尾。**右⌘说话不挂墓碑**（只是闭一下嘴）。容量 32（`PlaybackSession.tombstoneCapacity`），防止无限增长。
   只判「不等于 currentTurn」是不够的：那会把新轮的首帧和旧轮的迟到帧混为一谈；只按「见过没见过」判也不行：会把**并行那条空流**的取消算到真正在跑的轮头上。
-- **`cancelAll()` = 「全场闭嘴」的语义：停当场 + 作废全部流式轮**（`discardAll()` + `bargeIn()`）。⚠️ `discardAll()` **必须连 `turnStack` 里的轮一起立墓碑**，不只是容器里已有的段：那些是「已声明、块还没到」的轮，此刻容器里还没有它们的段，只按段立碑就会漏掉——打断之后它们陆续送来的字照常播（2026-10-17 `E7` 实测：清空队列时 `pending=0`，墓碑一个没立，打断后同一轮照样开口）。调用方只有右⌘（`speech`）与 Ctrl+2（`esc`）。**`{type:stop}` 停止帧已完全失效且无发送方**（hook.sh interrupt 已摘、ivox quiet 已删），收到时 ConnectionHandler 仅记日志忽略（留作护栏，防止旧帧被当正文念出来）。`turn` 顶替也不再经 bargeIn——新轮排队。
+- **`cancelAll()` = 「全场闭嘴」的语义：停当场 + 作废全部流式轮**（`discardAll()` + `bargeIn()`）。⚠️ `discardAll()` **必须连 `turnStack` 里的轮一起立墓碑**，不只是容器里已有的段：那些是「已声明、块还没到」的轮，此刻容器里还没有它们的段，只按段立碑就会漏掉——打断之后它们陆续送来的字照常播（2026-10-17 `E7` 实测：清空队列时 `pending=0`，墓碑一个没立，打断后同一轮照样开口）。调用方只有右⌘（`speech`）与 Ctrl+2（`esc`），**两者清场一样、挂不挂墓碑不同**：`.speech` 不挂（说话只是闭一下嘴，这一摞后续送来的页照常开口），`.esc` 挂（用户明确闭嘴，这一摞的后续增量也别来）。**`{type:stop}` 停止帧已完全失效且无发送方**（hook.sh interrupt 已摘、ivox quiet 已删），收到时 ConnectionHandler 仅记日志忽略（留作护栏，防止旧帧被当正文念出来）。`turn` 顶替也不再经 bargeIn——新轮排队。
 - **「掐在播」与「清场」拆成两层**：`preemptCurrent` 只作废管道代号 + 取消在播合成与已排队音频，**不动容器**；`bargeIn` 则是「先 `discardAll()` 再调它」= 全掀。由此派生三个「只掐不清」的入口：
   - **Opt+S 念译文 = 插队**：`speakUserInitiated` = `preemptCurrent(.dict)` → 等旧管道退净 → 译文进**加急段**（独立于常规段的 `front` 列表，`nextCursor()` 先扫它）→ 立刻起管道。其余内容一个不丢，播完译文接着播（若想连当前摞一起丢，那是 Ctrl+1 的语义）。**入口有两个，落到同一条路**：`ConnectionHandler` 的 `{now:1}` 字段（CLI `ivox speak --now`），以及 `TranslationCoordinator` 的 Opt+S 快捷键。加 socket/CLI 入口是为了让自检能压到它（`I1-insert-front-keeps-queue`）——机器里唯一被允许插队的内容没有自动化回归保护是不成的。
   - **Ctrl+1 = 掐 + 掀当前摞**：`skipCurrentBucket` = `preemptCurrent` → `discardCurrentSegment()`（内部含立墓碑，该摞后续分块也不再开口）→ `pumpOrSettle()` 接着播；没有下一摞则收尾。
@@ -136,5 +136,5 @@
 9. **新增「有新内容」的入口时必须让它走到 `PlaybackSession.signal()`**——空闲宽限挂在 `waitForContent()` 的等待表上，任何让它该醒来的事件（入队/轮次开始/结束/掐）都必须经过 `signal`，否则宽限只能等满 5 秒才判。**反过来：删除路径（掀页/掀摞/全掀）绝不能发 `signal`**——`signal` 的语义是「来新货了」，删除发了会让宽限误判成有更新而作废，且作废后没有接班人，这一摞永远收不掉
 9b. **作废宽限只能递增 `graceEpoch`，不能 `graceTask?.cancel()`**——取消挂在 `withCheckedContinuation` 上的 Task 不会解开 continuation，Waiter 会永远留在等待表里。`idleGraceElapsed` 发现自己已被取代就直接返回、不动别人的 `graceTask`；被唤醒（来新货）则**必须再 `pumpOrSettle()` 一次**，否则那次起宽限可能被「`graceTask` 还占着」挡掉而没人接班
 10. **背压水位（4s/2s）调整只改 `AudioPlayer` 的 `highWaterFrames/lowWaterFrames`**——高水位是内存上限也是合成预取上限（约 48kHz Int16 单声道 ≈ 384KB/4s），低水位须低于高水位以形成滞后区间，避免在阈值边缘反复挂起/放行
-11. **弱分组只在 `appendGrouped` 里管，绝不要接进 `turnStack`**——`turnStack` 是 pi 双流「属主交还」的认证栈，混入别的 id 会让 pi 的正文流被判成过期旧轮（**整轮没声音**）。弱分组要的只有两件事：「同 group 并段」和「墓碑拦住后续批次」，都不需要栈。掀摞时记得连墓碑一起立（`discardCurrentSegment` 已做），**全掀时记得连 `turnStack` 里的轮一起立**（`discardAll` 已做——它们「已声明、块还没到」，此刻容器里还没有对应的段，只按段立墓碑就漏掉了，打断之后它们陆续送来的字照常播，`E7` 实测）
+11. **弱分组只在 `appendGrouped` 里管，绝不要接进 `turnStack`**——`turnStack` 是 pi 双流「属主交还」的认证栈，混入别的 id 会让 pi 的正文流被判成过期旧轮（**整轮没声音**）。弱分组要的只有两件事：「同 group 并段」和「墓碑拦住后续批次」，都不需要栈。掀摞时记得连墓碑一起立（`discardCurrentSegment` 已做），**全掀时记得连 `turnStack` 里的轮一起立**（`discardAll` 已做——它们「已声明、块还没到」，此刻容器里还没有对应的段，只按段立墓碑就漏掉了，打断之后它们陆续送来的字照常播，`E7` 实测）；但**右⌘说话不埋碑**，它只清场
 12. **流式连接的队列操作一律走 `ConnectionHandler` 的 `chain.hop {}`，不许直接 `Task { await queue.… }`**——顺序是协议语义的一部分（`{end}` 之后再无帧可关轮次）；裸 `Task {}` 落地乱序会让已关轮次被迟到分块重新打开，管道永久挂起（见上「按帧序落地」条）

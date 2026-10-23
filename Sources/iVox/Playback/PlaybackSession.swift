@@ -304,7 +304,7 @@ actor PlaybackSession {
         // 墓碑仍然按外部号拒：增量就是拿外部号来的，问的是「这个号还能不能再来」，
         // 不是「这是哪一摞」。前者按外部号查是对的，后者必须自编号。
         if let note, deadTurns.contains(note) {
-            Log.debug("丢弃：turn=\(note) 那一摞已被盖上")
+            Log.info("丢弃：turn=\(note) 那一摞已被放弃，它后续来的字不再开口（墓碑）")
             return nil
         }
         let fresh = newPage(jobs, pageNote: pageNote)
@@ -337,7 +337,7 @@ actor PlaybackSession {
                        note: String?, pageNote: String? = nil) -> StackAccept {
         guard !jobs.isEmpty else { return .appended }
         if let note, deadTurns.contains(note) {
-            Log.debug("丢弃：turn=\(note) 那一摞已被盖上")
+            Log.info("丢弃：turn=\(note) 那一摞已被放弃，它后续来的字不再开口（墓碑）")
             return .dead
         }
         guard let hit = segmentIndex(localID: stack) else {
@@ -454,8 +454,8 @@ actor PlaybackSession {
     /// 这一摞说完了（Stop 钩子 / `{end}`）：**只盖印，不立墓碑**。
     ///
     /// 盖印 = 「这摞不会再有内容了」；墓碑 = 「这摞作废，迟到的内容一律不开口」。
-    /// 墓碑只归**用户主动放弃**（掀 / 全掀 / 取消轮次），不归收尾——
-    /// 收尾只该决定「什么时候收字幕」，**内容生死只由用户放弃决定**。
+    /// 收尾不归墓碑（墓碑归谁见 `bury`）——收尾只该决定「什么时候收字幕」，
+    /// **内容生死只由用户放弃决定**。
     ///
     /// 2026-10-21 实测踩过：Stop 钩子与正文是两条独立通路，谁先到没保证。
     /// 有一次 Stop 早到 9 毫秒，收尾顺手立了墓碑，于是随后到达的最后一段 140 字
@@ -585,9 +585,7 @@ actor PlaybackSession {
         return takeSpent(&front) + takeSpent(&segments)
     }
 
-    /// 全掀：清空容器，所有摞立墓碑。
-    @discardableResult
-    /// 全掀（Ctrl+Esc）：**清容器是全体，立墓碑只给属主**。
+    /// 全掀：清空容器；**立不立墓碑由 `buryTurns` 决定**（见 `bargeIn` 的调用点）。
     ///
     /// **清全体**——谁在念都得停，这不伤人。
     ///
@@ -599,7 +597,12 @@ actor PlaybackSession {
     /// **turnStack 里的轮同样按属主挑**：它们是「已声明、块还没到」的轮，此刻容器里还没有对应的段，
     /// 只按段立碑就会漏掉它们——打断之后它们陆续送来的字会照常播出来
     ///（2026-10-17 `E7` 实测：清空队列时 pending=0，墓碑一个没立，打断后同一轮照样开口）。
-    func discardAll() -> [String] {
+    ///
+    /// - Parameter buryTurns: `true` = 连「这些摞的将来」一起作废（用户显式放弃内容）；
+    ///   `false` = 只清此刻场上这些，**它们的后续增量照常开口**（说话只是闭一下嘴，
+    ///   不是「这摞我不要了」——见 `bargeIn`）。
+    @discardableResult
+    func discardAll(buryTurns: Bool = true) -> [String] {
         let owner = lastActiveSource
         var ids = turnStack.filter { $0.source == owner }.map(\.id)
         ids += segments.filter { $0.source == owner }.compactMap(\.turnID)
@@ -607,7 +610,7 @@ actor PlaybackSession {
         turnStack.removeAll()
         segments.removeAll()
         front.removeAll()
-        ids.forEach { bury($0) }
+        if buryTurns { ids.forEach { bury($0) } }
         signal()
         return ids
     }
@@ -642,6 +645,18 @@ actor PlaybackSession {
         return nextPageSeq
     }
 
+    /// 立墓碑：记下「这个摞被用户放弃了，它后续来的增量一律不开口」。
+    ///
+    /// **墓碑只归用户显式放弃内容**——立碑点一共三处，全是「用户说了不要」：
+    /// `takeHeadStack`（Ctrl+1 掀摞）· `cancelTurn`（pi 的 `{cancel}`）·
+    /// `discardAll(buryTurns: true)`（Ctrl+2 全掀）。
+    ///
+    /// **不立碑的两处**：收尾（`sealTurn`）——那不是放弃，只是「说完了」；
+    /// 右⌘说话（`bargeIn` 的 `.speech`）——那只是「闭一下嘴让我说」，
+    /// 埋了碑会把 Claude 这一摞后续送来的页**静默丢弃**
+    /// （2026-10-23 实测：20:20 说话 → 20:23 同一摞的新页撞碑消失，891 字 / 15 块一句没出声）。
+    ///
+    /// 墓碑按**外部 turn_id** 记（增量就是拿外部号来的，问的是「这个号还能不能再来」）。
     private func bury(_ id: String) {
         deadTurns.removeAll { $0 == id }
         deadTurns.append(id)

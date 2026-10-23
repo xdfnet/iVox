@@ -24,7 +24,7 @@ actor ConnectionHandler: SocketConnectionHandler {
         if let stack = stackOfExternalGroup[group] {
             switch await queue.appendToStack(stack, jobs, group: group, page: page) {
             case .appended: return
-            case .dead: return                       // 墓碑已立：这批增量不开口
+            case .dead: return                       // 墓碑已立：这批增量不开口（丢弃原因由资料室打日志）
             case .gone: stackOfExternalGroup[group] = nil
             }
         }

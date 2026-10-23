@@ -125,6 +125,7 @@ final class SpeechInputService: @unchecked Sendable {
             // 免得音乐暂停与打断谁先谁后不定。
             // **全项目借还背景音乐只此一家**——录音需要安静（音乐会串进麦克风、干扰识别），
             // 播报那条链路已完全不碰音乐。
+            // `.speech` 的打断**只清场、不埋墓碑**：说话是「闭一下嘴」，不是「这摞我不要了」。
             await queue.cancelAll(origin: .speech)
             await media.pause()
             showOverlay(.listening)

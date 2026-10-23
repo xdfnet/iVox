@@ -559,6 +559,43 @@ final class PlaybackSessionStoryTests: XCTestCase {
         XCTAssertNil(head, "桌子应已被收空")
         XCTAssertFalse(pending)
     }
+
+    // MARK: - 说话是「闭一下嘴」，还是「这摞我不要了」？
+
+    /// 右⌘说话 = 「闭一下嘴让我说」，**不是**「这摞我不要了」。
+    ///
+    /// 2026-10-23 实测踩过：说话时清场顺手给这一摞立了墓碑，于是 Claude 随后送来的
+    /// 同一摞新页撞碑消失——891 字 / 15 块一句没出声，事后日志还显示「队列已空」，
+    /// 根本看不出丢了东西。根子在一个 turn_id = 你一次输入引发的**全部**回复：
+    /// 一次输入横跨好几页、还夹着工具调用后的后续，墓碑一刀切下去就误杀整摞。
+    ///
+    /// 这条钉的是：**清场照旧，墓碑不立**。
+    func testSpeechInterruptKeepsTheStackAcceptingLaterPages() async {
+        let s = PlaybackSession()
+        _ = await deliver(s, group: "gA", page: "p1", blocks: [block("A1", source: "claude")])
+        await advanceAll(s)
+
+        _ = await s.discardAll(buryTurns: false)      // 右⌘说话：只清此刻
+
+        let later = await deliver(s, group: "gA", page: "p2", blocks: [block("A2", source: "claude")])
+        XCTAssertEqual(later, .appended, "说话只是闭一下嘴 —— 这一摞后续送来的页必须还能开口")
+
+        let spoken = await spokenOrder(s)
+        XCTAssertEqual(spoken, ["A2"], "后到的内容必须照念")
+    }
+
+    /// 反过来钉住另一半：用户**显式放弃内容**时（Ctrl+2 全掀）墓碑照立——
+    /// 掀了不埋，「放弃」就退化成「暂停一下」，被放弃的那摞会重新开口。
+    func testShutUpStillBuriesTheStackItAbandoned() async {
+        let s = PlaybackSession()
+        _ = await deliver(s, group: "gA", page: "p1", blocks: [block("A1", source: "claude")])
+        await advanceAll(s)
+
+        _ = await s.discardAll(buryTurns: true)       // Ctrl+2 全掀：放弃内容
+
+        let later = await deliver(s, group: "gA", page: "p2", blocks: [block("A2", source: "claude")])
+        XCTAssertEqual(later, .dead, "被放弃的摞，它后续送来的页不该再开口")
+    }
 }
 
 // MARK: - 验收清单对照：哪条钉在哪

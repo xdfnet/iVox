@@ -189,7 +189,7 @@ Daemon (actor)
 `PlaybackSession`（actor）：唯一持有容器与全部身份记账。容器三层——
 **段 Segment**（一次回复 = 一摞 / 普通播报）→ **页 Page**（一条消息）→ **块 Block**（1~80 字合成单位），
 外加一个独立的**加急段**列表（Opt+S 译文）排在最前。游标指向当前块但**不把它弹出容器**。
-墓碑 `deadTurns` 拦用户显式作废的摞的后续增量。
+墓碑 `deadTurns` 拦用户显式作废的摞的后续增量（**右⌘说话不算作废**——它只清场，不埋）。
 
 `PlaybackQueue`（actor）：只管播放。连续管道 `processNext` 逐块 `synthesizeStream → player.write`，
 块间不 drain（设备零停顿）；**所有路径的收尾收敛到唯一的 `pumpOrSettle()`**（有活补起管道 /
