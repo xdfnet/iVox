@@ -66,9 +66,9 @@ public struct PlaybackConfig: Codable, Sendable {
     public var idleGraceSeconds: Double?
 
     /// 空闲宽限的默认值（秒），也是全仓唯一一处写着这个数的地方。
-    /// 取值理由：一轮里页与页之间夹工具调用，Bash / 读文件这类常见几秒；再往上加只会让
-    /// 字幕与汽水音量迟迟不收，不值——工具调用更久时下一页到来会揭封续播，宽限只盖印不埋碑。
-    public static let defaultIdleGraceSeconds: Double = 8
+    /// 取值理由：页与页之间的工具调用多半好几秒，再往上加只会让字幕与汽水音量迟迟不收，不值。
+    /// 取短了也不怕——宽限只盖印不埋碑，工具调用更久时下一页到来会揭封续播。
+    public static let defaultIdleGraceSeconds: Double = 5
 
     public static let `default` = PlaybackConfig(captions: false, idleGraceSeconds: defaultIdleGraceSeconds)
 

@@ -59,7 +59,7 @@ Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`�
 播报模式：
 
 - **`hook.sh msgdisplay <source>`（MessageDisplay，Claude Code 交互会话主路径）**：assistant 消息流式显示时按行批触发，`delta` = 自上一批以来新完成的整行文本。**必须极快返回**（Claude Code 等本钩子返回才渲染该批），故 delta 提取 + 审计用单个 python、播报用后台 `&`。走 `ivox speak --source <source> <text>` 排队入队，过程内容（分步/工具多段）逐句播报；最后一条 assistant 即完整结尾。空/过短纯西文 delta 不播。
-- **`hook.sh end <source>`（Stop 收尾信号）**：只送「这一摞说完了」的暗号，**不带正文、不出声**。作用是让队列立刻判收尾（字幕立刻回来），不必等空闲宽限那 8 秒。没有它也不会错，只是最后那几秒要等满。
+- **`hook.sh end <source>`（Stop 收尾信号）**：只送「这一摞说完了」的暗号，**不带正文、不出声**。作用是让队列立刻判收尾（字幕立刻回来），不必等空闲宽限那 5 秒。没有它也不会错，只是最后那几秒要等满。
 
 > **`interrupt` 分支已从 hook.sh 移除**——打断权只归 ivox 快捷键（右⌘/Opt+S/Ctrl+2/Ctrl+1/Ctrl+Esc）与命令行 `ivox skip`（同三档），不再经 hook.sh 自动打断（UserPromptSubmit 亦不挂）。
 
@@ -140,7 +140,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - `actor` 保证线程安全
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
 - **轮次（turn）语义**：队列**按轮排队，播全播完**——同一 `turnID` 的分块并入同一段顺序 append；新 turn 在队尾追加新段（`enqueue` 的新 turn / `beginTurn`），**不再 bargeIn**；**无 turn 的普通播报（`ivox speak` / hook.sh）也独立成段排队**。`processNext` 播完队首段才前移。（容器与游标见 [playback/queue.md](playback/queue.md)：一段 = 一摞，游标指向当前块但不把它弹出容器。）
-- 某段 sealed（`sealTurn` / `Stop` 的 `finishTurn` / 宽限的 `sealIdle()` 标记）才允许空段前移；流动中（未 sealed）空段挂起等下一批，不封口；全部段都封且空才收尾（收字幕，打「播报结束」）。**收尾主力是 `Stop` 钩子**（按 `session_id` 反查出 turn_id 精确收）；**空闲宽限**兜底：先等设备把已排队音频播完，再最多等 8 秒，等不到新块就判「这一摞说完了」。
+- 某段 sealed（`sealTurn` / `Stop` 的 `finishTurn` / 宽限的 `sealIdle()` 标记）才允许空段前移；流动中（未 sealed）空段挂起等下一批，不封口；全部段都封且空才收尾（收字幕，打「播报结束」）。**收尾主力是 `Stop` 钩子**（按 `session_id` 反查出 turn_id 精确收）；**空闲宽限**兜底：先等设备把已排队音频播完，再最多等 5 秒，等不到新块就判「这一摞说完了」。
 - 用户快捷键共 **5 个入口**（手动打断三档 + 插队 + 说话），每个带**来源**标识：
   | 用户动作 | 入口 | 来源 |
   |---------|------|------|
