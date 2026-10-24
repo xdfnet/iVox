@@ -29,8 +29,8 @@ public enum ConfigTemplate {
 # 键位写法：cmd / ctrl / opt / shift + 主键，用 + 连接（大小写无所谓）。
 # 主键可用：a-z、0-9、esc、space、tab、return、backspace、delete、f1-f12、方向键。
 [hotkeys]
-openTerminal = "opt+z"          # 开终端 ｜ 默认 opt+z ｜ 任意组合键
-openTerminalClaude = "opt+a"    # 开终端并跑 claude ｜ 默认 opt+a ｜ 任意组合键
+openTerminal = "opt+a"          # 开终端 ｜ 默认 opt+a ｜ 任意组合键
+openTerminalClaude = "opt+z"    # 开终端并跑 claude ｜ 默认 opt+z ｜ 任意组合键
 openTerminalCodex = "opt+x"     # 开终端并跑 codex ｜ 默认 opt+x ｜ 任意组合键
 openTerminalPi = "opt+q"        # 开终端并跑 pi ｜ 默认 opt+q ｜ 任意组合键
 copyPath = "opt+c"              # 复制 Finder 选中路径 ｜ 默认 opt+c ｜ 任意组合键

@@ -252,8 +252,8 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 请求头，无 body，**无回复**：
 
 ```
-{type:quick,action:terminal}    # 开终端（Opt+Z）
-{type:quick,action:claude}      # 开终端跑 claude（Opt+A）
+{type:quick,action:terminal}    # 开终端（Opt+A）
+{type:quick,action:claude}      # 开终端跑 claude（Opt+Z）
 {type:quick,action:codex}       # 开终端跑 codex（Opt+X）
 {type:quick,action:pi}          # 开终端跑 pi（Opt+Q）
 {type:quick,action:copy-path}   # 复制 Finder 选中路径（Opt=C）
@@ -311,7 +311,7 @@ ivox skip --stack                          # 掀摞（Ctrl+1）
 ivox skip --all                            # 全掀（Ctrl+2）
 
 # 快速操作（= {type:quick}，daemon 不在则静默返回）
-ivox quick terminal                        # Opt+Z
+ivox quick terminal                        # Opt+A
 ivox quick copy-path                       # Opt=C
 
 # 锁屏 / 解锁（= {type:lock} / {type:unlock}；daemon 不在则报错）

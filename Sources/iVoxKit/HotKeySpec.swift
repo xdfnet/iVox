@@ -140,8 +140,8 @@ public enum HotKeySpec {
     /// 各动作的默认键位。**默认只写这一处**，配置文件是它的覆盖。
     public static func defaultChord(for action: HotKeyAction) -> KeyChord {
         switch action {
-        case .openTerminal:       return chord(keyName: "z", modifiers: .option)    // Opt+Z
-        case .openTerminalClaude: return chord(keyName: "a", modifiers: .option)    // Opt+A
+        case .openTerminal:       return chord(keyName: "a", modifiers: .option)    // Opt+A
+        case .openTerminalClaude: return chord(keyName: "z", modifiers: .option)    // Opt+Z
         case .openTerminalCodex:  return chord(keyName: "x", modifiers: .option)    // Opt+X
         case .openTerminalPi:     return chord(keyName: "q", modifiers: .option)    // Opt+Q
         case .copyPath:           return chord(keyName: "c", modifiers: .option)    // Opt+C

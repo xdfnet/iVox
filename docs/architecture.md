@@ -315,8 +315,8 @@ Daemon (actor)
 
 `Sources/iVox/QuickActions/QuickActionsService.swift`
 
-- `Opt+Z` 在 Finder 当前目录开终端；`Opt+A`/`Opt+X`/`Opt+Q` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
-- `Opt+Z`（不带命令）在 Ghostty **已经在跑时改为聚焦**而非开新窗口——连按五下开五个终端是最明显的「后面干活的压力」。取舍：复用时不保证落在 Finder 当前目录（取已在跑的窗口目录要向 Ghostty 要 Automation 授权，不值当）。带命令的三个**仍开新实例**（见下条实测坑②，这条不能破）
+- `Opt+A` 在 Finder 当前目录开终端；`Opt+Z`/`Opt+X`/`Opt+Q` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
+- `Opt+A`（不带命令）在 Ghostty **已经在跑时改为聚焦**而非开新窗口——连按五下开五个终端是最明显的「后面干活的压力」。取舍：复用时不保证落在 Finder 当前目录（取已在跑的窗口目录要向 Ghostty 要 Automation 授权，不值当）。带命令的三个**仍开新实例**（见下条实测坑②，这条不能破）
 - 开终端走 **Ghostty**（`--working-directory` + `--initial-command` 是它的原生 CLI 参数）：一条 LaunchServices 调用就够，**不需要**临时 `.command` 文件，也不沾 Terminal 的 Automation 授权
 - 三个实测坑：① 参数必须经 `NSWorkspace.OpenConfiguration.arguments`（数组）下发——命令行 `open --args` 会把**含空格的参数拆坏**；② **必须配 `createsNewApplicationInstance`**，复用已运行的 Ghostty 实例时参数会被**静默忽略**（命令根本不跑）；③ **不用 `-e`**——它每次弹 macOS 的「Allow Ghostty to execute」确认框，Ghostty 目前无配置项可关
 - 命令写作 `--initial-command=/bin/zsh -lc <cmd>`：该参数默认经 `/bin/bash --noprofile --norc -c` 执行，套一层 login shell 才拿得到用户 PATH（`/opt/homebrew/bin`、`~/.local/bin` 都不在 GUI 进程的最小 PATH 里）；另配 `--wait-after-command=true` 让命令退出后**保留窗口**（Ghostty 默认关窗，与原先 Terminal 的行为不一致，退出 claude 时会看不到最后的输出）

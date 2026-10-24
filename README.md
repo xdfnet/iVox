@@ -163,8 +163,8 @@ voice = "rightcmd"
 
 | 动作名 | 默认键位 | 干什么 |
 |---|---|---|
-| `openTerminal` | `opt+z` | 在当前目录开终端 |
-| `openTerminalClaude` | `opt+a` | 开终端跑 `claude` |
+| `openTerminal` | `opt+a` | 在当前目录开终端 |
+| `openTerminalClaude` | `opt+z` | 开终端跑 `claude` |
 | `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
 | `openTerminalPi` | `opt+q` | 开终端跑 `pi` |
 | `copyPath` | `opt+c` | 复制 Finder 选中路径 |

@@ -1,5 +1,16 @@
 # iVox 开发日志
 
+## 未发布 — 2026-10-25
+
+- **「开终端」与「开 Claude」的快捷键对调** — 飞哥「打开终端和打开 Claude 的快捷键对调，默认值对调」。
+  现在 **Opt+A 开终端**（裸终端）、**Opt+Z 开终端跑 `claude`**；`Opt+X`（codex）/ `Opt+Q`（pi）/
+  `Opt+C`（复制路径）不动。
+  - 默认值改在**唯一真源** `HotKeySpec.defaultChord`，模板 `ConfigTemplate.swift` 同步（仍是那两份副本）
+  - 机器上的 `~/.config/ivox/config.toml` 一并对调（用户配置会覆盖默认值，不改它等于没换）
+  - README 字段表、`docs/architecture.md`、`docs/socket-api.md`、`QuickActionsService` 文件头与
+    `QuickCommand` 帮助文本同步改；`Opt+Z/A/X/Q/C` 这类**集合列举**的地方没动（集合没变）
+  - 单测钉住的值同步对调（`HotKeySpecTests`）
+
 ## 未发布 — 2026-10-24
 
 - **合成慢不再被当成断流——「听听着就少了一部分」查到了根因** — 飞哥反馈「我啥都干，听这听着就少了一部分」。

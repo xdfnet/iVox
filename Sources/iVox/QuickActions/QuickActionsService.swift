@@ -8,8 +8,8 @@ import iVoxKit
 /// QuickActions —— 从 Finder 当前目录出发做一件事：开终端、拉起编码工具、复制路径。
 ///
 /// 对应五个热键：
-/// - `Opt+Z` 在 Finder 当前目录打开终端
-/// - `Opt+A` / `Opt+X` / `Opt+Q` 打开终端并分别执行 `claude` / `codex` / `pi`
+/// - `Opt+A` 在 Finder 当前目录打开终端
+/// - `Opt+Z` / `Opt+X` / `Opt+Q` 打开终端并分别执行 `claude` / `codex` / `pi`
 /// - `Opt+C` 把 Finder 选中项的路径写进剪贴板
 ///
 /// 它和划词翻译同为「用户按了组合键」的入口，但**是两个能力域**：`Translation/` 管文本工具，
@@ -49,7 +49,7 @@ final class QuickActionsService {
 
     // MARK: - 开终端
 
-    /// 不带命令的 Opt+Z：**Ghostty 已经在跑就把它叫到前面，不再开新窗口**。
+    /// 不带命令的 Opt+A：**Ghostty 已经在跑就把它叫到前面，不再开新窗口**。
     /// 连按五下开五个终端是最明显的「后面干活的压力」，而这一档本来就没命令要执行，
     /// 复用没有副作用。代价：不再保证落在 Finder 当前目录（已在跑的窗口目录未知，
     /// 取它要向 Ghostty 要 Automation 授权，不值当）——需要指定目录用 ⌘⇧↩ 新开。

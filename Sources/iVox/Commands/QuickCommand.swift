@@ -17,8 +17,8 @@ struct QuickCommand: ParsableCommand {
     @Argument(help: ArgumentHelp(
         "copy-path",
         discussion: """
-        terminal        开一个终端（Opt+Z）
-        claude          开终端并跑 claude（Opt+A）
+        terminal        开一个终端（Opt+A）
+        claude          开终端并跑 claude（Opt+Z）
         codex           开终端并跑 codex（Opt+X）
         pi              开终端并跑 pi（Opt+Q）
         copy-path       把 Finder 选中项的路径复制到剪贴板（Opt+C）
