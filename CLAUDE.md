@@ -67,7 +67,7 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   AudioPipeline.swift  — 重采样
   Translation/         — 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗
 
-Tests/iVoxTests/       — 测试（15 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests 与 CaptionLayoutTests 例外，@testable import iVox）
+Tests/iVoxTests/       — 测试（18 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests、CaptionLayoutTests、TSPRemoteSlowSynthesisTests 例外，@testable import iVox；TestSocketServer 是共用假 socket server）
 
 docs/                  — README.md（索引 + 分类规则）· architecture.md · hook-chain.md · socket-api.md · native-bridge.md（微信链路实测依据）；playback/ 放播报五层：paper.md（比喻，**建立直觉但不裁决**）· purpose.md（取舍，**有分歧听它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研
 scripts/               — 装机与部署：runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）
@@ -126,6 +126,11 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
   **为什么默认远程**：MLX 的 Metal 命令编码器析构重复释放 GPU 命令队列 → SIGTRAP，上游未修、
   Swift 侧拿不到 encoder 引用，无从拦截，所以把它圈出去（裁决见 `docs/playback/purpose.md`）。
   `Daemon.cleanup` 会显式 `stopChild()`，不留孤儿（`kill -9` 主进程时它不会跟着死）。
+  **合成流的三个时间纪律**（2026-10-24 修，细节见 `docs/playback/queue.md`）：① **读超时不是断流**——
+  `EAGAIN` 继续等，判「断了」只有 EOF（原先沿用控制 socket 的 10 秒读超时，合成一慢就被当成
+  断流 → 那一块整块丢弃，实测真对话里连丢 4 块）；② **引擎没就绪先等就绪**（请求撞上「模型正在
+  加载」会被直接拒掉，那一块就白丢了）；③ **一帧都没送出时可重发一次**（已送出半截的不重发，
+  否则会播成「前半截 + 从头再来一遍」）。时间口径集中在 `iVoxKit/SocketStream.swift`。
 
 - **配置分三层**（2026-10-21 重新规划，飞哥裁决）：① **代码内配置**——都在 `iVoxKit/Config.swift` 里：
   `ModelPaths`（模型路径）、`TTSConfig.default`（合成参数）、`VoiceCatalog`（内置音色）、

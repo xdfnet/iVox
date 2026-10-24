@@ -26,7 +26,12 @@ public enum AppPaths {
 /// Unix Domain Socket 客户端工具
 public enum SocketClient {
     /// 连接 UNIX Socket，返回 fd（调用方负责 close）
-    public static func connect(to path: String) throws -> Int32 {
+    ///
+    /// - Parameter timeout: 读写超时（秒）。控制类 socket 用 `SocketTimeout.control`；
+    ///   合成流用 `SocketTimeout.synthesisRead`——后者只是读流粒度，整块上限另有其人
+    ///   （`SocketTimeout.synthesisDeadline`），别拿粒度当整块。
+    public static func connect(to path: String,
+                               timeout: TimeInterval = SocketTimeout.control) throws -> Int32 {
         let fd = Darwin.socket(AF_UNIX, SOCK_STREAM, 0)
         guard fd >= 0 else { throw POSIXError(.ENOTSOCK) }
 
@@ -51,8 +56,10 @@ public enum SocketClient {
         }
         guard ret == 0 else { Darwin.close(fd); throw POSIXError(.ECONNREFUSED) }
 
-        // 读写超时 10s，防止 daemon 异常时无限阻塞
-        var tv = timeval(tv_sec: 10, tv_usec: 0)
+        // 读写超时：防止对端异常时无限阻塞。**注意这是「每次 read 最多等多久」，
+        // 不是「整个请求最多用多久」**——合成流靠它把长合成切成一趟趟等待，
+        // 断流与否看 EOF，不看某一趟有没有等到（见 SocketReader）。
+        var tv = timeval(tv_sec: Int(timeout), tv_usec: 0)
         setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, socklen_t(MemoryLayout<timeval>.size))
         return fd

@@ -20,6 +20,12 @@ actor TSPRemote: TTSProviding {
     private let socketPath: String
     /// 拉起子进程用的可执行文件路径
     private let executablePath: String
+    /// 合成流的单次读超时（秒）——只是粒度，不是整块上限
+    private let readTimeout: TimeInterval
+    /// 合成一整块的总时限（秒）
+    private let deadline: TimeInterval
+    /// 等引擎就绪的上限（秒）。引擎永远起不来时，不能把调用方一起吊死。
+    private static let readyWaitSeconds: TimeInterval = 120
     private var child: Process?
     /// 连续拉起失败次数：退避间隔的来源。
     private var consecutiveLaunchFailures = 0
@@ -33,10 +39,14 @@ actor TSPRemote: TTSProviding {
     private let cancelToken = CancelToken()
 
     init(socketPath: String = AppPaths.ttsSocketPath,
-         executablePath: String? = nil) {
+         executablePath: String? = nil,
+         readTimeout: TimeInterval = SocketTimeout.synthesisRead,
+         deadline: TimeInterval = SocketTimeout.synthesisDeadline) {
         self.socketPath = socketPath
         self.executablePath = executablePath
             ?? ((AppPaths.binDir as NSString).appendingPathComponent("ivox") as NSString).expandingTildeInPath
+        self.readTimeout = readTimeout
+        self.deadline = deadline
     }
 
     // MARK: - 与本地引擎同名的接口
@@ -67,6 +77,7 @@ actor TSPRemote: TTSProviding {
     }
 
     func waitUntilReady() async {
+        let deadline = Date().addingTimeInterval(Self.readyWaitSeconds)
         while Task.isCancelled == false {
             let s = await state
             switch s {
@@ -75,6 +86,11 @@ actor TSPRemote: TTSProviding {
                 Log.error("誊清员: 模型未就绪 — \(msg)")
                 return
             case .notStarted, .loading:
+                // 等就绪也要有上限：引擎永远起不来时，调用方不能跟着一起吊死。
+                if Date() >= deadline {
+                    Log.error("誊清员: 等待就绪超时（\(Int(Self.readyWaitSeconds))s）")
+                    return
+                }
                 try? await Task.sleep(for: .milliseconds(300))
             }
         }
@@ -102,9 +118,24 @@ actor TSPRemote: TTSProviding {
                     // 顺带治刷屏——队列在引擎坏掉时会把每块都试一遍，每块一条
                     // 「誊清员无响应」既占屏又不带任何新信息（2026-10-19 23:32 那次
                     // 满屏都是同一句话）。这里只在状态**变了**时说一次。
-                    if case .failed(let msg) = await self.state {
+                    //
+                    // **只有引擎明确不就绪才等**：请求撞上「模型正在加载」会被誊清员
+                    // 直接拒掉，那一块就白丢了（2026-10-24 实测：引擎重启瞬间发出的
+                    // 请求全丢，自检 F 用例因此空 PCM）。等它就绪比丢内容划算；
+                    // 但正常路径（引擎已就绪）不能多等、多连——每多一次探测连接，
+                    // 誊清员那边就多一份要打发的活。
+                    switch await self.state {
+                    case .ready:
+                        break
+                    case .failed(let msg):
                         await self.noteFailedAndScheduleReplacement(msg)
                         throw TTSRemoteError.unavailable
+                    case .notStarted, .loading:
+                        await self.waitUntilReady()
+                        if case .failed(let msg) = await self.state {
+                            await self.noteFailedAndScheduleReplacement(msg)
+                            throw TTSRemoteError.unavailable
+                        }
                     }
                     if self.lastUnavailableNote != nil {
                         Log.info("誊清员恢复就绪")
@@ -113,6 +144,7 @@ actor TSPRemote: TTSProviding {
                     try await Self.pump(
                         text: text, voiceID: voiceID, trace: trace,
                         socketPath: self.socketPath, token: self.cancelToken, epoch: epoch,
+                        readTimeout: self.readTimeout, deadline: self.deadline,
                         onFrame: { continuation.yield($0) }
                     )
                     continuation.finish()
@@ -259,14 +291,44 @@ actor TSPRemote: TTSProviding {
     // MARK: - 传输
 
     /// 发一句、等它的 PCM 逐帧回来。阻塞读跑在全局队列上，不占 actor。
+    ///
+    /// **一帧都没送出就重发一次**：合成慢到超时、或这一句单独崩了，重发是安全的
+    /// ——没播出去过，重发不会变成重复播。引擎已经死掉时重发只会连不上，于是仍走
+    /// 「这块作废」，R1 期望的正是这个（杀进程 → 作废 → 队列继续 → 监督者重拉）。
     private static func pump(
         text: String, voiceID: String, trace: TTSTrace?,
         socketPath: String, token: CancelToken, epoch: UInt,
+        readTimeout: TimeInterval, deadline: TimeInterval,
         onFrame: @escaping @Sendable (Data) -> Void
     ) async throws {
-        let fd = try SocketClient.connect(to: socketPath)
-        defer { Darwin.close(fd) }
+        let counter = PCMCounter()
+        var attempt = 0
+        while true {
+            let fd = try SocketClient.connect(to: socketPath, timeout: readTimeout)
+            do {
+                try pumpOnce(fd: fd, text: text, voiceID: voiceID, trace: trace,
+                             token: token, epoch: epoch, counter: counter,
+                             deadline: deadline, onFrame: onFrame)
+            } catch {
+                Darwin.close(fd)
+                // 纪元变了 = 用户不要了，重发是添乱；已送过帧 = 播出去一半，重发会重复。
+                if counter.sentAny || attempt > 0 || token.epoch != epoch { throw error }
+                attempt += 1
+                Log.warn("合成未出一帧，重发一次：\(error)")
+                continue
+            }
+            Darwin.close(fd)
+            return
+        }
+    }
 
+    /// 一次「发请求 + 读 PCM」。断流/超时都从这里抛。
+    private static func pumpOnce(
+        fd: Int32, text: String, voiceID: String, trace: TTSTrace?,
+        token: CancelToken, epoch: UInt, counter: PCMCounter,
+        deadline: TimeInterval,
+        onFrame: @escaping @Sendable (Data) -> Void
+    ) throws {
         // 关联 ID 随请求头递过去：誊清员那边的每行日志都带它，这一摞才串得起来
         var request = Data()
         request.append(contentsOf: Data(
@@ -286,20 +348,28 @@ actor TSPRemote: TTSProviding {
 
         var remaining: [UInt8] = []
         var sawEnd = false
-        var buf = [UInt8](repeating: 0, count: 65536)
-        while true {
-            let n = Darwin.read(fd, &buf, buf.count)
-            if n <= 0 { break }
+        // **读超时不算断流**（见 SocketReader）：合成慢时这一趟 read 会空手回来，
+        // 接着等就是了——判「断了」只有 EOF 一样东西，别拿「这趟没等到」当断线。
+        try SocketReader.readToEnd(fd: fd,
+                                    deadlineSeconds: deadline) { chunk in
             let cancelled = token.epoch != epoch
             // 打断后仍要**解析**，只是不再送帧：解析顺带把缓冲消费掉，不解析的话
             // remaining 一路涨到本次合成的字节数；而且不读干净会把誊清员堵死。
-            for frame in StreamFrame.parseChunks(from: Data(buf[0..<n]), into: &remaining, sawEnd: &sawEnd) {
-                if !cancelled { onFrame(frame) }
+            for frame in StreamFrame.parseChunks(from: chunk, into: &remaining, sawEnd: &sawEnd) {
+                if !cancelled { counter.mark(); onFrame(frame) }
             }
         }
         // 读干净了却没见过结束标志 = 誊清员崩在这一句中途。EOF 本身不能作数：
         // 正常念完也是 EOF，不带这个标志就分不出「念完了」和「半句就没了」。
         guard sawEnd else { throw TTSRemoteError.truncated }
+    }
+
+    /// 送出的 PCM 帧计数。跨 await 边界要能被并发读，故用带锁的小盒子。
+    private final class PCMCounter: @unchecked Sendable {
+        private let lock = NSLock()
+        private var count = 0
+        var sentAny: Bool { lock.withLock { count > 0 } }
+        func mark() { lock.withLock { count += 1 } }
     }
 
     /// 问一句「好了没」，读一行回复就走
