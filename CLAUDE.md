@@ -37,7 +37,7 @@ Sources/iVox/          — 主程序 target
   EntryPoint.swift     — @main, ArgumentParser 子命令
 
   ── 七个能力域（目录与 README 功能表、ivox status 一一对应）──
-  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（播报字幕，config 可开关）+ PlaybackSignal（播报起落信号，给「给背景让路」用）
+  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（播报字幕，config 可开关；`playback.captionScreen` 可按屏的 UUID 钉到指定屏）+ PlaybackSignal（播报起落信号，给「给背景让路」用）
     TTS/               — 合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
   SpeechInput/         — 语音输入：右⌘ 录音 + ASR + 浮窗（事件由 HotKey 层送来）+ ClaudeAskService（ASR 出文后送问 Claude）
   Translation/         — 划词翻译（Opt+S）：复制 → 翻译 → 浮窗 + 朗读

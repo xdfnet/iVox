@@ -12,7 +12,9 @@ import iVoxKit
 /// 与翻译浮窗的两处**刻意不同**：
 /// - **不跟鼠标收**：字幕是「一边听一边看」，手总会动；收起只由播报状态驱动（`update(nil)`）
 /// - **不跟鼠标、也不跟焦点所在屏**：常驻若跟着鼠标会来回跳；而 `NSScreen.main` 是**键盘焦点所在屏**，
-///   多屏下焦点一动字幕就跑到别的屏去（人看不见）。固定钉在主屏（`screens.first`，含菜单栏那块）
+///   多屏下焦点一动字幕就跑到别的屏去（人看不见）。默认钉在主屏（`screens.first`，含菜单栏那块）；
+///   要钉到别的屏，在配置里给 `playback.captionScreen` 填那块屏的 UUID（见 `ScreenIdentity`）——
+///   **钉的是「哪块屏」这个身份，不是「屏幕上第几块」**，拔插、重启、改分辨率都不漂
 ///
 /// 同步口径：跟**播放**——文本随音频块流到播放器，**句首块被设备读出**时才来报
 /// （`AudioPlayer` 的 `.dataConsumed` 回调），与声音对齐（误差约一个 IO 缓冲）。
@@ -37,6 +39,17 @@ final class CaptionPanel {
     private var panel: NSPanel?
     /// 正在显示的文本（去重：同一句重复广播不重排，免得闪）
     private var current = ""
+    /// 钉住的那块屏的 UUID（配置给的）；nil = 主屏。
+    private let pinnedScreenUUID: String?
+    /// 认不到钉的屏时只告警一次，别刷屏。
+    private var didWarnMissingScreen = false
+    /// 钉对了只报一次（让日志能确认「钉在了一块屏上」）。
+    private var didLogPinnedScreen = false
+
+    /// - Parameter screenUUID: 要钉的屏的 UUID；nil / 空 = 主屏（现状）。
+    init(screenUUID: String? = nil) {
+        self.pinnedScreenUUID = screenUUID
+    }
 
     /// 更新字幕；`nil` / 空串 = 收起。
     func update(_ text: String?) {
@@ -56,10 +69,10 @@ final class CaptionPanel {
     // MARK: - 内部
 
     private func show(_ text: String) {
-        // 固定主屏（含菜单栏那块）：`NSScreen.main` 是**键盘焦点所在屏**、不是主屏——多屏下焦点一动，
+        // 默认主屏（含菜单栏那块）：`NSScreen.main` 是**键盘焦点所在屏**、不是主屏——多屏下焦点一动，
         // 字幕就跟着跑到别的屏去，人在自己那块屏上反而看不见（实测日志里出现过别块屏的负 y 坐标）。
-        // `screens.first` 才是主屏。
-        let screen = NSScreen.screens.first
+        // `screens.first` 才是主屏。配置了 `captionScreen` 就钉到那块屏上。
+        let screen = targetScreen()
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
 
         let label = baseLabel()
@@ -93,6 +106,32 @@ final class CaptionPanel {
                                      y: visible.minY + Self.bottomInset))
         panel.orderFrontRegardless()
         Log.debug("播报字幕: \(Int(size.width))×\(Int(size.height)) @ (\(Int(panel.frame.minX)),\(Int(panel.frame.minY)))")
+    }
+
+    /// 字幕要往哪块屏上放。
+    ///
+    /// 默认主屏。配置了 `captionScreen`（某块屏的 UUID）就钉那块——**每次显示时现查**，
+    /// 因为屏的插拔是运行期的事：那块屏没接上时落回主屏并告警一次，接回来又会自动钉回去。
+    private func targetScreen() -> NSScreen? {
+        guard let pinned = pinnedScreenUUID, !pinned.isEmpty else {
+            return NSScreen.screens.first
+        }
+        let want = ScreenIdentity.normalize(pinned)
+        if let hit = NSScreen.screens.first(where: { screen in
+            guard let id = ScreenIdentity.uuid(for: screen) else { return false }
+            return ScreenIdentity.normalize(id) == want
+        }) {
+            if !didLogPinnedScreen {
+                didLogPinnedScreen = true
+                Log.info("字幕屏: 已钉在 \(ScreenIdentity.describe(hit))")
+            }
+            return hit
+        }
+        if !didWarnMissingScreen {
+            didWarnMissingScreen = true
+            Log.warn("字幕屏: 找不到 uuid=\(pinned) 的屏（没接上？），暂落主屏")
+        }
+        return NSScreen.screens.first
     }
 
     private func baseLabel() -> NSTextField {

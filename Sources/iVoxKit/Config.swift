@@ -64,6 +64,11 @@ public struct PlaybackConfig: Codable, Sendable {
     public var captions: Bool?
     /// 空闲宽限期（秒）：声音停下后再等这么久没新内容，才判「说完了」并收字幕/还音量
     public var idleGraceSeconds: Double?
+    /// 字幕钉在哪块屏：填那块屏的 UUID（启动日志的「屏幕清单」里查得到）；不填 = 主屏。
+    ///
+    /// 填 UUID 而不是序号/型号：同型号同分辨率的两块屏（两块 Redmi 27 NU）只有 UUID 认得出，
+    /// 而这个 UUID 系统自己拿来记屏幕摆位——拔插、重启、改分辨率都不变。
+    public var captionScreen: String?
 
     /// 空闲宽限的默认值（秒），也是全仓唯一一处写着这个数的地方。
     ///
@@ -84,12 +89,18 @@ public struct PlaybackConfig: Codable, Sendable {
     public var resolvedCaptions: Bool { captions ?? false }
     /// 未配置时的回退见 `defaultIdleGraceSeconds`
     public var resolvedIdleGraceSeconds: Double { idleGraceSeconds ?? Self.defaultIdleGraceSeconds }
+    /// 未配置 = nil = 主屏（现状）；空串按没配算。
+    public var resolvedCaptionScreen: String? {
+        let trimmed = captionScreen?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        return trimmed.isEmpty ? nil : trimmed
+    }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case captions
         case idleGraceSeconds
+        case captionScreen
     }
 
 }

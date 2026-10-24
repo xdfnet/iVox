@@ -327,12 +327,17 @@ actor Daemon {
             Log.info("播报字幕: 未开启（config 的 playback.captions）")
             return
         }
-        let panel = await MainActor.run { CaptionPanel() }   // 面板是 @MainActor 类型，构造要在主线程
+        let panel = await MainActor.run {
+            CaptionPanel(screenUUID: config.resolvedPlayback.resolvedCaptionScreen)
+        }   // 面板是 @MainActor 类型，构造要在主线程
         captionPanel = panel
         await queue.setCaptionSink { text in
             Task { @MainActor in panel.update(text) }
         }
         Log.info("播报字幕: 已开启")
+        // 屏幕清单打出来：以后想改钉哪块屏，从这里抄 UUID（配置 playback.captionScreen）
+        let screens = await MainActor.run { ScreenIdentity.inventory() }
+        Log.info("屏幕清单: \(screens)")
     }
 
     /// 播报期间给汽水音乐让路：播报开始降几格音量、播完升回去。
