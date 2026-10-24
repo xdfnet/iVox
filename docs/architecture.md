@@ -302,8 +302,8 @@ Daemon (actor)
 - **贵的动作押后**：先弹「读取选区…」占位 → 读剪贴板校验 → 弹「翻译中…」→ **等 200ms 提交点才发请求**。期间又按一次（世代推进）就到此为止，请求压根不发——误触的代价从「一次请求 + 一次朗读」降到「一个闪一下的空窗」
 - **连按是「后写胜出」而非丢弃**：`generation` 世代号，在途的那一代回来发现号变了就作废、不上屏不朗读。原先 `guard !inFlight else { return }` 是直接丢第二次，换了个选区想再译一次白按
 - **译文零重复推理**：`TranslationService`（actor）两层——**在途去重**（同一段文字并发时后到的等同一次的结果）与**最近 16 条译文缓存**（FIFO，键带 `provider|model`，切后端不拿旧译文顶账）。命中缓存**照样朗读**：用户想听的是译文，缓存省的是生成，不是他的耳朵
-- **三个浮窗各自独立、刻意不抽公共件**（消失策略与生命周期各不同，硬抽要开一堆口子）：语音波形（`OverlayPanel`，跟鼠标收）、翻译结果（`TranslationPanel`，屏幕下方 96pt）、播报字幕（`CaptionPanel`，贴底 24pt，`playback.captions` 开关，**跟播放不跟合成**）。三者同源的是那套 `NSPanel` 组合：非激活、悬于所有窗口、跨 Space
-- **字幕钉在哪块屏**：默认主屏（`NSScreen.screens.first`）——**不跟 `NSScreen.main`**（那是键盘焦点所在屏，焦点一动字幕就跑到人看不见的屏上去）。要钉到别的屏，配置 `playback.captionScreen` 填那块屏的 **UUID**（`ScreenIdentity`，macOS 由 EDID 派生、系统自己拿它记屏幕摆位，拔插/重启/改分辨率都不变）。**为什么不用序号/型号/坐标**：同型号同分辨率的两块屏（两块 Redmi 27 NU）在 vendor/model/serial 上完全相同，只有 UUID 认得出；序号随插拔漂移、坐标随摆放变。钉的屏没接上时落回主屏并告警一次
+- **三个浮窗各自独立、刻意不抽公共件**（消失策略与生命周期各不同，硬抽要开一堆口子）：语音波形（`OverlayPanel`，跟鼠标收）、翻译结果（`TranslationPanel`，屏幕下方 96pt）、播报字幕（`CaptionPanel`，贴底 24pt，`captions.enabled` 开关，**跟播放不跟合成**）。三者同源的是那套 `NSPanel` 组合：非激活、悬于所有窗口、跨 Space
+- **字幕钉在哪块屏**：默认主屏（`NSScreen.screens.first`）——**不跟 `NSScreen.main`**（那是键盘焦点所在屏，焦点一动字幕就跑到人看不见的屏上去）。要钉到别的屏，配置 `captions.screen` 填那块屏的 **UUID**（`ScreenIdentity`，macOS 由 EDID 派生、系统自己拿它记屏幕摆位，拔插/重启/改分辨率都不变）。**为什么不用序号/型号/坐标**：同型号同分辨率的两块屏（两块 Redmi 27 NU）在 vendor/model/serial 上完全相同，只有 UUID 认得出；序号随插拔漂移、坐标随摆放变。钉的屏没接上时落回主屏并告警一次
   - ⚠️ **macOS 给同型号两块屏起的编号不是「第几块」**：`localizedName` 里「Redmi 27 NU (2)」是**上层那块**（主屏、菜单栏那块），「(1)」是下层那块——别照 `system_profiler` 的列出顺序数，那儿是另一回事
 
 - 翻译走 `iVoxKit.TranslationService`（`actor`）：Google 主/备**双通道容灾**，或 OpenAI 兼容；**直连失败自动走兜底代理**（`translation.proxyURL`），直连用短超时探测（`directProbeTimeoutSeconds`），成功后记住「该走代理」

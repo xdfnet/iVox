@@ -16,10 +16,13 @@ public struct ConfigUnknownKey: Sendable {
     public let path: String
     /// 疑似想写的键名；猜不出就是 nil
     public let suggestion: String?
+    /// 「这个键挪过位置」的说明；有它就不算「没人认领」，只告诉用户新位置在哪
+    public let note: String?
 
-    public init(path: String, suggestion: String?) {
+    public init(path: String, suggestion: String?, note: String? = nil) {
         self.path = path
         self.suggestion = suggestion
+        self.note = note
     }
 }
 
@@ -35,6 +38,7 @@ public enum ConfigAudit {
         "speechInput": SpeechInputConfig.CodingKeys.allCases.map(\.stringValue),
         "translation": TranslationConfig.CodingKeys.allCases.map(\.stringValue),
         "playback": PlaybackConfig.CodingKeys.allCases.map(\.stringValue),
+        "captions": CaptionsConfig.CodingKeys.allCases.map(\.stringValue),
         "sourceVoices": ["default"],
         "wechat": WeChatConfig.CodingKeys.allCases.map(\.stringValue),
         "voices": VoiceInfo.CodingKeys.allCases.map(\.stringValue),
@@ -42,6 +46,16 @@ public enum ConfigAudit {
 
     /// 这些段的键名由内容决定（动作名、音色 id、来源名），内层不做检查。
     public static let dynamicSections: Set<String> = ["hotkeys", "sourceVoices"]
+
+    /// **挪过位置**的键：老路径 → 新位置。
+    ///
+    /// 键从一段挪到另一段时，老配置里还留着它。Codable 不认识就静静忽略 → 用户的设置
+    /// 升级后无声失效（比报错更坏）。所以加载时会自动搬（见 `migrateCaptionKeys`），审计这边
+    /// 也不再把它算成「没人认领」，只告诉用户新位置在哪儿。
+    public static let movedKeys: [String: String] = [
+        "playback.captions": "captions.enabled",
+        "playback.captionScreen": "captions.screen",
+    ]
 
     /// 某段的已知键（动态段返回空集——不检查内层）。
     static func knownKeys(in section: String) -> Set<String> {
@@ -78,8 +92,16 @@ public enum ConfigAudit {
             // 普通段：一张表
             if let dict = value as? [String: Any] {
                 for subKey in dict.keys where !known.contains(subKey) {
+                    let path = "\(key).\(subKey)"
+                    if let moved = movedKeys[path] {
+                        issues.append(ConfigUnknownKey(
+                            path: path, suggestion: nil,
+                            note: "已挪到 \(moved)（老键照常生效，把这一行挪过去即可）"
+                        ))
+                        continue
+                    }
                     issues.append(ConfigUnknownKey(
-                        path: "\(key).\(subKey)",
+                        path: path,
                         suggestion: suggestion(for: subKey, known: known)
                     ))
                 }
@@ -132,7 +154,8 @@ public enum ConfigAudit {
     /// 人看的一行行提示。
     public static func describe(_ issues: [ConfigUnknownKey]) -> String {
         issues.map { issue in
-            issue.suggestion.map { "\(issue.path) → 是不是想写「\($0)」？" } ?? issue.path
+            if let note = issue.note { return "\(issue.path) → \(note)" }
+            return issue.suggestion.map { "\(issue.path) → 是不是想写「\($0)」？" } ?? issue.path
         }.joined(separator: "；")
     }
 }

@@ -60,15 +60,8 @@ public struct MediaControlConfig: Codable, Sendable {
 }
 
 public struct PlaybackConfig: Codable, Sendable {
-    /// 播报字幕：念到哪句就在屏幕下方显示哪句（常驻，默认关）
-    public var captions: Bool?
     /// 空闲宽限期（秒）：声音停下后再等这么久没新内容，才判「说完了」并收字幕/还音量
     public var idleGraceSeconds: Double?
-    /// 字幕钉在哪块屏：填那块屏的 UUID（启动日志的「屏幕清单」里查得到）；不填 = 主屏。
-    ///
-    /// 填 UUID 而不是序号/型号：同型号同分辨率的两块屏（两块 Redmi 27 NU）只有 UUID 认得出，
-    /// 而这个 UUID 系统自己拿来记屏幕摆位——拔插、重启、改分辨率都不变。
-    public var captionScreen: String?
 
     /// 空闲宽限的默认值（秒），也是全仓唯一一处写着这个数的地方。
     ///
@@ -83,26 +76,48 @@ public struct PlaybackConfig: Codable, Sendable {
     /// 那是兜底的代价，认了。宽限只盖印不埋碑：内容后来再到来照样揭封续播。
     public static let defaultIdleGraceSeconds: Double = 60
 
-    public static let `default` = PlaybackConfig(captions: false, idleGraceSeconds: defaultIdleGraceSeconds)
+    public static let `default` = PlaybackConfig(idleGraceSeconds: defaultIdleGraceSeconds)
 
-    /// 默认关：字幕会一直占着屏幕下方，只在你明确要看时才开
-    public var resolvedCaptions: Bool { captions ?? false }
     /// 未配置时的回退见 `defaultIdleGraceSeconds`
     public var resolvedIdleGraceSeconds: Double { idleGraceSeconds ?? Self.defaultIdleGraceSeconds }
+    /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
+    public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case idleGraceSeconds
+    }
+
+}
+
+/// 播报字幕（**独立一段**，不塞在播报里）：开关 + 钉在哪块屏。
+///
+/// 2026-10-24 从 `[playback]` 挪出来：字幕是「屏幕上的显示」，跟「播报怎么排队收尾」
+/// 是两件事，混在一段里时用户改字幕开关要去翻播报的配置。
+public struct CaptionsConfig: Codable, Sendable {
+    /// 是否显示播报字幕（念到哪句就在屏上显示哪句）
+    public var enabled: Bool?
+    /// 字幕钉在哪块屏：那块屏的 UUID；不填 = 主屏。
+    ///
+    /// 填 UUID 而不是序号/型号：同型号同分辨率的两块屏（两块 Redmi 27 NU）只有 UUID 认得出，
+    /// 而这个 UUID 系统自己拿来记屏幕摆位——拔插、重启、改分辨率都不变。
+    public var screen: String?
+
+    public static let `default` = CaptionsConfig()
+
+    /// 默认关：字幕会一直占着屏幕下方，只在你明确要看时才开
+    public var resolvedEnabled: Bool { enabled ?? false }
     /// 未配置 = nil = 主屏（现状）；空串按没配算。
-    public var resolvedCaptionScreen: String? {
-        let trimmed = captionScreen?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+    public var resolvedScreen: String? {
+        let trimmed = screen?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
         return trimmed.isEmpty ? nil : trimmed
     }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case captions
-        case idleGraceSeconds
-        case captionScreen
+        case enabled
+        case screen
     }
-
 }
 
 public struct SpeechInputConfig: Codable, Sendable {
@@ -245,6 +260,8 @@ public enum VoiceSource {
 
 public struct Config: Codable, Sendable {
     public var playback: PlaybackConfig? = nil
+    /// 播报字幕（独立段：屏幕上的显示，与「播报怎么排队收尾」分开）
+    public var captions: CaptionsConfig? = nil
     /// 来源 → 音色 id 的映射。**`"default"` 键就是默认音色**（没有来源时用它），
     /// 所以不再单设一个 `defaultVoice` 字段——一处说清，别两处各写一遍。
     public var sourceVoices: [String: String]
@@ -283,6 +300,7 @@ public struct Config: Codable, Sendable {
     /// 合成参数是**代码内配置**（`TTSConfig.default`），外部配置不提供。
     public var resolvedTTS: TTSConfig { .default }
     public var resolvedPlayback: PlaybackConfig { playback ?? .default }
+    public var resolvedCaptions: CaptionsConfig { captions ?? .default }
     public var resolvedTranslation: TranslationConfig { translation ?? .default }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
@@ -290,6 +308,7 @@ public struct Config: Codable, Sendable {
         case speechInput
         case translation
         case playback
+        case captions
         case sourceVoices
         case wechat
         case voices
@@ -416,6 +435,28 @@ private func resolveConfigPath(_ path: String?) throws -> String {
     }
 }
 
+/// 字幕键挪段迁移（2026-10-24）：字幕从 `[playback]` 挪到了独立的 `[captions]` 段。
+///
+/// 老配置里写着 `playback.captions` / `playback.captionScreen`——照搬会让用户的字幕开关
+/// 升级后**无声失效**（变成默认关，看着像「字幕坏了」）。这里把它们搬过来照常生效，
+/// 审计再告诉用户去把文件里的那两行挪过去（见 `ConfigAudit.movedKeys`）。
+private func migrateCaptionKeys(_ object: inout [String: Any]) -> Bool {
+    guard var playback = object["playback"] as? [String: Any] else { return false }
+    var captions = object["captions"] as? [String: Any] ?? [:]
+    var moved = false
+    if let value = playback.removeValue(forKey: "captions"), captions["enabled"] == nil {
+        captions["enabled"] = value
+        moved = true
+    }
+    if let value = playback.removeValue(forKey: "captionScreen"), captions["screen"] == nil {
+        captions["screen"] = value
+        moved = true
+    }
+    if playback.isEmpty { object.removeValue(forKey: "playback") } else { object["playback"] = playback }
+    if !captions.isEmpty { object["captions"] = captions }
+    return moved
+}
+
 /// 老 JSON 配置 → TOML。顺手把老写法的 `defaultVoice` 并进 `sourceVoices.default`。
 public func migrateLegacyJSON(_ from: String, to: String) throws {
     let data = try Data(contentsOf: URL(fileURLWithPath: from))
@@ -435,6 +476,11 @@ public func migrateLegacyJSON(_ from: String, to: String) throws {
 
 /// 字典 → 配置对象（TOML 与 JSON 都归到这里，解码逻辑只有一份）。
 private func decodeConfig(_ object: [String: Any]) throws -> Config {
+    var object = object
+    if migrateCaptionKeys(&object) {
+        Log.info("配置迁移：字幕键已从 playback 段挪到 captions 段（enabled / screen）——"
+                 + "请把 config.toml 里那两行挪到 [captions] 段")
+    }
     guard JSONSerialization.isValidJSONObject(object),
           let data = try? JSONSerialization.data(withJSONObject: object) else {
         throw ConfigError.invalidConfig("配置内容无法解析")

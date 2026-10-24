@@ -323,19 +323,19 @@ actor Daemon {
     /// 播报字幕（配置开启才装）：把队列广播的「正在念的这句」显示到屏幕下方浮窗。
     /// 队列在后台 actor、AppKit 必须在主线程——跨过去由闭包里的 `Task { @MainActor in }` 承担。
     private func setUpCaption() async {
-        guard config.resolvedPlayback.resolvedCaptions else {
-            Log.info("播报字幕: 未开启（config 的 playback.captions）")
+        guard config.resolvedCaptions.resolvedEnabled else {
+            Log.info("播报字幕: 未开启（config 的 captions.enabled）")
             return
         }
         let panel = await MainActor.run {
-            CaptionPanel(screenUUID: config.resolvedPlayback.resolvedCaptionScreen)
+            CaptionPanel(screenUUID: config.resolvedCaptions.resolvedScreen)
         }   // 面板是 @MainActor 类型，构造要在主线程
         captionPanel = panel
         await queue.setCaptionSink { text in
             Task { @MainActor in panel.update(text) }
         }
         Log.info("播报字幕: 已开启")
-        // 屏幕清单打出来：以后想改钉哪块屏，从这里抄 UUID（配置 playback.captionScreen）
+        // 屏幕清单打出来：以后想改钉哪块屏，从这里抄 UUID（配置 captions.screen）
         let screens = await MainActor.run { ScreenIdentity.inventory() }
         Log.info("屏幕清单: \(screens)")
     }

@@ -130,6 +130,7 @@ translate = "opt+s"     # 改完跑 ivox restart 生效
 | 字段 | 说明 |
 |------|------|
 | `speechInput.enabled` | 语音输入开关 |
+| `captions.enabled` / `captions.screen` | 播报字幕开关 / 字幕钉在哪块屏（填那块屏的 UUID） |
 | `translation.provider` | 划词翻译服务：`google`（默认，免配置）/ `openai`（OpenAI 兼容） |
 | `translation.speechEnabled` | 划词翻译后是否朗读译文 |
 | `translation.proxyURL` | 直连不通时的兜底代理，如 `http://192.168.100.6:10808`（只在直连失败后才用） |

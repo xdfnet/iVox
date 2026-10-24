@@ -67,4 +67,22 @@ final class ConfigAuditTests: XCTestCase {
         let issues = audit(#"{"wechat": {"token": "t", "allowFrom": "u"}}"#)
         XCTAssertTrue(issues.isEmpty)
     }
+
+    func testMovedCaptionKeysPointToTheNewSection() {
+        // 字幕挪到独立的 [captions] 段后，老配置里的 playback.captions 不该被当成
+        // 「没人认领」——它照常生效（见 ConfigTests 的迁移用例），只告诉用户新位置在哪儿
+        let issues = audit(#"{"playback": {"captions": true, "captionScreen": "AAA"}}"#)
+        XCTAssertEqual(issues.map(\.path), ["playback.captionScreen", "playback.captions"])
+        for issue in issues {
+            XCTAssertNotNil(issue.note, "\(issue.path) 应带「已挪到哪儿」的说明")
+            XCTAssertNil(issue.suggestion, "\(issue.path) 不该再被猜成别的键名")
+        }
+        XCTAssertTrue(ConfigAudit.describe(issues).contains("captions.enabled"))
+    }
+
+    func testNewCaptionsSectionKeysAreKnown() {
+        // 新段 [captions] 的键（enabled / screen）是真键，不该被点名
+        let issues = audit(#"{"captions": {"enabled": true, "screen": "AAA"}}"#)
+        XCTAssertTrue(issues.isEmpty, "实际: \(issues.map(\.path))")
+    }
 }
