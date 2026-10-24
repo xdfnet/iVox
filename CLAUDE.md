@@ -137,6 +137,10 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
   打日志，还能猜「是不是想写 allowFrom？」（已知键从各类型 `CodingKeys` 派生，不另抄清单）。
   **格式是 TOML**（`iVoxKit/TOML.swift` 自研解析/序列化，无外部依赖）：能写注释，配置能当说明书读；
   默认模板在 `iVoxKit/ConfigTemplate.swift`（唯一真源，`ivox init-config` 写的就是它）。
+  **配置注释的规范（2026-10-24 统一）**：每一项的注释写在键的**上一行**，一律三段——
+  **是什么 ｜ 默认值 ｜ 可选值**，行尾不留注释（全文件只有这一种风格）；补充说明另起一行、
+  以 `#   ` 缩进。默认值取自代码真源（各类型的 `default`），别抄错。改注释风格时
+  模板与用户的 config.toml **两份一起改**。
   程序改配置（`ivox voice add/remove`、`ivox wechat setup`）走 `TOMLDocument` **就地改**，
   保留用户自己写的注释——整体重排会把注释冲掉。
   所有运行时文件在 `~/.config/ivox/` 下（家当说明在 `Sources/iVox/Resources/runtime-files.md`，
