@@ -142,7 +142,7 @@ translate = "opt+s"     # 改完跑 ivox restart 生效
 还会猜你是不是想写别的名字（如 `allow_from` → 「是不是想写 allowFrom？」）；
 `ivox status` 里也直接列出来。
 
-**每个字段的说明写在配置里**：每一项的注释统一三段——**是什么 ｜ 默认值 ｜ 可选值**，
+**每个字段的说明写在配置里**：每一项的**行尾注释**统一三段——**是什么 ｜ 默认值 ｜ 可选值**，
 照「可选值」那一栏填即可，不用回头翻文档。默认模板见 `Sources/iVoxKit/ConfigTemplate.swift`
 （`ivox init-config` 写的就是它，与你的 config.toml 同款格式）。
 
