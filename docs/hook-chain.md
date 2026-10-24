@@ -59,7 +59,8 @@ Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`�
 播报模式：
 
 - **`hook.sh msgdisplay <source>`（MessageDisplay，Claude Code 交互会话主路径）**：assistant 消息流式显示时按行批触发，`delta` = 自上一批以来新完成的整行文本。**必须极快返回**（Claude Code 等本钩子返回才渲染该批），故 delta 提取 + 审计用单个 python、播报用后台 `&`。走 `ivox speak --source <source> <text>` 排队入队，过程内容（分步/工具多段）逐句播报；最后一条 assistant 即完整结尾。空/过短纯西文 delta 不播。
-- **`hook.sh end <source>`（Stop 收尾信号）**：只送「这一摞说完了」的暗号，**不带正文、不出声**。作用是让队列立刻判收尾（字幕立刻回来），不必等空闲宽限那 5 秒。没有它也不会错，只是最后那几秒要等满。
+- **`hook.sh end <source>`（Stop 收尾信号）**：只送「这一摞说完了」的暗号，**不带正文、不出声**。作用是让队列立刻判收尾（字幕立刻回来），不必等空闲宽限那 60 秒。没有它也不会错，只是最后那几秒要等满。
+  ⚠️ **收尾信号延后 300ms 再发**（2026-10-24）：Stop 与 MessageDisplay 是两次独立的钩子调用，谁先抵达 socket 并不保证——实测 27 轮里 14 轮 Stop 比正文早到 10~20 毫秒，于是**最后一页正文落在 Stop 之后、自成一摞**（用户按 Ctrl+1 想掀整轮，掀不到最后这页），字幕与汽水音量还会在中途收一次又起一次。延后一点让正文先落地，两条通路就按「先内容、后收尾」的顺序到。放在后台：钩子必须立刻返回，不能在这儿睡。
 
 > **`interrupt` 分支已从 hook.sh 移除**——打断权只归 ivox 快捷键（右⌘/Opt+S/Ctrl+2/Ctrl+1/Ctrl+Esc）与命令行 `ivox skip`（同三档），不再经 hook.sh 自动打断（UserPromptSubmit 亦不挂）。
 
@@ -140,15 +141,17 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - `actor` 保证线程安全
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
 - **轮次（turn）语义**：队列**按轮排队，播全播完**——同一 `turnID` 的分块并入同一段顺序 append；新 turn 在队尾追加新段（`enqueue` 的新 turn / `beginTurn`），**不再 bargeIn**；**无 turn 的普通播报（`ivox speak` / hook.sh）也独立成段排队**。`processNext` 播完队首段才前移。（容器与游标见 [playback/queue.md](playback/queue.md)：一段 = 一摞，游标指向当前块但不把它弹出容器。）
-- 某段 sealed（`sealTurn` / `Stop` 的 `finishTurn` / 宽限的 `sealIdle()` 标记）才允许空段前移；流动中（未 sealed）空段挂起等下一批，不封口；全部段都封且空才收尾（收字幕，打「播报结束」）。**收尾主力是 `Stop` 钩子**（按 `session_id` 反查出 turn_id 精确收）；**空闲宽限**兜底：先等设备把已排队音频播完，再最多等 5 秒，等不到新块就判「这一摞说完了」。
+- 某段 sealed（`sealTurn` / `Stop` 的 `finishTurn` / 宽限的 `sealIdle()` 标记）才允许空段前移；流动中（未 sealed）空段挂起等下一批，不封口；全部段都封且空才收尾（收字幕，打「播报结束」）。**收尾主力是 `Stop` 钩子**（按 `session_id` 反查出 turn_id 精确收）；**空闲宽限**兜底：先等设备把已排队音频播完，再最多等 60 秒，等不到新块就判「这一摞说完了」。
+  ⚠️ 60 秒不是随手取的（2026-10-24 从 5 秒改）：Claude 一轮里的多页之间常隔 20~130 秒（跑工具、想事情），5 秒的宽限几乎每轮都误判「说完了」→ 一轮被切成好几摞、字幕提前收、汽水音乐音量一升一降。宽限是**兜底**，常态判据是端自己的收尾信号（Stop / `{end}`）——它一到就立刻收，不等宽限。
+  ⚠️ **收尾是终判**（2026-10-24）：收尾信号与正文是两条独立通路，谁先到没保证（实测只差 1 毫秒的情形也有）。收尾先到就把这一摞盖了印，后到的正文**不能**再把它揭回「还在说」——否则 `anyUnsealed` 恒为真 → 队列永不结算 → 字幕不收、汽水音量不还。收尾过的摞记在 `PlaybackSession.finishedTurns` 里，后到的正文**照念（一个字不丢）**但不再揭封。宽限封的印照旧可揭（宽限只是猜「说完了」，不是判死）。
 - 用户快捷键共 **5 个入口**（手动打断三档 + 插队 + 说话），每个带**来源**标识：
   | 用户动作 | 入口 | 来源 |
   |---------|------|------|
-  | 说话 | right⌘ / right⌃ → `cancelAll` | `speech` |
+  | 说话 | right⌘ / right⌃ → `pausePlayback` / `resumePlayback`（**暂停不删**：设备闭嘴让麦克风干净，队列与内容一概不动，说完接着播） | 无（不是打断） |
   | 划词翻译 | Opt+S → `speakUserInitiated`（掐在播 + 译文进加急段插到最前，其余段全保留）；另有 `{now:1}` / `ivox speak --now` 同一条路 | `dict` |
-  | 掀桌 | Ctrl+2 → `cancelAll` | `esc` |
-  | 跳整摞（中） | Ctrl+1 → `skipCurrentBucket` | `skip` |
-  | 读下一页（轻） | Ctrl+Esc → `skipCurrentPage` | `skip-page` |
+  | 全掀 | Ctrl+2 → `cancelAll` | `esc` |
+  | 掀摞（中） | Ctrl+1 → `skipCurrentBucket` | `skip` |
+  | 掀页（轻） | Ctrl+Esc → `skipCurrentPage` | `skip-page` |
   这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。**Claude 的 `Stop` 钩子只作「收尾信号」**（`hook.sh end`：丢弃 payload、不发一个字，只让队列收尾当前摞）——当年摘它是因为它连正文一起送、与 MessageDisplay 重复播两遍，现在这条不出声。以下讲的是**旧的停止帧**：**`{type:stop}` 已完全失效且无发送方**（`hook.sh interrupt` 已摘、`ivox quiet` 已删），daemon 收到只记日志忽略、不再打断（这一支留作护栏：它走正文分支，删掉会把旧脚本发来的帧当内容念出来）。流式新轮（pi）不再顶替——排队。Escape 放弃自己那轮（`cancelTurn`）只删该轮自己那段，不占打断来源。**agent 回复到达时一律排队，不抢麦**。
 
 ### 7. MediaController

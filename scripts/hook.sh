@@ -143,7 +143,13 @@ except Exception:
 " 2>/dev/null)
   args=(speak --source "$2")
   [[ -n "$grp" ]] && args+=(--group "$grp")
-  ivox "${args[@]}" --final -- "" 2>/dev/null &
+  # **延后 300ms 再发收尾信号**：Stop 与 MessageDisplay 是两次独立的钩子调用，谁先抵达 socket
+  # 并不保证——实测 27 轮里 14 轮 Stop 比正文早到 10~20 毫秒。Stop 先到就把这一摞盖了印，
+  # **最后一页正文落在它之后**，于是那一页自成一摞（用户按 Ctrl+1 想掀整轮，掀不到最后这页），
+  # 字幕与汽水音量还会在中途收一次又起一次。
+  # 延后一点让正文先落地，两条通路就按「先内容、后收尾」的顺序到。
+  # 放在后台：钩子必须立刻返回（Claude Code 等它返回才继续），不能在这儿睡。
+  ( sleep 0.3; ivox "${args[@]}" --final -- "" 2>/dev/null ) &
   echo '{"continue": true}'
   exit 0
 fi

@@ -66,9 +66,17 @@ public struct PlaybackConfig: Codable, Sendable {
     public var idleGraceSeconds: Double?
 
     /// 空闲宽限的默认值（秒），也是全仓唯一一处写着这个数的地方。
-    /// 取值理由：页与页之间的工具调用多半好几秒，再往上加只会让字幕与汽水音量迟迟不收，不值。
-    /// 取短了也不怕——宽限只盖印不埋碑，工具调用更久时下一页到来会揭封续播。
-    public static let defaultIdleGraceSeconds: Double = 5
+    ///
+    /// **为什么是 60 秒而不是 5 秒（2026-10-24 实测改）**：宽限是「端说完了没有」的**兜底**，
+    /// 常态的判据是端自己的收尾信号（Claude 的 Stop / pi 的 `{end}`）——它一到就立刻收，不等宽限。
+    /// 早先的 5 秒在实况里几乎每轮都会误判「说完了」：Claude 一轮里的多页之间本来就隔着
+    /// 工具调用（实测同轮内批间隔 20~130 秒），5 秒一到就把这一摞盖印、结算、收字幕、还音量，
+    /// 下一分钟又来一页 → **一轮被切成好几摞、汽水音量一升一降**（而「一摞 = 一次输入引发的
+    /// 全部回复」正是用户按 Ctrl+1 时心里的那一个）。
+    ///
+    /// 60 秒盖住「同一轮里两页之间的正常间隔」；再长的间隔（跑长测试、长时间想）仍会切一次，
+    /// 那是兜底的代价，认了。宽限只盖印不埋碑：内容后来再到来照样揭封续播。
+    public static let defaultIdleGraceSeconds: Double = 60
 
     public static let `default` = PlaybackConfig(captions: false, idleGraceSeconds: defaultIdleGraceSeconds)
 

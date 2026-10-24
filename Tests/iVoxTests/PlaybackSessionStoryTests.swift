@@ -410,6 +410,30 @@ final class PlaybackSessionStoryTests: XCTestCase {
         XCTAssertEqual(spoken, ["A1", "A2"], "后到的内容必须照念")
     }
 
+    /// Claude 说「我说完了」之后又来正文 → 照样开口，**而且这一摞从此算「说完了」**。
+    ///
+    /// 2026-10-24 实测踩过：收尾信号与正文是两条独立通路，谁先到没保证。收尾先到就把这一摞
+    /// 盖了印，随后到达的正文又把印揭开（`sealed = false`）——于是这一摞永远停在「还在说」：
+    /// `anyUnsealed` 恒为真 → 队列永远不结算 → **字幕不收、汽水音量不还**（`I1` 用例干等 60 秒
+    /// 超时；正文与收尾信号只差 1 毫秒就踩中了）。
+    ///
+    /// 规矩是：**收尾是终判**。迟到的字照念（一个字不丢），但不再把这一摞拽回「还在说」——
+    /// 该收的字幕照收，音量照还。
+    func testFinishIsFinalAndLatePageDoesNotReopenTheStack() async {
+        let s = PlaybackSession()
+        await seed(s, stacks: [(id: "gA", pages: [["A1"]])])
+        _ = await s.sealTurn("gA")                       // Claude 说「我说完了」
+
+        let later = await deliver(s, group: "gA", page: "gA-p1", blocks: [block("A2")])
+        XCTAssertEqual(later, .appended, "收尾只是说完了，不是作废 —— 后续页必须还能入队")
+
+        let stillOpen = await s.anyUnsealed
+        XCTAssertFalse(stillOpen, "收尾是终判：后到的页不许把这一摞拽回「还在说」（否则永不结算）")
+
+        let spoken = await spokenOrder(s)
+        XCTAssertEqual(spoken, ["A1", "A2"], "后到的内容必须照念")
+    }
+
     // MARK: - 清单 8：全掀时挂哪些摞的牌？
 
     /// **队列只有一条**：Claude 与 pi 的内容都按到达顺序排进去，三档打断都是**按队列位置**

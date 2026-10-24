@@ -90,8 +90,9 @@ actor PlaybackSession {
     init(idleGraceSeconds: Double = PlaybackConfig.defaultIdleGraceSeconds) {
         self.idleGraceSeconds = idleGraceSeconds
     }
-    /// 墓碑容量上限：只用来拦「被用户显式作废的摞的后续增量」，用完丢最老的。
-    private static let tombstoneCapacity = 32
+    /// 「按外部号记着的近期摞」容量上限：墓碑（拦被作废摞的后续增量）与收尾记录
+    /// （端说过「说完了」的摞）共用一个额度——都是「最近这些」才可能再被提到，用完丢最老的。
+    private static let recentTurnCapacity = 32
 
     private var segments: [PlaybackSegment] = []
     /// 加急段（只有 Cmd+D 译文这一种）：**插到队首**，先于常规段播。
@@ -122,6 +123,21 @@ actor PlaybackSession {
     /// 墓碑：被用户显式作废（跳整摞 / 掀桌 / 取消轮次）的摞，后续增量一律丢弃。
     private var deadTurns: [String] = []
 
+    /// **端说过「说完了」的摞**：客户端显式收尾（Claude 的 Stop / pi 的 `{end}`）那一记。
+    ///
+    /// 与墓碑是两码事：**墓碑 = 作废（后来的字不开口）**；这里 = **收尾（字照播，但不再「还在说」**）。
+    ///
+    /// 为什么单独记一笔：收尾信号与正文是**两条独立通路**（Stop 钩子一次、正文一次），
+    /// 谁先抵达 socket 没有保证。收尾先到、随后才到的正文会把已经盖印的摞**重新揭开**
+    /// （`appendToStack` 里那两行 `sealed = false`）——于是这一摞永远停在「还在说」：
+    /// `anyUnsealed` 恒为真 → 队列永远不结算 → **字幕不收、汽水音量不还**。
+    /// 2026-10-24 实测（`I1`）：第三页正文与收尾信号只差 1 毫秒，收尾先到，这一摞就再没收住，
+    /// 用例干等 60 秒超时——**丢的不是内容，是收尾**。
+    ///
+    /// 所以规矩是：**收尾是终判**。端说了「说完了」，后来的内容照样播（一个字不丢），
+    /// 但不再把这一摞拽回「还在说」——该收的字幕照收，音量照还。
+    private var finishedTurns: [String] = []
+
     /// 「等新内容」的等待者。入队 / 收尾 / 打断唤醒（返回 true）；宽限到点（返回 false）。
     /// 用引用类型让「唤醒」与「超时」互斥：两边都在本 actor 上串行地从 `waiters` 摘除，
     /// 先摘到的 resume、后到的发现已不在数组里即放弃——`CheckedContinuation` 双重 resume 会 fatal crash。
@@ -146,7 +162,13 @@ actor PlaybackSession {
         return n
     }
     /// 是否还有没收尾的摞（还在生成、没说「说完了」）。宽限到点就是给它们盖印的。
-    var anyUnsealed: Bool { segments.contains { !$0.sealed } || front.contains { !$0.sealed } }
+    ///
+    /// **「已声明、字还没到」的流式轮也算没收尾**：端已经说了「这一轮开始了」，此刻只是还没送来
+    /// 第一块。此前不算 → 流式轮一开、队列是空的，daemon 立刻报「播报结束：队列已空，字幕收起」——
+    /// 那是句假话（字幕跟着抖一下，`A-tail` 用例也因此假红）。
+    var anyUnsealed: Bool {
+        segments.contains { !$0.sealed } || front.contains { !$0.sealed } || !turnStack.isEmpty
+    }
     /// 未收尾的摞号（诊断日志用）。
     var unsealedIDs: [String] {
         segments.filter { !$0.sealed }.compactMap(\.turnID) + front.filter { !$0.sealed }.compactMap(\.turnID)
@@ -298,7 +320,9 @@ actor PlaybackSession {
             return nil
         }
         let fresh = newPage(jobs, pageNote: pageNote)
-        let seg = makeSegment(turnID: note, source: jobs[0].source, sealed: false, pages: fresh)
+        // 端已经说过「说完了」的这一摞：**内容照收，但不再开成「还在说」**（终判，见 `finishedTurns`）。
+        let alreadyFinished = note.map { finishedTurns.contains($0) } ?? false
+        let seg = makeSegment(turnID: note, source: jobs[0].source, sealed: alreadyFinished, pages: fresh)
         segments.append(seg)
         lastFiling = SegmentFiling(stack: seg.localID, turnID: note, pages: fresh.map(\.localID))
         signal()
@@ -336,27 +360,30 @@ actor PlaybackSession {
         let blocks = stamp(jobs)
         let joined = (hit.isFront ? front : segments)[hit.index].pages
         let lastPage = joined.last
+        // 端说过「说完了」就别再揭回「还在说」——收尾是终判，迟到的正文照播（一个字不丢），
+        // 但不再拖住收尾（字幕/音量）。宽限封的印照旧可以揭（宽限只是猜「说完了」，不是判死）。
+        let reopen = !(note.map { finishedTurns.contains($0) } ?? false)
         // 数组元素是值类型，改完必须写回原坐标。
         if let pageNote, let lastPage, lastPage.externalID == pageNote {
             var merged = lastPage
             merged.blocks.append(contentsOf: blocks)
             if hit.isFront {
                 front[hit.index].pages[front[hit.index].pages.count - 1] = merged
-                front[hit.index].sealed = false
+                if reopen { front[hit.index].sealed = false }
             } else {
                 segments[hit.index].pages[segments[hit.index].pages.count - 1] = merged
                 // 又来货了：揭掉空闲宽限封的印（宽限只是猜「说完了」，不是判死）
-                segments[hit.index].sealed = false
+                if reopen { segments[hit.index].sealed = false }
             }
             lastFiling = SegmentFiling(stack: stack, turnID: note, pages: [merged.localID])
         } else {
             let page = PlaybackPage(localID: nextPageLocalID(), externalID: pageNote, blocks: blocks)
             if hit.isFront {
                 front[hit.index].pages.append(page)
-                front[hit.index].sealed = false
+                if reopen { front[hit.index].sealed = false }
             } else {
                 segments[hit.index].pages.append(page)
-                segments[hit.index].sealed = false
+                if reopen { segments[hit.index].sealed = false }
             }
             lastFiling = SegmentFiling(stack: stack, turnID: note, pages: [page.localID])
         }
@@ -451,7 +478,17 @@ actor PlaybackSession {
         for i in front.indices where front[i].turnID == id {
             front[i].sealed = true; hit = true
         }
-        if hit { signal() }
+        // 记一笔「端说过说完了」：**这一记是终判**，迟到的正文照播，但不再揭回「还在说」
+        // （见 `finishedTurns` 的注释——收尾与正文是两条通路，先后不保证）。
+        if !finishedTurns.contains(id) {
+            finishedTurns.append(id)
+            if finishedTurns.count > Self.recentTurnCapacity { finishedTurns.removeFirst() }
+        }
+        // 端说完了 → 这一轮不再有内容了，它也就不是「还没说完」了。
+        // 不摘掉它的话，`anyUnsealed` 永远为真 → 永远不结算（字幕不收、音量不还）。
+        var changed = hit
+        if let i = turnStack.firstIndex(of: id) { turnStack.remove(at: i); changed = true }
+        if changed { signal() }
         return hit
     }
 
@@ -637,7 +674,7 @@ actor PlaybackSession {
     private func bury(_ id: String) {
         deadTurns.removeAll { $0 == id }
         deadTurns.append(id)
-        if deadTurns.count > Self.tombstoneCapacity { deadTurns.removeFirst() }
+        if deadTurns.count > Self.recentTurnCapacity { deadTurns.removeFirst() }
     }
 
     // MARK: - 等新内容（空闲宽限归这里，不归播放管道）
@@ -680,15 +717,21 @@ actor PlaybackSession {
 
     /// 宽限到点：给所有还开着的摞盖印（= 视为「说完了」）。**不立墓碑**——
     /// 它之后若又来页，`appendGrouped` 会把 `sealed` 揭回 false 继续播。
+    ///
+    /// 「已声明、字还没到」的流式轮也一并收掉：它们同样占着「还没说完」，不摘掉就永远等不到结算
+    /// （字幕不收、音量不还）。
     /// - Returns: 被盖上的摞号（空 = 没有可盖的，调用方可据此判定不必收字幕）。
     @discardableResult
     func sealIdle() -> [String] {
         let ids = unsealedIDs
-        guard !ids.isEmpty else { return [] }
+        let declared = turnStack
+        turnStack.removeAll()
+        guard !ids.isEmpty || !declared.isEmpty else { return [] }
         for i in segments.indices { segments[i].sealed = true }
         for i in front.indices { front[i].sealed = true }
-        Log.info("空闲 \(Int(idleGraceSeconds))秒无新内容，判定说完了：盖上 \(ids.joined(separator: ","))")
+        let all = ids + declared
+        Log.info("空闲 \(Int(idleGraceSeconds))秒无新内容，判定说完了：盖上 \(all.joined(separator: ","))")
         signal()
-        return ids
+        return all
     }
 }
