@@ -328,7 +328,7 @@ actor Daemon {
             return
         }
         let panel = await MainActor.run {
-            CaptionPanel(screenUUID: config.resolvedCaptions.resolvedScreen)
+            CaptionPanel(config: config.resolvedCaptions)
         }   // 面板是 @MainActor 类型，构造要在主线程
         captionPanel = panel
         await queue.setCaptionSink { text in

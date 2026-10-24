@@ -89,26 +89,82 @@ public struct PlaybackConfig: Codable, Sendable {
 
 }
 
-/// 播报字幕（**独立一段**，不塞在播报里）：开关 + 钉在哪块屏。
+/// 字幕浮窗在屏上的落点。
+public enum CaptionPosition: String, Codable, Sendable, CaseIterable {
+    /// 贴底（默认）：浮窗底边距可见区底边 `inset` 点
+    case bottom
+    /// 贴顶：浮窗顶边距可见区顶边 `inset` 点
+    case top
+    /// 垂直居中
+    case center
+}
+
+/// 播报字幕（**独立一段**，不塞在播报里）：开关 + 钉在哪块屏 + 长什么样、落在哪儿。
 ///
 /// 2026-10-24 从 `[playback]` 挪出来：字幕是「屏幕上的显示」，跟「播报怎么排队收尾」
 /// 是两件事，混在一段里时用户改字幕开关要去翻播报的配置。
+///
+/// 字段一律**非可选 + 缺省用默认**（同 `SpeechInputConfig` 的写法）：默认值只写这一处，
+/// 模板与代码由测试钉住不会出现两份。旧配置缺字段也能加载。
 public struct CaptionsConfig: Codable, Sendable {
     /// 是否显示播报字幕（念到哪句就在屏上显示哪句）
-    public var enabled: Bool?
-    /// 字幕钉在哪块屏：那块屏的 UUID；不填 = 主屏。
+    public var enabled: Bool
+    /// 字幕钉在哪块屏：那块屏的 UUID；空 = 主屏。
     ///
     /// 填 UUID 而不是序号/型号：同型号同分辨率的两块屏（两块 Redmi 27 NU）只有 UUID 认得出，
     /// 而这个 UUID 系统自己拿来记屏幕摆位——拔插、重启、改分辨率都不变。
-    public var screen: String?
+    public var screen: String
+    /// 落点：贴底 / 贴顶 / 垂直居中
+    public var position: CaptionPosition
+    /// 距落点那条边的点数
+    public var inset: Double
+    /// 内容宽度上限（超出折行）
+    public var maxWidth: Double
+    /// 内容高度上限＝可见高的比例（超出截尾）
+    public var maxHeightRatio: Double
+    /// 字号
+    public var fontSize: Double
+    /// 内边距
+    public var padding: Double
+    /// 圆角
+    public var cornerRadius: Double
 
+    /// 缺字段用默认值：TOML 里只写要改的那一项也能加载
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? Self.default.enabled
+        self.screen = try c.decodeIfPresent(String.self, forKey: .screen) ?? Self.default.screen
+        self.position = try c.decodeIfPresent(CaptionPosition.self, forKey: .position) ?? Self.default.position
+        self.inset = try c.decodeIfPresent(Double.self, forKey: .inset) ?? Self.default.inset
+        self.maxWidth = try c.decodeIfPresent(Double.self, forKey: .maxWidth) ?? Self.default.maxWidth
+        self.maxHeightRatio = try c.decodeIfPresent(Double.self, forKey: .maxHeightRatio) ?? Self.default.maxHeightRatio
+        self.fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? Self.default.fontSize
+        self.padding = try c.decodeIfPresent(Double.self, forKey: .padding) ?? Self.default.padding
+        self.cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? Self.default.cornerRadius
+    }
+
+    public init(enabled: Bool = false, screen: String = "", position: CaptionPosition = .bottom,
+                inset: Double = 24, maxWidth: Double = 600, maxHeightRatio: Double = 0.3,
+                fontSize: Double = 16, padding: Double = 14, cornerRadius: Double = 10) {
+        self.enabled = enabled
+        self.screen = screen
+        self.position = position
+        self.inset = inset
+        self.maxWidth = maxWidth
+        self.maxHeightRatio = maxHeightRatio
+        self.fontSize = fontSize
+        self.padding = padding
+        self.cornerRadius = cornerRadius
+    }
+
+    /// 默认值真源（全仓只此一处）：字幕默认关、贴底 24 点、宽 600、字号 16。
     public static let `default` = CaptionsConfig()
 
-    /// 默认关：字幕会一直占着屏幕下方，只在你明确要看时才开
-    public var resolvedEnabled: Bool { enabled ?? false }
-    /// 未配置 = nil = 主屏（现状）；空串按没配算。
+    /// 字幕默认关：它会一直占着屏幕，只在你明确要看时才开
+    public var resolvedEnabled: Bool { enabled }
+    /// 空串按「没指定屏」算 = 主屏
     public var resolvedScreen: String? {
-        let trimmed = screen?.trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        let trimmed = screen.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
@@ -117,6 +173,13 @@ public struct CaptionsConfig: Codable, Sendable {
     enum CodingKeys: String, CodingKey, CaseIterable {
         case enabled
         case screen
+        case position
+        case inset
+        case maxWidth
+        case maxHeightRatio
+        case fontSize
+        case padding
+        case cornerRadius
     }
 }
 
@@ -538,6 +601,16 @@ public func validate(_ config: Config) throws {
             throw ConfigError.invalidConfig("sourceVoices.\(source) 不存在: \(id)")
         }
     }
+    // 字幕的外观数字：写错（负数、零宽、比例超 1）当场报错，别等渲染时才发现
+    let captions = config.resolvedCaptions
+    if captions.inset < 0 { throw ConfigError.invalidConfig("captions.inset 不能为负") }
+    if captions.maxWidth <= 0 { throw ConfigError.invalidConfig("captions.maxWidth 必须大于 0") }
+    if captions.maxHeightRatio <= 0 || captions.maxHeightRatio > 1 {
+        throw ConfigError.invalidConfig("captions.maxHeightRatio 必须在 0~1 之间")
+    }
+    if captions.fontSize <= 0 { throw ConfigError.invalidConfig("captions.fontSize 必须大于 0") }
+    if captions.padding < 0 { throw ConfigError.invalidConfig("captions.padding 不能为负") }
+    if captions.cornerRadius < 0 { throw ConfigError.invalidConfig("captions.cornerRadius 不能为负") }
     // 翻译配置缺失或未启用都不算错（划词翻译可整体关掉）
     if let t = config.translation, t.enabled {
         if t.provider == .openai, URL(string: t.baseURL) == nil {

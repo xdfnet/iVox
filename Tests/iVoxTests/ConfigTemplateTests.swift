@@ -101,6 +101,7 @@ final class ConfigTemplateTests: XCTestCase {
             ("speechInput", try encoded(SpeechInputConfig.default)),
             ("translation", try encoded(TranslationConfig.default)),
             ("playback", try encoded(PlaybackConfig.default)),
+            ("captions", try encoded(CaptionsConfig.default)),
             ("wechat", try encoded(WeChatConfig())),
         ]
         for (name, expected) in expectations {
@@ -116,18 +117,6 @@ final class ConfigTemplateTests: XCTestCase {
                 )
             }
         }
-    }
-
-    func testTemplateCaptionsSectionMatchesCodeDefaults() {
-        // 字幕段（独立段）的默认值：开关关、钉屏留空 = 主屏
-        guard case .boolean(let enabled)? = section("captions")["enabled"] else {
-            return XCTFail("captions.enabled 不见了")
-        }
-        XCTAssertFalse(enabled, "字幕默认应是关的")
-        guard case .string(let screen)? = section("captions")["screen"] else {
-            return XCTFail("captions.screen 不见了")
-        }
-        XCTAssertTrue(screen.isEmpty, "字幕默认该钉在主屏（screen 留空）")
     }
 
     func testTemplateDefaultVoiceIsABuiltin() {        // 模板指名的默认音色必须是真存在的内置音色

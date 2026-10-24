@@ -67,7 +67,7 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   AudioPipeline.swift  — 重采样
   Translation/         — 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗
 
-Tests/iVoxTests/       — 测试（14 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests 例外，@testable import iVox）
+Tests/iVoxTests/       — 测试（15 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests 与 CaptionLayoutTests 例外，@testable import iVox）
 
 docs/                  — README.md（索引 + 分类规则）· architecture.md · hook-chain.md · socket-api.md · native-bridge.md（微信链路实测依据）；playback/ 放播报五层：paper.md（比喻，**建立直觉但不裁决**）· purpose.md（取舍，**有分歧听它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研
 scripts/               — 装机与部署：runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）

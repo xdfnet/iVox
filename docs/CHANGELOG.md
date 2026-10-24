@@ -2,6 +2,17 @@
 
 ## 未发布 — 2026-10-24
 
+- **字幕的落点与外观全部外置成配置** — 飞哥「都做成可配置的」。原先字幕浮窗的位置与尺寸
+  写死在 `CaptionPanel` 的几个 `static let`（贴底 24pt、宽 600、字号 16、内边距 14、圆角 10、
+  高度上限 30%），要改得重编译。
+  - `[captions]` 段新增：`position`（bottom/top/center）、`inset`、`maxWidth`、`maxHeightRatio`、
+    `fontSize`、`padding`、`cornerRadius` —— 加上原有的 `enabled` / `screen`，字幕这块**全部可配**
+  - **默认值仍只写一处**：`CaptionsConfig.default`（iVoxKit）是非可选 + 缺省回退的写法，
+    模板由测试逐键钉住（`ConfigTemplateTests`），代码里不再有第二份常数
+  - 落点几何抽成纯函数 `CaptionPanel.origin(...)`（水平永远居中，垂直由 `position` 决定），
+    新增 `CaptionLayoutTests` 5 条（含负坐标屏——放在主屏下方的屏，落点不能算歪）
+  - 数字类的键做了校验：负数 / 零宽 / 比例超 1 在加载时就报错，不等到渲染才发现
+
 - **字幕从播报里独立出来** — 飞哥「字幕要独立出来，不要放到播报里」。字幕是「屏幕上的显示」，
   跟「播报怎么排队收尾」是两件事，混在一段里时用户改字幕开关要去翻播报的配置。
   - 配置：新增独立的 `[captions]` 段（`enabled` 开关 + `screen` 钉屏），`[playback]` 只剩 `idleGraceSeconds`

@@ -13,8 +13,11 @@ import iVoxKit
 /// - **不跟鼠标收**：字幕是「一边听一边看」，手总会动；收起只由播报状态驱动（`update(nil)`）
 /// - **不跟鼠标、也不跟焦点所在屏**：常驻若跟着鼠标会来回跳；而 `NSScreen.main` 是**键盘焦点所在屏**，
 ///   多屏下焦点一动字幕就跑到别的屏去（人看不见）。默认钉在主屏（`screens.first`，含菜单栏那块）；
-///   要钉到别的屏，在配置里给 `playback.captionScreen` 填那块屏的 UUID（见 `ScreenIdentity`）——
+///   要钉到别的屏，在配置 `[captions]` 段的 `screen` 填那块屏的 UUID（见 `ScreenIdentity`）——
 ///   **钉的是「哪块屏」这个身份，不是「屏幕上第几块」**，拔插、重启、改分辨率都不漂
+///
+/// 落点与外观（贴底/贴顶/居中、距边点数、字号、宽度上限…）全部来自配置 `[captions]` 段，
+/// 代码里不写死——默认值真源在 `CaptionsConfig.default`（iVoxKit）。
 ///
 /// 同步口径：跟**播放**——文本随音频块流到播放器，**句首块被设备读出**时才来报
 /// （`AudioPlayer` 的 `.dataConsumed` 回调），与声音对齐（误差约一个 IO 缓冲）。
@@ -25,20 +28,12 @@ import iVoxKit
 /// 调用点本来就在 `Task { @MainActor in ... }` 里（队列回调驱动），标注零成本，还省掉那批警告。
 @MainActor
 final class CaptionPanel {
-    /// 内容区宽度上限（超过折行）
-    private static let maxContentWidth: CGFloat = 600
-    /// 距屏幕可见区底部：**贴底的字幕位**（与语音浮窗同高）。翻译浮窗被抬到它上方（96pt），
-    /// 两者不重叠——分工是「字幕在下、翻译在上」，起初做反过（字幕在上、翻译在下）。
-    private static let bottomInset: CGFloat = 24
-    private static let padding: CGFloat = 14
-    private static let cornerRadius: CGFloat = 10
-    private static let fontSize: CGFloat = 16
-    /// 内容高度上限占可见高的比例（超出截尾）
-    private static let maxHeightRatio: CGFloat = 0.3
-
     private var panel: NSPanel?
     /// 正在显示的文本（去重：同一句重复广播不重排，免得闪）
     private var current = ""
+    /// 字幕的外观与落点：**全部由配置给**（`[captions]` 段），代码里不写死
+    /// ——默认值真源在 `CaptionsConfig.default`（iVoxKit），此处不另抄一份。
+    private let config: CaptionsConfig
     /// 钉住的那块屏的 UUID（配置给的）；nil = 主屏。
     private let pinnedScreenUUID: String?
     /// 认不到钉的屏时只告警一次，别刷屏。
@@ -46,9 +41,10 @@ final class CaptionPanel {
     /// 钉对了只报一次（让日志能确认「钉在了一块屏上」）。
     private var didLogPinnedScreen = false
 
-    /// - Parameter screenUUID: 要钉的屏的 UUID；nil / 空 = 主屏（现状）。
-    init(screenUUID: String? = nil) {
-        self.pinnedScreenUUID = screenUUID
+    /// - Parameter config: 字幕配置（开关、钉屏、落点与尺寸外观）。
+    init(config: CaptionsConfig) {
+        self.config = config
+        self.pinnedScreenUUID = config.resolvedScreen
     }
 
     /// 更新字幕；`nil` / 空串 = 收起。
@@ -71,21 +67,22 @@ final class CaptionPanel {
     private func show(_ text: String) {
         // 默认主屏（含菜单栏那块）：`NSScreen.main` 是**键盘焦点所在屏**、不是主屏——多屏下焦点一动，
         // 字幕就跟着跑到别的屏去，人在自己那块屏上反而看不见（实测日志里出现过别块屏的负 y 坐标）。
-        // `screens.first` 才是主屏。配置了 `captionScreen` 就钉到那块屏上。
+        // `screens.first` 才是主屏。配置了 `captions.screen` 就钉到那块屏上。
         let screen = targetScreen()
         let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
+        let padding = CGFloat(config.padding)
 
         let label = baseLabel()
         label.stringValue = text
         // 尺寸交给 label 自己量（`sizeToFit`），不用 `boundingRect` 代算——cell 的内边距它不含，
         // 算出来偏大 → 会多折一行、最后一行被裁（`TranslationPanel` 踩过，此处沿用同一口径）
-        let widthLimit = min(Self.maxContentWidth, visible.width - 80) - Self.padding * 2
+        let widthLimit = min(CGFloat(config.maxWidth), visible.width - 80) - padding * 2
         label.sizeToFit()
         if label.frame.width > widthLimit {
             label.preferredMaxLayoutWidth = widthLimit
             label.sizeToFit()
         }
-        let heightLimit = visible.height * Self.maxHeightRatio - Self.padding * 2
+        let heightLimit = visible.height * CGFloat(config.maxHeightRatio) - padding * 2
         if label.frame.height > heightLimit {
             let font = label.font!
             let lineHeight = font.ascender - font.descender + font.leading
@@ -94,18 +91,35 @@ final class CaptionPanel {
             label.sizeToFit()
         }
 
-        let size = NSSize(width: label.frame.width + Self.padding * 2,
-                          height: label.frame.height + Self.padding * 2)
+        let size = NSSize(width: label.frame.width + padding * 2,
+                          height: label.frame.height + padding * 2)
         let panel = ensurePanel()
         // 顺序要紧：**先**把面板调到内容尺寸、**再**装 contentView；反过来会按面板当时的
         // contentRect（初始 100×40）重设 view 的 frame，算好的尺寸就丢了（`TranslationPanel` 踩过）
         panel.setContentSize(size)
-        label.setFrameOrigin(NSPoint(x: Self.padding, y: Self.padding))
+        label.setFrameOrigin(NSPoint(x: padding, y: padding))
         panel.contentView = makeContainer(size: size, label: label)
-        panel.setFrameOrigin(NSPoint(x: visible.midX - size.width / 2,
-                                     y: visible.minY + Self.bottomInset))
+        panel.setFrameOrigin(Self.origin(position: config.position,
+                                         inset: CGFloat(config.inset),
+                                         visible: visible, size: size))
         panel.orderFrontRegardless()
         Log.debug("播报字幕: \(Int(size.width))×\(Int(size.height)) @ (\(Int(panel.frame.minX)),\(Int(panel.frame.minY)))")
+    }
+
+    /// 落点：水平永远居中；垂直由 `position` 决定（贴底 / 贴顶 / 居中），`inset` 是距那条边的点数。
+    ///
+    /// 纯几何，抽成 static 便于单测（渲染与几何分开测，测几何不用开窗口）。
+    /// 注意用**可见区**（`visibleFrame`）而不是整块屏：菜单栏让出的那条不算可用。
+    static func origin(position: CaptionPosition, inset: CGFloat,
+                       visible: NSRect, size: NSSize) -> NSPoint {
+        let x = visible.midX - size.width / 2
+        let y: CGFloat
+        switch position {
+        case .bottom: y = visible.minY + inset
+        case .top: y = visible.maxY - inset - size.height
+        case .center: y = visible.midY - size.height / 2
+        }
+        return NSPoint(x: x, y: y)
     }
 
     /// 字幕要往哪块屏上放。
@@ -136,7 +150,7 @@ final class CaptionPanel {
 
     private func baseLabel() -> NSTextField {
         let label = NSTextField(labelWithString: "")
-        label.font = .systemFont(ofSize: Self.fontSize)
+        label.font = .systemFont(ofSize: CGFloat(config.fontSize))
         label.textColor = .white
         label.alignment = .center
         label.lineBreakMode = .byWordWrapping
@@ -148,7 +162,7 @@ final class CaptionPanel {
         let container = NSView(frame: NSRect(origin: .zero, size: size))
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.96).cgColor
-        container.layer?.cornerRadius = Self.cornerRadius
+        container.layer?.cornerRadius = CGFloat(config.cornerRadius)
         container.addSubview(label)
         return container
     }
