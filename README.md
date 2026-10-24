@@ -64,7 +64,7 @@ ivox update                 # 检查 GitHub 最新版并自动升级（备份旧
 
 ```bash
 curl -s 127.0.0.1:8888/health
-# {"status":"ok","version":"5.3.0","model":"Qwen3-TTS-…","engine":"ready","queued":0,"playing":false}
+# {"status":"ok","version":"6.0.0","model":"Qwen3-TTS-…","engine":"ready","queued":0,"playing":false}
 ```
 
 **微信**：配置后微信消息自动注入 Claude Code，AI 回复以**文字**转发回微信，不经 TTS 播报——
@@ -97,7 +97,7 @@ make check-tts # 播报黑盒自检（压真实 daemon，发版前手动跑）
 make clean     # 清除 .build
 ```
 
-> `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **20 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
+> `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **21 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
 
 > 构建用 `xcrun --toolchain swift-latest swift`，该 toolchain 即 Xcode 26 自带的 Swift 6.4。
 > 曾需要 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`（早期快照的编译器崩溃，见
@@ -208,13 +208,14 @@ pi 扩展（逐句流式）──────────┴→ Unix Socket → 
 | **设备控制与数据访问** | ① 监听修饰键 ② 剪贴板粘贴注入 ③ 媒体控制 | **是** |
 | **输入监控** | 划词翻译的 `Opt+Z` 等**普通键**热键 | 要划词翻译才需要 |
 | **自动化（Finder）** | QuickActions 读取 Finder 当前目录 / 选中项 | 只用 Opt+Q/A/X/S/C 才需要 |
-| **代码签名** | ad-hoc 自签，每次重建哈希变化 → TCC 权限失效 | 部署后重新勾选 |
+| **代码签名** | 默认用自签长期身份 `iVox Local Signing`，重编译不变 → 权限不掉 | 装好即有，不用管 |
 
 > **划词翻译要「输入监控」**：只给"设备控制与数据访问"时，右 ⌘ 语音照常，但 `Opt+Z` 毫无反应——tap 明明创建成功，却收不到普通键，最难排查。`ivox status` 的「划词翻译」一行会如实反映。
 
 设备控制与数据访问路径：系统设置 → 隐私与安全性 → 设备控制与数据访问 → 勾选 `ivox`。
 
-> 重建二进制后 ad-hoc 签名变化，TCC 记录的权限会失效。`make update`（`deploy-bin`）会自动重新签名，但如果权限丢了，需要去系统设置重新勾选。
+> 重建二进制后签名若变了，TCC 记录的权限会失效。默认走自签长期身份（要求里只含证书指纹，不含 cdhash），
+> 重编译权限不掉；`make update`（`deploy-bin`）会自动重新签名。真掉了再去系统设置重新勾选。
 
 ## 依赖
 
