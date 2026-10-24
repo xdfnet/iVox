@@ -144,7 +144,7 @@ public struct CaptionsConfig: Codable, Sendable {
     }
 
     public init(enabled: Bool = false, screen: String = "", position: CaptionPosition = .bottom,
-                inset: Double = 20, maxWidth: Double = 600, maxHeightRatio: Double = 0.3,
+                inset: Double = 18, maxWidth: Double = 600, maxHeightRatio: Double = 0.3,
                 fontSize: Double = 16, padding: Double = 14, cornerRadius: Double = 10) {
         self.enabled = enabled
         self.screen = screen
@@ -157,7 +157,7 @@ public struct CaptionsConfig: Codable, Sendable {
         self.cornerRadius = cornerRadius
     }
 
-    /// 默认值真源（全仓只此一处）：字幕默认关、贴底 20 点、宽 600、字号 16。
+    /// 默认值真源（全仓只此一处）：字幕默认关、贴底 18 点、宽 600、字号 16。
     public static let `default` = CaptionsConfig()
 
     /// 字幕默认关：它会一直占着屏幕，只在你明确要看时才开
