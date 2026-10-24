@@ -27,7 +27,7 @@ rotate_hook_log() {
 rotate_hook_log
 
 # 必须两个参数：动作（msgdisplay|end）+ 来源。来源与动作一个都不能猜，宁缺毋滥。
-# 注：interrupt 分支已移除——打断权只归快捷键（右⌘/Opt+W/Ctrl+Esc）与命令行 `ivox skip`，
+# 注：interrupt 分支已移除——打断权只归快捷键（右⌘/Opt+Z/Ctrl+Esc）与命令行 `ivox skip`，
 # 不再经 hook.sh 自动打断。（`ivox quiet` 已随停止帧一起删除。）
 if [[ "$#" -lt 2 ]]; then exit 0; fi
 if [[ "$1" == "msgdisplay" ]]; then

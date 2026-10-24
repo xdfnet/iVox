@@ -8,10 +8,10 @@ import iVoxKit
 /// 全局键盘事件层。
 ///
 /// 独占一个 CGEvent tap 与专用 run loop，按事件类型 / keyCode 把事件**路由**出去；
-/// 它本身不含任何业务判断——谁关心右⌘、谁关心 Opt+W，由订阅方决定。
+/// 它本身不含任何业务判断——谁关心右⌘、谁关心 Opt+Z，由订阅方决定。
 ///
 /// 之所以单独成层：原先把 tap 埋在 `SpeechInputService` 里、只收修饰键。现在还要接
-/// Opt+W（普通键组合）、Opt+A（纯修饰键组合）… 若继续塞进语音服务，就成了
+/// Opt+Z（普通键组合）、Opt+A（纯修饰键组合）… 若继续塞进语音服务，就成了
 /// "一个 tap 管一堆不相干的热键"。
 ///
 /// **两条铁律**：
@@ -52,7 +52,7 @@ final class GlobalKeyTap: @unchecked Sendable {
     }
 
     /// 同一组合键的冷却：窗口内只放行一次，防连点/手抖引发一串重复动作。
-    /// 按键各自的冷却互不相干：Opt+W 的连点不会连带压住 Ctrl+2。
+    /// 按键各自的冷却互不相干：Opt+Z 的连点不会连带压住 Ctrl+2。
     /// 只在 tap 线程读写（handle 独占它），无需加锁。
     ///
     /// 分档而非一刀 1 秒，因为**重复一次的意义各键不同**：
@@ -125,9 +125,9 @@ final class GlobalKeyTap: @unchecked Sendable {
             return
         }
         // 辅助功能权限足够建 tap，但**普通键（keyDown）**还要「输入监控」——
-        // 缺它时表现为"右⌘ 语音照常、Opt+W 毫无反应"，且 tap 创建明明成功，最难排查。
+        // 缺它时表现为"右⌘ 语音照常、Opt+Z 毫无反应"，且 tap 创建明明成功，最难排查。
         if !CGPreflightListenEventAccess() {
-            Log.warn("键盘事件层: 缺少「输入监控」权限，Opt+W 等普通键热键收不到——"
+            Log.warn("键盘事件层: 缺少「输入监控」权限，Opt+Z 等普通键热键收不到——"
                    + "请在 系统设置 → 隐私与安全性 → 输入监控 勾选 ivox，然后重启守护进程")
             _ = CGRequestListenEventAccess()   // 让它出现在系统设置的列表里，便于勾选
         }
@@ -194,7 +194,7 @@ final class GlobalKeyTap: @unchecked Sendable {
             guard event.getIntegerValueField(.keyboardEventAutorepeat) == 0 else { return false }
             let keyCode = event.getIntegerValueField(.keyboardEventKeycode)
             // 只看四个标准修饰键位，忽略 AlphaShift / Fn / NumericPad 等杂项，
-            // 这样 Cmd+Shift+D、CapsLock 开着按 Opt+W 都不会误触
+            // 这样 Cmd+Shift+D、CapsLock 开着按 Opt+Z 都不会误触
             let flags = event.flags.intersection(Self.modifierMask)
             // [临时探针 2026-10-19] Esc 是「幽灵翻页」事故的争议键：翻页日志只写
             // 「打断来源=skip-page」，看不出是物理按键还是别的进程合成的 CGEvent。

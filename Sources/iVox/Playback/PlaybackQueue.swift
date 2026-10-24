@@ -48,12 +48,12 @@ private struct AudioChunk: Sendable {
 
 /// 打断来源：与 `PlaybackJob.source`（这段播报是谁发的）是一对账的标识——
 /// 前者回答「谁在说」，这个回答「这次打断是谁干的」。打断权**只归用户物理快捷键**
-/// （Opt+W 译文、Ctrl+Esc 掀页 / Ctrl+1 掀摞 / Ctrl+2 全掀）；agent 流式轮只排队、不打断。
+/// （Opt+Z 译文、Ctrl+Esc 掀页 / Ctrl+1 掀摞 / Ctrl+2 全掀）；agent 流式轮只排队、不打断。
 ///
 /// **右⌘说话不在这里**：那是「你停一下」（`pausePlayback()`：设备停渲染、内容一条不删），
 /// 不是「你别说了」（本枚举这三档：内容丢弃、这些摞的将来也不再来）。
 enum InterruptSource: Sendable, CustomStringConvertible {
-    /// Opt+W 划词翻译（用户主动朗读，speakUserInitiated）
+    /// Opt+Z 划词翻译（用户主动朗读，speakUserInitiated）
     case dict
     /// Ctrl+2 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，静音播报即可。
     /// **不碰背景音乐**——借还音乐是右⌘ 录音那条的事（见文件头）
@@ -375,7 +375,7 @@ actor PlaybackQueue {
         await pumpOrSettle()   // 有下一摞则起管道接着播；没有则收尾
     }
 
-    /// 用户主动要求开口（Opt+W 念译文）：**插队**——掐掉正在播的那一句让译文立刻响，
+    /// 用户主动要求开口（Opt+Z 念译文）：**插队**——掐掉正在播的那一句让译文立刻响，
     /// 但**不掀桌**：其余排队内容照旧（播完译文接着播）。
     ///
     /// 与 `enqueue(_:turnID: nil)` 的「只排队」语义**相反**——那条是 agent 自动汇报，
@@ -383,7 +383,7 @@ actor PlaybackQueue {
     /// 做成**一个原子方法**而不在调用方 `掐 + 入队` 两步拼：actor 可重入，两步之间会插进别的消息。
     func speakUserInitiated(_ newJobs: [PlaybackJob]) async {
         guard !newJobs.isEmpty else { return }
-        Log.info("用户主动开口（Opt+W 划词译文）：插队到队首，其余排队内容保留")
+        Log.info("用户主动开口（Opt+Z 划词译文）：插队到队首，其余排队内容保留")
         await preemptCurrent(.dict)
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
         // 译文自成一段插到队首立刻播；其余段顺序不动。
@@ -481,7 +481,7 @@ actor PlaybackQueue {
     }
 
     /// 掐掉「正在播的这一句/这一轮」：作废管道代号 + 取消在播 + 取消已排队合成与音频。
-    /// **不动 Session 容器**——它是「插队」与「掀桌」的公共前置：插队（Opt+W 译文）只掐在播、
+    /// **不动 Session 容器**——它是「插队」与「掀桌」的公共前置：插队（Opt+Z 译文）只掐在播、
     /// 保留其余排队内容；掀桌（bargeIn）先清场再调它。
     /// 不在此清 currentTask——由旧 processNext 自然结束时自清；调用方若要立刻起新管道，
     /// 必须 `await awaitCurrentPipelineFinished()`（线性化点），否则新旧两个 consumer 会并发

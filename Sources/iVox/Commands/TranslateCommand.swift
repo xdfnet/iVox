@@ -11,7 +11,7 @@ import iVoxKit
 /// daemon 没起、热键没授权时，也能单独确认翻译本身、以及 `--selection` 的剪贴板链路通不通。
 ///
 /// 注：这里**不弹浮窗**——CLI 进程执行完就退出，没有 run loop 让 NSPanel 存活。
-/// 浮窗属于 daemon 内的 `TranslationCoordinator`（Opt+W 那条路）。
+/// 浮窗属于 daemon 内的 `TranslationCoordinator`（Opt+Z 那条路）。
 struct TranslateCommand: AsyncParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "translate",

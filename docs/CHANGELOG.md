@@ -4,7 +4,8 @@
 
 - **快捷键默认值整体重排** — 飞哥给了一份新的 `[hotkeys]` 块要求「按这个更新默认值」。
   新默认：**Opt+Q** 开终端 / **Opt+A** 开终端跑 `claude` / **Opt+X** codex / **Opt+S** pi /
-  **Opt+C** 复制路径 / **Opt+W** 划词翻译；打断三档与右⌘ 不动。
+  **Opt+C** 复制路径 / **Opt+Z** 划词翻译；打断三档与右⌘ 不动。
+  （翻译键先定 `Opt+W`，随后按飞哥要求改成 **`Opt+Z`**——`Opt+Z` 当时无动作占用。）
   - 飞哥给的块里 `openTerminalPi` 与 `translate` 撞在同一个 `opt+s` 上——按动作表顺序
     `openTerminalPi` 先占，**翻译就一个键都没有了**。翻译改用 **Opt+W**（飞哥选定）
   - 默认值改在**唯一真源** `HotKeySpec.defaultChord`，模板 `ConfigTemplate.swift` 同步（仍是那两份副本）

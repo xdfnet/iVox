@@ -84,7 +84,7 @@ final class HotKeySpecTests: XCTestCase {
 
     func testDefaultChordsMatchShippedBindings() {
         // 默认键位是「唯一真源」，改动这里等于改所有没配过这项的用户
-        XCTAssertEqual(HotKeySpec.defaultChord(for: .translate).display, "opt+w")
+        XCTAssertEqual(HotKeySpec.defaultChord(for: .translate).display, "opt+z")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .openTerminal).display, "opt+q")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .openTerminalClaude).display, "opt+a")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .openTerminalCodex).display, "opt+x")
