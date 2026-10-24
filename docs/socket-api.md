@@ -31,7 +31,7 @@
 | `voice` | 否 | 音色 ID，默认按 `config.json` 中 `sourceVoices` 映射 |
 | `group` | 否 | 分组号 = **一摞**（一次回复）：同一摞分多次发时带上同一个值（Claude 传 `turn_id`），服务端把它们并进**同一摞**；掀摞/掀桌时按它拦住"这一摞的后续批次"。**不必发结束标记**——下一条 `group` 到来时，服务端自动把上一个盖上 |
 | `end` | 否 | 出现即表示**这是该分组的最后一批**，收尾该摞（段可前移）。漏发它这段会一直开着，直到下一个分组到来才被兜底收尾 |
-| `now` | 否 | 出现即表示**现在就念**：掐掉在播的，这句插到队首立刻念，念完接着播原来的。**与 source 无关**——Opt+S 划词译文走的就是这条路；机器里它也是唯一一条被允许插队的内容，其余排队的一个不丢、且不立墓碑 |
+| `now` | 否 | 出现即表示**现在就念**：掐掉在播的，这句插到队首立刻念，念完接着播原来的。**与 source 无关**——Opt+W 划词译文走的就是这条路；机器里它也是唯一一条被允许插队的内容，其余排队的一个不丢、且不立墓碑 |
 
 **无响应**（fire-and-forget）
 
@@ -252,10 +252,10 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 请求头，无 body，**无回复**：
 
 ```
-{type:quick,action:terminal}    # 开终端（Opt+A）
-{type:quick,action:claude}      # 开终端跑 claude（Opt+Z）
+{type:quick,action:terminal}    # 开终端（Opt+Q）
+{type:quick,action:claude}      # 开终端跑 claude（Opt+A）
 {type:quick,action:codex}       # 开终端跑 codex（Opt+X）
-{type:quick,action:pi}          # 开终端跑 pi（Opt+Q）
+{type:quick,action:pi}          # 开终端跑 pi（Opt+S）
 {type:quick,action:copy-path}   # 复制 Finder 选中路径（Opt=C）
 ```
 
@@ -311,7 +311,7 @@ ivox skip --stack                          # 掀摞（Ctrl+1）
 ivox skip --all                            # 全掀（Ctrl+2）
 
 # 快速操作（= {type:quick}，daemon 不在则静默返回）
-ivox quick terminal                        # Opt+A
+ivox quick terminal                        # Opt+Q
 ivox quick copy-path                       # Opt=C
 
 # 锁屏 / 解锁（= {type:lock} / {type:unlock}；daemon 不在则报错）

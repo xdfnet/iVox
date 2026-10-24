@@ -282,7 +282,7 @@ actor ConnectionHandler: SocketConnectionHandler {
             let source = inner.split(separator: ",")
                 .first { $0.hasPrefix("source:") }
                 .map { String($0.dropFirst("source:".count)) }
-            Log.info("收到停止帧，忽略：打断权只归快捷键与 ivox skip（右⌘ 说话 / Ctrl+Esc 闭嘴 / Cmd+D 译文）(source=\(source ?? "未知") fd=\(fd) bytes=\(data.count))")
+            Log.info("收到停止帧，忽略：打断权只归快捷键与 ivox skip（右⌘ 说话 / Ctrl+Esc 闭嘴 / Opt+W 译文）(source=\(source ?? "未知") fd=\(fd) bytes=\(data.count))")
             return
         }
 
@@ -331,7 +331,7 @@ actor ConnectionHandler: SocketConnectionHandler {
             // 不猜是哪一摞（全局"最后打开的那摞"那种判据已经删掉了），交给 2 秒空闲宽限收尾。
             Log.info("收尾信号（无分组，交空闲宽限兜底）: source=\(source) chars=\(clen)")
         } else if isNow {
-            // 用户自己要求现在念（Cmd+D 译文 / `ivox speak --now`）：**插队**——掐掉在播的、
+            // 用户自己要求现在念（Opt+W 译文 / `ivox speak --now`）：**插队**——掐掉在播的、
             // 插到最前面立刻念，其余排队内容一个不丢，念完接着播原来的。
             // 与普通的「只排队」相反：那条是 agent 自动汇报，不该抢麦（否则两个后台会话收尾会
             // 互相掐掉对方的内容）；这条是用户按的，必须立刻响。
@@ -366,7 +366,7 @@ actor ConnectionHandler: SocketConnectionHandler {
         }
     }
 
-    /// 快速操作的命令行入口（`ivox quick <action>`）：键盘上的 Opt+Z/A/X/Q/C 由此获得第二扇门。
+    /// 快速操作的命令行入口（`ivox quick <action>`）：键盘上的 Opt+Q/A/X/S/C 由此获得第二扇门。
     ///
     /// **必须由 daemon 执行，不能在 CLI 进程里做**：这些动作要摸主线程（AppleScript 取
     /// Finder 选中项、`NSPasteboard` 写剪贴板），搬到 CLI 进程里就绕开了 daemon 的主线程，
@@ -513,8 +513,8 @@ actor ConnectionHandler: SocketConnectionHandler {
             // 页号 = 一**页**（hook 传 message_id）：Ctrl+2「读下一页」按它翻页
             case "page":   page = pair[1].isEmpty ? nil : pair[1]
             case "end":    isFinal = true
-            // now：用户自己要求现在念（Cmd+D 译文 / `ivox speak --now`）→ **插队**，不是排队。
-            // 与 source 无关：Cmd+D 走这条路，自检也要能压到它，否则「唯一一条机器借道」的路径
+            // now：用户自己要求现在念（Opt+W 译文 / `ivox speak --now`）→ **插队**，不是排队。
+            // 与 source 无关：Opt+W 走这条路，自检也要能压到它，否则「唯一一条机器借道」的路径
             // 永远没有自动化回归保护。
             case "now":    isNow = true
             default: break

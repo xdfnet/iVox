@@ -2,14 +2,20 @@
 
 ## 未发布 — 2026-10-25
 
-- **「开终端」与「开 Claude」的快捷键对调** — 飞哥「打开终端和打开 Claude 的快捷键对调，默认值对调」。
-  现在 **Opt+A 开终端**（裸终端）、**Opt+Z 开终端跑 `claude`**；`Opt+X`（codex）/ `Opt+Q`（pi）/
-  `Opt+C`（复制路径）不动。
+- **快捷键默认值整体重排** — 飞哥给了一份新的 `[hotkeys]` 块要求「按这个更新默认值」。
+  新默认：**Opt+Q** 开终端 / **Opt+A** 开终端跑 `claude` / **Opt+X** codex / **Opt+S** pi /
+  **Opt+C** 复制路径 / **Opt+W** 划词翻译；打断三档与右⌘ 不动。
+  - 飞哥给的块里 `openTerminalPi` 与 `translate` 撞在同一个 `opt+s` 上——按动作表顺序
+    `openTerminalPi` 先占，**翻译就一个键都没有了**。翻译改用 **Opt+W**（飞哥选定）
   - 默认值改在**唯一真源** `HotKeySpec.defaultChord`，模板 `ConfigTemplate.swift` 同步（仍是那两份副本）
-  - 机器上的 `~/.config/ivox/config.toml` 一并对调（用户配置会覆盖默认值，不改它等于没换）
-  - README 字段表、`docs/architecture.md`、`docs/socket-api.md`、`QuickActionsService` 文件头与
-    `QuickCommand` 帮助文本同步改；`Opt+Z/A/X/Q/C` 这类**集合列举**的地方没动（集合没变）
-  - 单测钉住的值同步对调（`HotKeySpecTests`）
+  - 机器上的 `~/.config/ivox/config.toml` 一并改（用户配置会覆盖默认值，不改它等于没换）；
+    原文件里 `opt+A` 的大写也统一成小写，跟模板一致
+  - 全仓的**键位字面量**一次扫完（27 个文件）：README 字段表与概览行、`CLAUDE.md`、
+    `docs/architecture.md`、`docs/socket-api.md`、`docs/hook-chain.md`、`docs/playback/*`、
+    `QuickActionsService` 文件头、`QuickCommand` 帮助文本、各处源码注释与日志文案
+  - 集合列举（`Opt+Q/A/X/S/C`）统一成**与真源同序**，免得各处字母顺序各不相同
+  - 单测钉住的值同步更新（`HotKeySpecTests`）；`make test` 214 条全绿
+  - 部署后守护进程日志逐行确认生效：`热键: translate = opt+w` 等 10 行，无撞车告警
 
 ## 未发布 — 2026-10-24
 

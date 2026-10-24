@@ -37,7 +37,7 @@ actor SodaVolumeDucker {
     func handle(_ signal: PlaybackSignal) async {
         switch signal {
         case .started:
-            // 已经让过路了就不再让：打断后重起管道、Cmd+D 译文插队都会再发一次 .started，
+            // 已经让过路了就不再让：打断后重起管道、Opt+W 译文插队都会再发一次 .started，
             // 重复降会变成降 10 格（真降到更靠后，越听越小声）。
             guard !ducked else { return }
             guard Self.isSodaRunning() else {

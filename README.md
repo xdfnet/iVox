@@ -20,13 +20,13 @@
 | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f5e3.svg"><br>**自动播报** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f39b.svg"><br>**媒体控制** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f399.svg"><br>**语音输入** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4d6.svg"><br>**划词翻译** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/26a1.svg"><br>**快速操作** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4ac.svg"><br>**微信桥接** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f512.svg"><br>**屏幕锁** |
 |---|---|---|---|---|---|---|
 | AI 回复边生成边念，跳过代码与噪音；可开屏幕字幕（贴底跟随声音）；手动打断三档：`Ctrl+Esc` 掀页 · `Ctrl+1` 掀摞 · `Ctrl+2` 全掀 | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 按住说话，松开识别粘贴，浮窗实时显示波形 | 选中即译，屏幕下方歌词式浮窗出译文并可朗读 | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制 Finder 选中路径 | 微信消息直通常驻 Claude，回复以文字转发回微信（**不念**） | 一个滑块：右滑锁屏、左滑解锁（走 HID 真键） |
-| 装好即用 | 打开 `127.0.0.1:8888`，手机同局域网用 `http://<本机IP>:8888` | 右 ⌘ / 右 ⌃ | `Cmd+D` | `Opt+Z` · `Opt+A` · `Opt+X` · `Opt+Q` · `Opt+C` | `ivox wechat setup` | `ivox lock` / `ivox unlock` |
+| 装好即用 | 打开 `127.0.0.1:8888`，手机同局域网用 `http://<本机IP>:8888` | 右 ⌘ / 右 ⌃ | `Opt+W` | `Opt+Q` · `Opt+A` · `Opt+X` · `Opt+S` · `Opt+C` | `ivox wechat setup` | `ivox lock` / `ivox unlock` |
 
 ---
 
 **手感上的几处讲究**（都不需要你操作，只是别以为是卡了）：按住右⌘ 不足 0.15 秒就松手会被当作误触
 忽略掉；麦克风没插时按右⌘，播报不中断、音乐不停，只有 `daemon.log` 里留一句原因（它会写清是没插设备
-还是没给授权）；Cmd+D 连按是「换了个选区再译一次」而非丢弃，所以翻译请求会等浮窗稳 0.2 秒才发——误触最多
+还是没给授权）；Opt+W 连按是「换了个选区再译一次」而非丢弃，所以翻译请求会等浮窗稳 0.2 秒才发——误触最多
 闪一个空窗，不会白花一次请求；同一段文字反复译只发一次请求。
 
 播报**不打断你在听的背景音乐**——只有你按住右⌘ 说话时，音乐才让开给麦克风（录音需要安静）。一条命令安装，用 `ivox on/off` 控制启停（LaunchAgent 托管：登录自启 + 崩溃自动重启）。
@@ -39,7 +39,7 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 
 安装会一并装好：二进制、hook 集成、配置（含全量热键）、4 个音色的参考音频、MLX 模型，
 并把守护进程拉起来（登录自启 + 崩溃自动重启）。装完只剩三件要你手动做：给**麦克风**与
-**输入监控**权限、`ivox wechat setup` 扫码微信、试一下 `Cmd+D`。
+**输入监控**权限、`ivox wechat setup` 扫码微信、试一下 `Opt+W`。
 
 需要编译？克隆后 `make` 即可（需 Xcode 26+，自带 Swift 6.4）。
 
@@ -122,7 +122,7 @@ make clean     # 清除 .build
 ```toml
 # 划词翻译
 [hotkeys]
-translate = "opt+s"     # 改完跑 ivox restart 生效
+translate = "opt+w"     # 改完跑 ivox restart 生效
 ```
 
 主要字段：
@@ -163,12 +163,12 @@ voice = "rightcmd"
 
 | 动作名 | 默认键位 | 干什么 |
 |---|---|---|
-| `openTerminal` | `opt+a` | 在当前目录开终端 |
-| `openTerminalClaude` | `opt+z` | 开终端跑 `claude` |
+| `openTerminal` | `opt+q` | 在当前目录开终端 |
+| `openTerminalClaude` | `opt+a` | 开终端跑 `claude` |
 | `openTerminalCodex` | `opt+x` | 开终端跑 `codex` |
-| `openTerminalPi` | `opt+q` | 开终端跑 `pi` |
+| `openTerminalPi` | `opt+s` | 开终端跑 `pi` |
 | `copyPath` | `opt+c` | 复制 Finder 选中路径 |
-| `translate` | `opt+s` | 划词翻译 |
+| `translate` | `opt+w` | 划词翻译 |
 | `skipPage` | `ctrl+esc` | 读下一页（掀页） |
 | `skipBucket` | `ctrl+1` | 跳整摞 |
 | `skipAll` | `ctrl+2` | 闭嘴（全掀） |
@@ -190,8 +190,8 @@ pi 扩展（逐句流式）──────────┴→ Unix Socket → 
                                             │       └─ 常驻 Claude Agent (Swift 直连 claude)
                                             ├── GlobalKeyTap (键盘事件层：一个 tap，按归属路由)
                                             │       ├─ SpeechInput  (右 ⌘ / 右 ⌃ + ASR)
-                                            │       ├─ Translation  (Cmd+D 划词翻译 + 浮窗)
-                                            │       ├─ QuickActions (Opt+Z/A/Q/X/C)
+                                            │       ├─ Translation  (Opt+W 划词翻译 + 浮窗)
+                                            │       ├─ QuickActions (Opt+Q/A/X/S/C)
                                             │       └─ 手动打断三档 (Ctrl+Esc 掀页 / Ctrl+1 掀摞 / Ctrl+2 全掀)
                                             └── MediaHTTPServer (Web UI)
 ```
@@ -206,11 +206,11 @@ pi 扩展（逐句流式）──────────┴→ Unix Socket → 
 |------|------|:--------:|
 | **麦克风** | 语音输入（按住右 ⌘ / 右 ⌃ 说话 → ASR） | 不用语音输入可不给 |
 | **设备控制与数据访问** | ① 监听修饰键 ② 剪贴板粘贴注入 ③ 媒体控制 | **是** |
-| **输入监控** | 划词翻译的 `Cmd+D` 等**普通键**热键 | 要划词翻译才需要 |
-| **自动化（Finder）** | QuickActions 读取 Finder 当前目录 / 选中项 | 只用 Opt+Z/A/Q/X/C 才需要 |
+| **输入监控** | 划词翻译的 `Opt+W` 等**普通键**热键 | 要划词翻译才需要 |
+| **自动化（Finder）** | QuickActions 读取 Finder 当前目录 / 选中项 | 只用 Opt+Q/A/X/S/C 才需要 |
 | **代码签名** | ad-hoc 自签，每次重建哈希变化 → TCC 权限失效 | 部署后重新勾选 |
 
-> **划词翻译要「输入监控」**：只给"设备控制与数据访问"时，右 ⌘ 语音照常，但 `Cmd+D` 毫无反应——tap 明明创建成功，却收不到普通键，最难排查。`ivox status` 的「划词翻译」一行会如实反映。
+> **划词翻译要「输入监控」**：只给"设备控制与数据访问"时，右 ⌘ 语音照常，但 `Opt+W` 毫无反应——tap 明明创建成功，却收不到普通键，最难排查。`ivox status` 的「划词翻译」一行会如实反映。
 
 设备控制与数据访问路径：系统设置 → 隐私与安全性 → 设备控制与数据访问 → 勾选 `ivox`。
 
@@ -221,7 +221,7 @@ pi 扩展（逐句流式）──────────┴→ Unix Socket → 
 - macOS 14+ / Apple Silicon
 - Xcode 26+（自带 Swift 6.4）
 - [Claude Code](https://claude.com/claude-code) CLI — 微信常驻 Agent（Swift 经 stdio 直连）
-- [Ghostty](https://ghostty.org) — 终端模拟器；快速操作的「开终端跑 `claude`/`codex`/`pi`」（`Opt+A`/`Opt+X`/`Opt+Q`）用它（`brew install --cask ghostty`）
+- [Ghostty](https://ghostty.org) — 终端模拟器；快速操作的「开终端跑 `claude`/`codex`/`pi`」（`Opt+Q`/`Opt+X`/`Opt+S`）用它（`brew install --cask ghostty`）
 - [mlx-audio-swift](https://github.com/Blaizzy/mlx-audio-swift) — 本地 MLX 推理
 - [Qwen3-TTS](https://github.com/QwenLM/Qwen3-TTS) — TTS 模型（[官方博客](https://qwen.ai/blog?id=qwen3tts-0115)）
 - Qwen3-ASR-1.7B — 本地语音识别模型（首次安装自动下载）

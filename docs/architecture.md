@@ -2,7 +2,7 @@
 
 ## 概览
 
-macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、PI coding agent）、微信与全局热键，输出侧走本地 MLX TTS/ASR + 系统媒体控制；另有划词翻译（`Opt+S`）与 Finder/终端快捷（QuickActions）。
+macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具（Claude Code、PI coding agent）、微信与全局热键，输出侧走本地 MLX TTS/ASR + 系统媒体控制；另有划词翻译（`Opt+W`）与 Finder/终端快捷（QuickActions）。
 
 ```
                           用户
@@ -23,7 +23,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
               │  WeChatPlatform ←──┤
               │  SocketServer ←────┤
               │  GlobalKeyTap ←────┤  ←  键盘事件层：一个 tap，按归属路由
-              │                     │      右⌘/右⌃ 语音 · Opt+S 翻译 · Opt+Z/A/Q/X/C 快捷
+              │                     │      右⌘/右⌃ 语音 · Opt+W 翻译 · Opt+Q/A/X/S/C 快捷
               │  MediaHTTPServer   │  →  Web UI (8888)
               │         │          │
               │         ▼          │
@@ -188,13 +188,13 @@ Daemon (actor)
 
 `PlaybackSession`（actor）：唯一持有容器与全部身份记账。容器三层——
 **段 Segment**（一次回复 = 一摞 / 普通播报）→ **页 Page**（一条消息）→ **块 Block**（1~80 字合成单位），
-外加一个独立的**加急段**列表（Opt+S 译文）排在最前。游标指向当前块但**不把它弹出容器**。
+外加一个独立的**加急段**列表（Opt+W 译文）排在最前。游标指向当前块但**不把它弹出容器**。
 墓碑 `deadTurns` 拦用户显式作废的摞的后续增量（**右⌘说话不算作废**——它是「暂停不删」，不清场也不埋）。
 
 `PlaybackQueue`（actor）：只管播放。连续管道 `processNext` 逐块 `synthesizeStream → player.write`，
 块间不 drain（设备零停顿）；**所有路径的收尾收敛到唯一的 `pumpOrSettle()`**（有活补起管道 /
 没活收字幕 / 仍有未封的段就起空闲宽限）；`pipelineSeq` 代号作废在途管道。打断权只归用户快捷键，
-三档全是「掐 + 掀」，Opt+S 译文走插队。
+三档全是「掐 + 掀」，Opt+W 译文走插队。
 
 **取舍理由、维护约束与踩过的坑一律见 [`playback/queue.md`](playback/queue.md)**（本节只留地图，
 细节在两处重复就会各自漂移——2026-10-17 的架构文档漂移就是这么发生的）。
@@ -257,7 +257,7 @@ Daemon (actor)
 - **right ⌘/⌃ 按下**：过 150ms 长按阈值 → 查授权 → **先试录**；`record()` 成功了才暂停音乐 +
   取消 TTS + 出浮窗（见下「副作用在录上之后」）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 用户快捷键五个：right⌘ 说话、Opt+S 插队念译文、Ctrl+2 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+1 跳整摞、Ctrl+Esc 读下一页。**pi 新轮与停止帧不再打断**，一律排队
+- 用户快捷键五个：right⌘ 说话、Opt+W 插队念译文、Ctrl+2 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+1 跳整摞、Ctrl+Esc 读下一页。**pi 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 - **副作用发生在「真的在录」之后**：原先一按下就先打断播报、暂停音乐，然后才建 recorder——
@@ -282,23 +282,23 @@ Daemon (actor)
   `HotKeySpec.defaultChord`，解析器与默认值都在 `iVoxKit/HotKeySpec.swift`（纯逻辑、可测）。改完跑
   `ivox restart` 生效。**本节及下文提到的所有键位都是默认值**——实际生效的看 `daemon.log` 里的
   「热键: 动作 = 键位」各行；配错时那里会写明是哪个动作、错在哪、退回了哪个默认
-- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Opt+S` → `TranslationService`；`Opt+Z/A/Q/X/C` → `QuickActionsService`；`Ctrl+2` / `Ctrl+1` / `Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掀桌 / 跳整摞 / 读下一页）
+- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Opt+W` → `TranslationService`；`Opt+Q/A/X/S/C` → `QuickActionsService`；`Ctrl+2` / `Ctrl+1` / `Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掀桌 / 跳整摞 / 读下一页）
 - 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
 - ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
-- 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Opt+S` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
+- 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Opt+W` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
 - **防误触也在这一层判，一处判完**（都是纯整数比较，不碰业务）：① **同键冷却，按键分档**——
-  `Opt+S` 0.2s（它靠后写胜出连按，冷却只挡连击）、三个打断键 0.3s（翻页掀摞本就该能连按）、
+  `Opt+W` 0.2s（它靠后写胜出连按，冷却只挡连击）、三个打断键 0.3s（翻页掀摞本就该能连按）、
   其余 1s。冷却中**仍然吃掉事件**只是不执行：漏给目标 app 更糟。走 `systemUptime` 单调时钟，
   只在 tap 线程读写，不加锁。② **右⌘/右⌃ 150ms 长按阈值**——按下沿延迟到阈值才发，阈值内松开
   当没发生过。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」
   的第二句吃掉。⚠️ 每 `make update` 都会重签二进制、**输入监控权限可能随之失效**（TCC 跟着
-  签名走），症状是 `Opt+S` 全哑而修饰键照常
+  签名走），症状是 `Opt+W` 全哑而修饰键照常
 
 ### Translation — 划词翻译
 
 `Sources/iVox/Translation/`（AppKit/CG 侧）+ `Sources/iVoxKit/Translation/`（纯逻辑，可单测）
 
-- `Opt+S` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 屏幕下方居中的歌词式浮窗（`TranslationPanel`，NSPanel 非激活浮层）+ 可选朗读
+- `Opt+W` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 屏幕下方居中的歌词式浮窗（`TranslationPanel`，NSPanel 非激活浮层）+ 可选朗读
 - **贵的动作押后**：先弹「读取选区…」占位 → 读剪贴板校验 → 弹「翻译中…」→ **等 200ms 提交点才发请求**。期间又按一次（世代推进）就到此为止，请求压根不发——误触的代价从「一次请求 + 一次朗读」降到「一个闪一下的空窗」
 - **连按是「后写胜出」而非丢弃**：`generation` 世代号，在途的那一代回来发现号变了就作废、不上屏不朗读。原先 `guard !inFlight else { return }` 是直接丢第二次，换了个选区想再译一次白按
 - **译文零重复推理**：`TranslationService`（actor）两层——**在途去重**（同一段文字并发时后到的等同一次的结果）与**最近 16 条译文缓存**（FIFO，键带 `provider|model`，切后端不拿旧译文顶账）。命中缓存**照样朗读**：用户想听的是译文，缓存省的是生成，不是他的耳朵
@@ -315,8 +315,8 @@ Daemon (actor)
 
 `Sources/iVox/QuickActions/QuickActionsService.swift`
 
-- `Opt+A` 在 Finder 当前目录开终端；`Opt+Z`/`Opt+X`/`Opt+Q` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
-- `Opt+A`（不带命令）在 Ghostty **已经在跑时改为聚焦**而非开新窗口——连按五下开五个终端是最明显的「后面干活的压力」。取舍：复用时不保证落在 Finder 当前目录（取已在跑的窗口目录要向 Ghostty 要 Automation 授权，不值当）。带命令的三个**仍开新实例**（见下条实测坑②，这条不能破）
+- `Opt+Q` 在 Finder 当前目录开终端；`Opt+A`/`Opt+X`/`Opt+S` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
+- `Opt+Q`（不带命令）在 Ghostty **已经在跑时改为聚焦**而非开新窗口——连按五下开五个终端是最明显的「后面干活的压力」。取舍：复用时不保证落在 Finder 当前目录（取已在跑的窗口目录要向 Ghostty 要 Automation 授权，不值当）。带命令的三个**仍开新实例**（见下条实测坑②，这条不能破）
 - 开终端走 **Ghostty**（`--working-directory` + `--initial-command` 是它的原生 CLI 参数）：一条 LaunchServices 调用就够，**不需要**临时 `.command` 文件，也不沾 Terminal 的 Automation 授权
 - 三个实测坑：① 参数必须经 `NSWorkspace.OpenConfiguration.arguments`（数组）下发——命令行 `open --args` 会把**含空格的参数拆坏**；② **必须配 `createsNewApplicationInstance`**，复用已运行的 Ghostty 实例时参数会被**静默忽略**（命令根本不跑）；③ **不用 `-e`**——它每次弹 macOS 的「Allow Ghostty to execute」确认框，Ghostty 目前无配置项可关
 - 命令写作 `--initial-command=/bin/zsh -lc <cmd>`：该参数默认经 `/bin/bash --noprofile --norc -c` 执行，套一层 login shell 才拿得到用户 PATH（`/opt/homebrew/bin`、`~/.local/bin` 都不在 GUI 进程的最小 PATH 里）；另配 `--wait-after-command=true` 让命令退出后**保留窗口**（Ghostty 默认关窗，与原先 Terminal 的行为不一致，退出 claude 时会看不到最后的输出）
@@ -486,7 +486,7 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-**打断权只归 ivox 快捷键**（right⌘ 说话 / Opt+S 插队译文 / 手动三档：Ctrl+Esc 读下一页 · Ctrl+1 跳整摞 · Ctrl+2 掀桌）；`hook.sh` **不再有 interrupt 分支**（手动打断在 `ivox skip` 三档：`--page` 读下一页 / `--stack` 跳整摞 / `--all` 全场闭嘴），`UserPromptSubmit` 亦不挂。
+**打断权只归 ivox 快捷键**（right⌘ 说话 / Opt+W 插队译文 / 手动三档：Ctrl+Esc 读下一页 · Ctrl+1 跳整摞 · Ctrl+2 掀桌）；`hook.sh` **不再有 interrupt 分支**（手动打断在 `ivox skip` 三档：`--page` 读下一页 / `--stack` 跳整摞 / `--all` 全场闭嘴），`UserPromptSubmit` 亦不挂。
 
 | 工具 | 配置/挂载 | 回复播报 |
 |------|----------|----------|

@@ -29,12 +29,12 @@ public enum ConfigTemplate {
 # 键位写法：cmd / ctrl / opt / shift + 主键，用 + 连接（大小写无所谓）。
 # 主键可用：a-z、0-9、esc、space、tab、return、backspace、delete、f1-f12、方向键。
 [hotkeys]
-openTerminal = "opt+a"          # 开终端 ｜ 默认 opt+a ｜ 任意组合键
-openTerminalClaude = "opt+z"    # 开终端并跑 claude ｜ 默认 opt+z ｜ 任意组合键
+openTerminal = "opt+q"          # 开终端 ｜ 默认 opt+q ｜ 任意组合键
+openTerminalClaude = "opt+a"    # 开终端并跑 claude ｜ 默认 opt+a ｜ 任意组合键
 openTerminalCodex = "opt+x"     # 开终端并跑 codex ｜ 默认 opt+x ｜ 任意组合键
-openTerminalPi = "opt+q"        # 开终端并跑 pi ｜ 默认 opt+q ｜ 任意组合键
+openTerminalPi = "opt+s"        # 开终端并跑 pi ｜ 默认 opt+s ｜ 任意组合键
 copyPath = "opt+c"              # 复制 Finder 选中路径 ｜ 默认 opt+c ｜ 任意组合键
-translate = "opt+s"             # 划词翻译（复制→翻译→浮窗+朗读）｜ 默认 opt+s ｜ 任意组合键
+translate = "opt+w"             # 划词翻译（复制→翻译→浮窗+朗读）｜ 默认 opt+w ｜ 任意组合键
 skipPage = "ctrl+esc"           # 读下一页（掐断+掀掉当前页剩余的块）｜ 默认 ctrl+esc ｜ 任意组合键
 skipBucket = "ctrl+1"           # 跳整摞（掐断+丢弃这一摞的全部内容）｜ 默认 ctrl+1 ｜ 任意组合键
 skipAll = "ctrl+2"              # 闭嘴（全掀）｜ 默认 ctrl+2 ｜ 任意组合键

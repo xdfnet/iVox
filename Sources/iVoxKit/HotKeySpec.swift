@@ -37,7 +37,7 @@ public struct KeyModifiers: OptionSet, Sendable, Hashable {
 ///
 /// `keyName` 是**按写法记的**（"d" / "2" / "esc"），不是从键码反查的——`1` 与 `u`、
 /// `2` 与 `i` 键码相同，反查出来的名字会变成 "ctrl+u"，用户看着莫名其妙。
-/// 显示名与配置里的写法一致（`opt+s`），看到日志就知道该往配置里写什么。
+/// 显示名与配置里的写法一致（`opt+w`），看到日志就知道该往配置里写什么。
 public struct KeyChord: Sendable, Hashable {
     public let keyCode: Int64
     public let modifiers: KeyModifiers
@@ -140,12 +140,12 @@ public enum HotKeySpec {
     /// 各动作的默认键位。**默认只写这一处**，配置文件是它的覆盖。
     public static func defaultChord(for action: HotKeyAction) -> KeyChord {
         switch action {
-        case .openTerminal:       return chord(keyName: "a", modifiers: .option)    // Opt+A
-        case .openTerminalClaude: return chord(keyName: "z", modifiers: .option)    // Opt+Z
+        case .openTerminal:       return chord(keyName: "q", modifiers: .option)    // Opt+Q
+        case .openTerminalClaude: return chord(keyName: "a", modifiers: .option)    // Opt+A
         case .openTerminalCodex:  return chord(keyName: "x", modifiers: .option)    // Opt+X
-        case .openTerminalPi:     return chord(keyName: "q", modifiers: .option)    // Opt+Q
+        case .openTerminalPi:     return chord(keyName: "s", modifiers: .option)    // Opt+S
         case .copyPath:           return chord(keyName: "c", modifiers: .option)    // Opt+C
-        case .translate:          return chord(keyName: "s", modifiers: .option)    // Opt+S
+        case .translate:          return chord(keyName: "w", modifiers: .option)    // Opt+W
         case .skipPage:           return chord(keyName: "esc", modifiers: .control) // Ctrl+Esc
         case .skipBucket:         return chord(keyName: "1", modifiers: .control)   // Ctrl+1
         case .skipAll:            return chord(keyName: "2", modifiers: .control)   // Ctrl+2

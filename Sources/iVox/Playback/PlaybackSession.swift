@@ -77,7 +77,7 @@ struct PlaybackSegment: Sendable {
 struct PlaybackCursor: Sendable {
     let seq: UInt
     let block: PlaybackBlock
-    /// 这一块是否属于加急段（Cmd+D 译文）——两条队列各有一套游标，`commit` 据此推进对的那条。
+    /// 这一块是否属于加急段（Opt+W 译文）——两条队列各有一套游标，`commit` 据此推进对的那条。
     let isFront: Bool
 }
 
@@ -95,7 +95,7 @@ actor PlaybackSession {
     private static let recentTurnCapacity = 32
 
     private var segments: [PlaybackSegment] = []
-    /// 加急段（只有 Cmd+D 译文这一种）：**插到队首**，先于常规段播。
+    /// 加急段（只有 Opt+W 译文这一种）：**插到队首**，先于常规段播。
     /// 单独一只列表而不是往 `segments` 头部插——序号单调递增，插在游标前面它就永远轮不到播；
     /// 加急段自带一套游标（`frontCursor`），两段各走各的，语义清楚。
     private var front: [PlaybackSegment] = []
@@ -274,7 +274,7 @@ actor PlaybackSession {
     ///
     /// 先看发声点（准确，2026-10-17 引入）；发声点还没有记录时退回**队首**——
     /// 用户还没听到任何声音，即将播的那个就是他要听的。
-    /// 加急段（Cmd+D 译文）排在 `front`、先播，所以无发声记录时它优先。
+    /// 加急段（Opt+W 译文）排在 `front`、先播，所以无发声记录时它优先。
     ///
     /// - Returns: `nil` = 容器里没有任何内容（队列真空 / 设备播空），此时过程干预退化成「只掐不掀」。
     func headStackTarget() -> (isFront: Bool, index: Int, turnID: String?)? {
@@ -392,7 +392,7 @@ actor PlaybackSession {
     }
 
     /// 按助理自编的摞号定位段——**这是助理唯一允许的段查找方式**。
-    /// 加急段（Cmd+D 译文）与普通段共用同一个号空间。
+    /// 加急段（Opt+W 译文）与普通段共用同一个号空间。
     private func segmentIndex(localID: Int) -> (isFront: Bool, index: Int)? {
         if let i = front.firstIndex(where: { $0.localID == localID }) { return (true, i) }
         if let i = segments.firstIndex(where: { $0.localID == localID }) { return (false, i) }
@@ -629,7 +629,7 @@ actor PlaybackSession {
         return ids
     }
 
-    /// 加急入队（Cmd+D 译文）：插到队首，**只掐在播、其余排队内容一律保留**。
+    /// 加急入队（Opt+W 译文）：插到队首，**只掐在播、其余排队内容一律保留**。
     /// 无分组天生收尾（它不是「还在生成」的摞）。
     @discardableResult
     func appendFirst(_ jobs: [PlaybackBlock]) -> Bool {

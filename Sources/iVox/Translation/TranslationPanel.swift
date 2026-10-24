@@ -16,7 +16,7 @@ import iVoxKit
 /// 位置固定在鼠标所在屏的下方居中，宽度随内容、高度有上限（超出截译文）。
 ///
 /// **刻意不做**：拖拽移动、点击外部关闭、文本选择。这三样都要 key window / 输入焦点，
-/// 当前 daemon 形态给不了；替代是「再按一次 Cmd+D 覆盖 + 到点自己消失」。
+/// 当前 daemon 形态给不了；替代是「再按一次 Opt+W 覆盖 + 到点自己消失」。
 @MainActor
 final class TranslationPanel {
     /// 内容区宽度上限（超过就折行）

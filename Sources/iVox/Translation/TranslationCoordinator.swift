@@ -8,7 +8,7 @@ import iVoxKit
 /// 划词翻译的编排者：把「模拟 Cmd+C → 读剪贴板 → 翻译 → 浮窗 + 朗读」串起来。
 ///
 /// 两个入口：
-/// - `translateSelection(mouseLocation:)` —— 热键（Cmd+D）与 `ivox translate --selection` 走这条
+/// - `translateSelection(mouseLocation:)` —— 热键（Opt+W）与 `ivox translate --selection` 走这条
 /// - `dismiss()` —— 关掉浮窗
 @MainActor
 final class TranslationCoordinator {
@@ -18,7 +18,7 @@ final class TranslationCoordinator {
     private let queue: PlaybackQueue
     private let panel = TranslationPanel()
     /// 后写胜出的世代号：每次触发 +1，在途的那一代回来发现号变了就作废、别上屏。
-    /// 连按 Cmd+D 时**不再丢弃**第二次——用户换了选区就是想再译一次，旧的让位给新的。
+    /// 连按 Opt+W 时**不再丢弃**第二次——用户换了选区就是想再译一次，旧的让位给新的。
     private var generation: UInt = 0
 
     init(config: Config, queue: PlaybackQueue) {

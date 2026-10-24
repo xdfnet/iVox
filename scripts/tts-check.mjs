@@ -167,7 +167,7 @@ async function finishGroup(source, group) {
   s.end();
 }
 
-// 用户插队播报（{now:1}）= Cmd+D 译文走的那条路：掐掉在播的、插到最前面立刻念，
+// 用户插队播报（{now:1}）= Opt+W 译文走的那条路：掐掉在播的、插到最前面立刻念，
 // 其余排队内容一个不丢。CLI 等价物 `ivox speak --now`。
 async function speakNow(source, text) {
   const s = await conn();
@@ -965,7 +965,7 @@ const cases = [
       ctx.noBad();
     },
   },
-  // ───────── I1：用户插队（Cmd+D 译文 / --now） ─────────
+  // ───────── I1：用户插队（Opt+W 译文 / --now） ─────────
   // 需求：译文是唯一的机器开口，只临时插队——念完即走，原队列一个不丢，且不立墓碑。
   {
     name: "I1-insert-front-keeps-queue",
