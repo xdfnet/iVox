@@ -92,7 +92,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
     /// 没有正在听的摞可掀。这摞不是空的，它只是还没开口。
     func testSkipsAStackThatWasDeclaredButNotYetWritten() async {
         let s = PlaybackSession()
-        _ = await s.beginTurn("gEmpty", source: "claude")   // 说了话，纸还在路上
+        _ = await s.beginTurn("gEmpty")   // 说了话，纸还在路上
         await seed(s, stacks: [(id: "gB", pages: [["B1"]])])
         await advanceAll(s)
 
@@ -410,13 +410,17 @@ final class PlaybackSessionStoryTests: XCTestCase {
         XCTAssertEqual(spoken, ["A1", "A2"], "后到的内容必须照念")
     }
 
-    // MARK: - 清单 8：跨来源喊闭嘴，会不会挂错那摞的牌？
+    // MARK: - 清单 8：全掀时挂哪些摞的牌？
 
-    /// Ctrl+Esc 是**全局热键**，拿不到「当前会话」是谁。此前一刀切埋全部，
-    /// 于是你在 Claude 里喊闭嘴，把 **pi 正在生成的那摞**也埋了——
-    /// 它随后送来的字全被丢弃、从此不再开口。
-    /// 这条钉的是：**容器照旧全清，墓碑只给最近有块入队的那个来源。**
-    func testShutUpBuriesOnlyTheSourceThatWasTalking() async {
+    /// **队列只有一条**：Claude 与 pi 的内容都按到达顺序排进去，三档打断都是**按队列位置**
+    /// 来的（掀页 / 掀摞 / 全部），本来就不该按来源分家（2026-10-24 改）。
+    ///
+    /// 此前的「只埋属主」（最近有块入队的那个来源）是替身做法：全局热键拿不到「当前会话」
+    /// 是谁，就近埋一个了事。代价是「所有摞别说了」只对 claude 生效——pi 那一刻也在队列里，
+    /// 内容被丢了，它后续送来的页却还会照念（半吊子）。
+    ///
+    /// 这条钉的是：**当前存在的摞，来源不分，一律挂牌**。
+    func testShutUpBuriesEveryStackThatExists() async {
         let s = PlaybackSession()
         _ = await deliver(s, group: "gClaude", page: "p1", blocks: [block("C1", source: "claude")])
         _ = await deliver(s, group: "gPi", page: "p2", blocks: [block("X1", source: "pi")])
@@ -426,8 +430,9 @@ final class PlaybackSessionStoryTests: XCTestCase {
 
         let piLater = await deliver(s, group: "gPi", page: "p4", blocks: [block("X2", source: "pi")])
         let claudeLater = await deliver(s, group: "gClaude", page: "p5", blocks: [block("C3", source: "claude")])
-        XCTAssertEqual(buried, ["gClaude"], "只该埋正在说话那一摞的牌")
-        XCTAssertEqual(piLater, .appended, "pi 没被喊停，它的后续增量必须照常入队")
+        XCTAssertTrue(buried.contains("gPi"), "pi 那摞当时在场，也该被挂牌")
+        XCTAssertTrue(buried.contains("gClaude"), "claude 那摞在场，该被挂牌")
+        XCTAssertEqual(piLater, .dead, "在场被别说了的摞，它后续送来的页不该再开口")
         XCTAssertEqual(claudeLater, .dead, "正在说话的那个被喊停了，它不该再开口")
     }
 
@@ -446,19 +451,20 @@ final class PlaybackSessionStoryTests: XCTestCase {
         XCTAssertNil(head)
     }
 
-    /// 「已声明、字还在路上」的那摞也要按属主埋——否则属主随后送来的字会照常开口。
-    /// 但**别的来源**正声明着的轮不埋。
-    func testShutUpAlsoBuriesDeclaredButUnwrittenStacksOfThatSource() async {
+    /// 「已声明、字还在路上」的那摞也算「当前存在」——此刻容器里还没有它的段，
+    /// 只按段立碑就会漏掉它：打断之后它陆续送来的字会照常播出来
+    ///（2026-10-17 `E7` 实测：清空队列时 pending=0，墓碑一个没立，打断后同一轮照样开口）。
+    func testShutUpAlsoBuriesDeclaredButUnwrittenStacks() async {
         let s = PlaybackSession()
-        _ = await s.beginTurn("gPi", source: "pi")
-        _ = await s.beginTurn("gClaude", source: "claude")
+        _ = await s.beginTurn("gPi")
+        _ = await s.beginTurn("gClaude")
 
         _ = await s.discardAll()
 
         let piLater = await deliver(s, group: "gPi", page: "q1", blocks: [block("P1", source: "pi")])
         let claudeLater = await deliver(s, group: "gClaude", page: "q2", blocks: [block("C1", source: "claude")])
-        XCTAssertEqual(piLater, .appended, "pi 那摞没被喊停")
-        XCTAssertEqual(claudeLater, .dead, "正在说话那个已声明未到字的一摞，也得被埋")
+        XCTAssertEqual(piLater, .dead, "已声明未到字的那摞，也算在场")
+        XCTAssertEqual(claudeLater, .dead, "已声明未到字的那摞，也算在场")
     }
 
     // MARK: - 清单 9：念完的纸收走了吗？有没有误收「还在写」的？
@@ -560,38 +566,22 @@ final class PlaybackSessionStoryTests: XCTestCase {
         XCTAssertFalse(pending)
     }
 
-    // MARK: - 说话是「闭一下嘴」，还是「这摞我不要了」？
+    // MARK: - 「你别说了」与「你停一下」分家
 
-    /// 右⌘说话 = 「闭一下嘴让我说」，**不是**「这摞我不要了」。
+    /// 用户**显式放弃内容**时（Ctrl+2 全掀）墓碑照立——掀了不埋，「放弃」就退化成
+    /// 「暂停一下」，被放弃的那摞会重新开口。
     ///
-    /// 2026-10-23 实测踩过：说话时清场顺手给这一摞立了墓碑，于是 Claude 随后送来的
-    /// 同一摞新页撞碑消失——891 字 / 15 块一句没出声，事后日志还显示「队列已空」，
-    /// 根本看不出丢了东西。根子在一个 turn_id = 你一次输入引发的**全部**回复：
-    /// 一次输入横跨好几页、还夹着工具调用后的后续，墓碑一刀切下去就误杀整摞。
-    ///
-    /// 这条钉的是：**清场照旧，墓碑不立**。
-    func testSpeechInterruptKeepsTheStackAcceptingLaterPages() async {
+    /// 反过来，**右⌘说话不是这一档**：那是「你停一下」，走 `PlaybackQueue.pausePlayback()`
+    /// （设备停渲染、内容一条不删），根本不进 `discardAll`。
+    /// 早先它误用了「全掀」，于是被清场顺手埋了碑，Claude 这一摞后续送来的页撞碑消失——
+    /// 2026-10-23 实测丢过 891 字 / 15 块。防复发靠结构：`InterruptSource` 里已没有
+    /// `.speech`，说话路径在**编译期**就进不了「全掀」。
+    func testShutUpBuriesTheStackItAbandoned() async {
         let s = PlaybackSession()
         _ = await deliver(s, group: "gA", page: "p1", blocks: [block("A1", source: "claude")])
         await advanceAll(s)
 
-        _ = await s.discardAll(buryTurns: false)      // 右⌘说话：只清此刻
-
-        let later = await deliver(s, group: "gA", page: "p2", blocks: [block("A2", source: "claude")])
-        XCTAssertEqual(later, .appended, "说话只是闭一下嘴 —— 这一摞后续送来的页必须还能开口")
-
-        let spoken = await spokenOrder(s)
-        XCTAssertEqual(spoken, ["A2"], "后到的内容必须照念")
-    }
-
-    /// 反过来钉住另一半：用户**显式放弃内容**时（Ctrl+2 全掀）墓碑照立——
-    /// 掀了不埋，「放弃」就退化成「暂停一下」，被放弃的那摞会重新开口。
-    func testShutUpStillBuriesTheStackItAbandoned() async {
-        let s = PlaybackSession()
-        _ = await deliver(s, group: "gA", page: "p1", blocks: [block("A1", source: "claude")])
-        await advanceAll(s)
-
-        _ = await s.discardAll(buryTurns: true)       // Ctrl+2 全掀：放弃内容
+        _ = await s.discardAll()                     // Ctrl+2 全掀：放弃内容
 
         let later = await deliver(s, group: "gA", page: "p2", blocks: [block("A2", source: "claude")])
         XCTAssertEqual(later, .dead, "被放弃的摞，它后续送来的页不该再开口")

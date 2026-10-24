@@ -81,10 +81,10 @@ final class SpeechInputService: @unchecked Sendable {
                 return
             }
 
-            Log.debug("语音输入: right ⌘/⌃ 按下 → 试录（成了才打断播报、暂停音乐）")
+            Log.debug("语音输入: right ⌘/⌃ 按下 → 试录（成了才让播报暂停、暂停音乐）")
             // 建目录 + 建 AVAudioRecorder 是同步 IO，而这里跑在 GlobalKeyTap 的事件线程上
             // （它监听的是**全系统**键盘）——必须挪出去，否则按键瞬间整机输入都会卡顿。
-            // **打断播报与暂停音乐都搬进 beginRecording**：它们是为录音让路，没在录就没什么
+            // **让播报暂停与暂停音乐都搬进 beginRecording**：它们是为录音让路，没在录就没什么
             // 好让的（原先在按键那一刻就跑完，于是没插麦克风时按一下 = 白打断一次播报、
             // 白暂停一次音乐，然后静默失败）。这里也不预检设备——耳机类设备按需唤醒，
             // 预检会误判；**按下就试这一下，试活了算数**。
@@ -104,6 +104,7 @@ final class SpeechInputService: @unchecked Sendable {
             // 紧接着浮窗会转"识别中…"、识别出的文字会落到光标处——已经是双重确认。
             // 只有"按下"那一声在回答你不知道的事：系统什么时候准备好录音。
             Task {
+                await queue.resumePlayback()   // 播报从暂停处接着播（内容一条没删）
                 await media.resume()   // 音乐是这条链路自己借的（按下时 pause），自己还
                 self.finishRecording(recorder: recorder, audioURL: audioURL)
             }
@@ -120,13 +121,15 @@ final class SpeechInputService: @unchecked Sendable {
         guard canStart, let (recorder, url) = startRecording() else { return }
         stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
         Task {
-            // cancelAll 只管打断、不碰音乐；这里串行 cancelAll → pause，确保先打断、后暂停，
-            // 音乐稳稳停在暂停态（松开时 `media.resume()` 恢复）。不写成两个独立 Task 并发，
-            // 免得音乐暂停与打断谁先谁后不定。
-            // **全项目借还背景音乐只此一家**——录音需要安静（音乐会串进麦克风、干扰识别），
-            // 播报那条链路已完全不碰音乐。
-            // `.speech` 的打断**只清场、不埋墓碑**：说话是「闭一下嘴」，不是「这摞我不要了」。
-            await queue.cancelAll(origin: .speech)
+            // **暂停播报，不是打断**：用户说话要麦克风干净（正在播的声音会串进去、识别就乱），
+            // 但用户没说「别说了」——飞哥的原话是「手动 = 你别说了，我说话 = 你停一下」。
+            // 所以这里只让设备停渲染，**已排队的音频与队列里的内容一条不删**，说完接着播。
+            // 三档手动快捷键（Ctrl+Esc 掀页 / Ctrl+1 掀摞 / Ctrl+2 全掀）才是「丢」。
+            //
+            // 音乐与播报串行：先让播报闭嘴、再暂停音乐，顺序不乱（音乐是这条链路自己借的，
+            // 松开时自己还）。**全项目借还背景音乐只此一家**——录音需要安静
+            //（音乐会串进麦克风、干扰识别），播报那条链路已完全不碰音乐。
+            await queue.pausePlayback()
             await media.pause()
             showOverlay(.listening)
             // 「可以说了」——**录音确实起来、播报也让完路之后**才响（此刻说才录得到）。

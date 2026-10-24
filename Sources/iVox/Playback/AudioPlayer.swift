@@ -45,6 +45,9 @@ final class AudioPlayer: @unchecked Sendable {
     /// 本轮（自设备上次播空起）是否已报过「播放开始」。与 `播放结束` 一一对应，每轮各一次。
     private var reportedStartSinceEmpty = false
     private var needsPrime = true  // 是否需要先调度前导静音 buffer 唤醒 player node
+    /// 人为暂停中（用户正在说话，播报要让路）：设备停渲染，**已排队的音频原样留着**。
+    /// 看门狗要认它——否则「暂停满 10 秒」会被当成「设备断流」而重建引擎、丢弃排队音频。
+    private var paused = false
     // 背压水位：排队音频超过 4s 暂停合成，降到 2s 再放行（留足预取掩盖下一句合成启动）
     private let highWaterFrames: Int
     private let lowWaterFrames: Int
@@ -143,8 +146,11 @@ final class AudioPlayer: @unchecked Sendable {
                 if let dst = primeBuf.int16ChannelData?.pointee {
                     dst.initialize(repeating: 0, count: Int(primeFrames))
                 }
-                node.play()
-                waitForNodePlaying()
+                // 暂停中不唤醒节点：唤醒 = 恢复渲染 = 用户还在说话它又出声了。
+                if !paused {
+                    node.play()
+                    waitForNodePlaying()
+                }
                 let gen = generation
                 pendingCount += 1
                 pendingFrames += Int(primeFrames)
@@ -315,10 +321,43 @@ final class AudioPlayer: @unchecked Sendable {
             prefetcherWaiters.removeAll()
             needsPrime = true      // 取消后新播放段需要重新唤醒
             node.stop()
+            // **暂停中不唤醒**：用户还在说话，播报不该又出声。`paused` 是「用户正在说话」
+            // 这个全局状态，只由 resumeOutput() 解除——管道被掐断也不解除（那摞内容已被丢弃，
+            // 但剩下的队列仍要等用户说完才出声）。
+            if engine.isRunning, !paused {
+                node.play()
+                waitForNodePlaying()
+            }
+        }
+    }
+
+    /// 暂停输出：**一条内容都不删**。
+    ///
+    /// `node.pause()` 只停渲染，已 `scheduleBuffer` 的块原样留在设备队列里，
+    /// `resumeOutput()` 从原位接着播。与 `cancelPendingPlayback()` 的区别在于那个会
+    /// 作废管道代号、丢掉已排队的块——**用户说「让我说句话」不是「把稿子撕了」**。
+    ///
+    /// 暂停期间 producer 照常合成下一块，consumer 照常 write；设备不消费 → 排队帧数
+    /// 涨到高水位 → 背压把 producer 挡住（两级流水线照旧，不无限预取）。
+    func pauseOutput() {
+        serialQueue.sync {
+            guard started, !paused else { return }
+            paused = true
+            node.pause()
+            Log.info("播报暂停：设备停渲染，排队音频原样留着（内容一条不删）")
+        }
+    }
+
+    /// 恢复输出：从暂停处接着播。
+    func resumeOutput() {
+        serialQueue.sync {
+            guard paused else { return }
+            paused = false
             if engine.isRunning {
                 node.play()
                 waitForNodePlaying()
             }
+            Log.info("播报恢复：从原位接着播")
         }
     }
 
@@ -338,6 +377,9 @@ final class AudioPlayer: @unchecked Sendable {
 
     /// 流式写入前自检：engine 未运行或 node 未在播 → 重建一次。必须在 serialQueue 内调用。
     private func ensureHealthy() -> Bool {
+        // 暂停中：节点不 playing 是**故意**的，不是异常。走重建路径会 `node.stop()` 把
+        // 已排队的音频丢掉——那正是「暂停不删内容」要守住的东西。
+        if paused { return engine.isRunning }
         if engine.isRunning && node.isPlaying { return true }
 
         Log.warn("AudioEngine 异常，尝试重建: engine.isRunning=\(engine.isRunning) node.isPlaying=\(node.isPlaying)")
@@ -383,6 +425,12 @@ final class AudioPlayer: @unchecked Sendable {
     /// 设备、按「已丢」清掉排队 buffer 的计数（这些音频本就无声，`rebuildEngine` 也已把它们丢出
     /// 节点）、唤醒全部等待者，让管道继续灌后续 PCM 或收尾退出。必须在 serialQueue 内调用。
     private func recoverIfDeviceStalled() {
+        // 暂停中：设备不消费是**应该的**（用户正在说话）。若照「断流」处置，重建引擎会把
+        // 已排队的音频丢掉——暂停要的正是「留着别出声」。
+        if paused {
+            lastConsumedAt = .now()
+            return
+        }
         guard pendingCount > 0 else {
             lastConsumedAt = .now()
             return

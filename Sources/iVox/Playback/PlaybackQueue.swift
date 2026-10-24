@@ -48,12 +48,11 @@ private struct AudioChunk: Sendable {
 
 /// 打断来源：与 `PlaybackJob.source`（这段播报是谁发的）是一对账的标识——
 /// 前者回答「谁在说」，这个回答「这次打断是谁干的」。打断权**只归用户物理快捷键**
-/// （right⌘ 说话、Cmd+D 译文、Ctrl+Esc 闭嘴）；agent 流式轮只排队、不打断。
+/// （Cmd+D 译文、Ctrl+Esc 掀页 / Ctrl+1 掀摞 / Ctrl+2 全掀）；agent 流式轮只排队、不打断。
+///
+/// **右⌘说话不在这里**：那是「你停一下」（`pausePlayback()`：设备停渲染、内容一条不删），
+/// 不是「你别说了」（本枚举这三档：内容丢弃、这些摞的将来也不再来）。
 enum InterruptSource: Sendable, CustomStringConvertible {
-    /// right⌘ / right⌃ 语音说话（SpeechInputService 检测到用户开口录音）。
-    /// **只清场、不埋墓碑**：说话是「闭一下嘴让我说」，不是「这摞我不要了」——
-    /// 埋了碑会把这一摞后续送来的页静默丢弃（见 `bargeIn`）。
-    case speech
     /// Cmd+D 划词翻译（用户主动朗读，speakUserInitiated）
     case dict
     /// Ctrl+2 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，静音播报即可。
@@ -63,7 +62,7 @@ enum InterruptSource: Sendable, CustomStringConvertible {
     /// 与 `.esc` 的分工——那个全场闭嘴，这个只掀当前、后面的照播。
     case skip
     /// Ctrl+Esc 掀页：丢掉当前这一**页**剩下的块，从下一页接着念。
-    /// 手动打断三档里的「轻」（`.skip` = 中：掀整摞；`.esc`/`.speech` = 掀桌：全掀）。
+    /// 手动打断三档里的「轻」（`.skip` = 中：掀整摞；`.esc` = 掀桌：全掀）。
     ///
     /// ⚠️ 键位对照以 `GlobalKeyTap.bindings` 与 `Daemon.setUpHotKeys()` 为准：
     /// Ctrl+Esc 掀页 · Ctrl+1 掀摞 · Ctrl+2 全掀。本枚举曾把前两者写反，
@@ -74,7 +73,6 @@ enum InterruptSource: Sendable, CustomStringConvertible {
 
     var description: String {
         switch self {
-        case .speech: return "speech"
         case .dict: return "dict"
         case .esc: return "esc"
         case .skip: return "skip"
@@ -187,7 +185,7 @@ actor PlaybackQueue {
 
     /// 流式轮次开始（pi 首帧）。**不打断旧轮**——打断权只归用户快捷键，新轮在队尾排队。
     func beginTurn(_ id: String, source: String) async {
-        guard await session.beginTurn(id, source: source) else { return }   // 已作废 / 被顶掉的旧轮：忽略
+        guard await session.beginTurn(id) else { return }   // 已作废 / 被顶掉的旧轮：忽略
         Log.info("流式轮次开始: source=\(source) turn=\(id)（排队，不打断）")
         await pumpOrSettle()
     }
@@ -308,12 +306,31 @@ actor PlaybackQueue {
     /// 取消所有播放（正在播的和排队中的），并作废全部流式轮次。
     /// 形象说法：**把桌上所有稿纸全扫到地上**——一声不响（背景音乐不归它管）。
     ///
-    /// **清场一样，立不立墓碑不一样**（见 `bargeIn`）：右⌘说话只清此刻，
-    /// Ctrl+2「闭嘴」才连这些摞的将来一起作废。
+    /// **这是「你别说了」**：内容丢、这些摞的将来也不再来。
+    /// 「你停一下」（右⌘说话时让设备闭嘴、内容留着）是 `pausePlayback()`，走另一条路。
     func cancelAll(origin: InterruptSource) async {
         Log.info("打断（来源=\(origin)）：作废全部流式轮次")
         lastInterrupt = origin
-        await bargeIn(origin)   // bargeIn 内部丢弃 Session 全部内容，并按 origin 决定是否立墓碑
+        await bargeIn(origin)   // bargeIn 内部丢弃 Session 全部内容，并给当前存在的摞立墓碑
+    }
+
+    // MARK: - 暂停（用户要说话）：停一下，不删
+
+    /// **暂停输出，内容一条不删。**
+    ///
+    /// 与三档手动打断的区别就是飞哥那两句：**手动 = 「你别说了」（丢）**，
+    /// **说话 = 「你停一下」（留着）**。右⌘说话时麦克风会拾到正在播的声音、识别就乱，
+    /// 所以要让设备先闭嘴；但用户没说「不要听」，话说完就该接着播。
+    ///
+    /// 只停**设备渲染**，管道与容器一概不动：已排队的音频原样留在设备队列里，
+    /// 队列里的内容照旧排队，Claude 期间送来的页照旧入队。说话结束 `resumePlayback()` 从原位接着播。
+    func pausePlayback() {
+        player.pauseOutput()
+    }
+
+    /// 恢复输出：从暂停处接着播（用户说完话了）。
+    func resumePlayback() {
+        player.resumeOutput()
     }
 
     /// 掀页（Ctrl+2）：掐掉正在念的这一块，并丢掉**用户此刻正在听的那一页**的剩余块，
@@ -484,14 +501,8 @@ actor PlaybackQueue {
     private func bargeIn(_ origin: InterruptSource?) async {
         let label = origin?.description ?? "自取消"
         let n = await session.pendingCount
-        // **立不立墓碑按意图分**（2026-10-23 修）：右⌘说话是「闭一下嘴让我说」，
-        // 不是「这摞我不要了」——埋了碑，Claude 这一摞后续送来的页会被静默丢弃
-        // （实测丢过 891 字 / 15 块：20:20 说话 → 20:23 同一摞的新页撞碑消失）。
-        // 用户**显式放弃内容**的照旧埋碑：Ctrl+1 掀摞 / Ctrl+2 全掀 / pi 的 {cancel}。
-        let buryTurns = (origin != .speech)
-        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(n))、作废管道 seq\(pipelineSeq&+1)；"
-                 + (buryTurns ? "后续增量一并作废" : "后续增量保留"))
-        await session.discardAll(buryTurns: buryTurns)
+        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(n))、作废管道 seq\(pipelineSeq&+1))；后续增量一并作废")
+        await session.discardAll()   // 清容器 + 给属主的摞立墓碑（它们后续的增量也别来了）
         onCaption?(nil)   // 掀桌：字幕立刻收（插队/掀摞不走这里——它们的字幕由下一句广播接续）
         await preemptCurrent(origin)
     }

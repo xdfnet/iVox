@@ -115,20 +115,10 @@ actor PlaybackSession {
     /// 块只会往后加、序号单调，游标前方的块要么已播完要么被掀掉，两种情况都不该重播。
     private var cursorSeq: UInt = 0
 
-    /// pi 双流认证用：认领过、尚未出栈的轮。**连属主一起记**——
-    /// 「已声明、字还没到」的轮此刻容器里没有段，Ctrl+Esc 要按来源挑着埋，缺了来源就挑不出来。
-    private var turnStack: [(source: String, id: String)] = []
+    /// pi 双流认证用：认领过、尚未出栈的轮。「已声明、字还没到」的轮此刻容器里没有段，
+    /// 全掀时要连它们一起立墓碑——只按段埋就漏掉了，打断之后它们陆续送来的字会照常播。
+    private var turnStack: [String] = []
 
-    /// **播报员此刻在念的那份**的来源。Ctrl+Esc 的墓碑只埋它这一份——全局热键
-    /// 拿不到「当前会话」是谁，拿这个当替身：你喊闭嘴时，冲的就是他手上正拿着的那摞。
-    ///
-    /// ⚠️ 定义是「**此刻在念谁的东西**」，不是「谁在说话」——差一个字结论会反过来：
-    /// 翻译插队（`appendFirst` 也走 `noteSource`）会把属主换成 `translate`，因为那一刻
-    /// 播报员手上拿的正是你刚递的那张字条，你想喊停的也是它。译文的增量不来自某个会话，
-    /// Claude 那边不送新块就一直挂着；等它送新块，属主自然换回 `claude`。
-    /// （曾按「谁在说话」理解，以为插队纸在抢位、打算删掉 `appendFirst` 那行 `noteSource`
-    /// ——那会把「译文正响时按 Ctrl+Esc」变成不埋任何东西，正是这个字段要避免的。）
-    private var lastActiveSource: String?
     /// 墓碑：被用户显式作废（跳整摞 / 掀桌 / 取消轮次）的摞，后续增量一律丢弃。
     private var deadTurns: [String] = []
 
@@ -311,7 +301,6 @@ actor PlaybackSession {
         let seg = makeSegment(turnID: note, source: jobs[0].source, sealed: false, pages: fresh)
         segments.append(seg)
         lastFiling = SegmentFiling(stack: seg.localID, turnID: note, pages: fresh.map(\.localID))
-        noteSource(jobs[0].source)
         signal()
         return seg.localID
     }
@@ -371,7 +360,6 @@ actor PlaybackSession {
             }
             lastFiling = SegmentFiling(stack: stack, turnID: note, pages: [page.localID])
         }
-        noteSource(jobs[0].source)
         signal()
         return .appended
     }
@@ -398,7 +386,6 @@ actor PlaybackSession {
     func appendPlain(_ jobs: [PlaybackBlock]) -> Int? {
         guard !jobs.isEmpty else { return nil }
         let src = jobs[0].source
-        noteSource(src)
         let fresh = newPage(jobs, pageNote: nil)
         let seg = makeSegment(turnID: nil, source: src, sealed: true, pages: fresh)
         segments.append(seg)
@@ -436,19 +423,13 @@ actor PlaybackSession {
 
     // MARK: - 收尾与作废
 
-    /// 流式轮开始（pi 首帧）：登记属主。已作废的旧轮忽略。
+    /// 流式轮开始（pi 首帧）：登记这一轮。已作废的旧轮忽略。
     @discardableResult
-    func beginTurn(_ id: String, source: String) -> Bool {
+    func beginTurn(_ id: String) -> Bool {
         guard !deadTurns.contains(id) else { return false }
-        if !turnStack.contains(where: { $0.id == id }) { turnStack.append((source, id)) }
-        noteSource(source)
+        if !turnStack.contains(id) { turnStack.append(id) }
         signal()
         return true
-    }
-
-    /// 记下「谁刚说了话」。三个入队入口 + 轮登记都走它，是插入队列对外面唯一的可观测输出。
-    private func noteSource(_ source: String) {
-        lastActiveSource = source
     }
 
     /// 这一摞说完了（Stop 钩子 / `{end}`）：**只盖印，不立墓碑**。
@@ -479,7 +460,7 @@ actor PlaybackSession {
     func cancelTurn(_ id: String) -> Bool {
         let dropped = sweepSegments(matching: id, in: &segments) + sweepSegments(matching: id, in: &front)
         bury(id)
-        if let i = turnStack.lastIndex(where: { $0.id == id }) { turnStack.remove(at: i) }
+        if let i = turnStack.firstIndex(of: id) { turnStack.remove(at: i) }
         signal()
         return dropped > 0
     }
@@ -585,32 +566,28 @@ actor PlaybackSession {
         return takeSpent(&front) + takeSpent(&segments)
     }
 
-    /// 全掀：清空容器；**立不立墓碑由 `buryTurns` 决定**（见 `bargeIn` 的调用点）。
+    /// 全掀：清空容器，**当前存在的所有摞**立墓碑。
     ///
     /// **清全体**——谁在念都得停，这不伤人。
     ///
-    /// **碑只埋属主**（`lastActiveSource`，最近有块入队的那个来源）：Ctrl+Esc 是全局热键，
-    /// 拿不到「当前会话」是谁；按属主埋是替身——你喊闭嘴时，刚在说话的多半就是你正在看的那个
-    /// 工具。此前不分来源一刀切，你在 Claude 里喊闭嘴会把 **pi 正在生成的那摞**一起埋掉，
-    /// 它随后送来的字全被丢弃、从此不再开口（这与「两会话并行、互不误杀」的场景 8 直接冲突）。
+    /// **碑给所有当前存在的摞，不分来源**（2026-10-24 改）：队列只有一条，Claude 与 pi 的内容
+    /// 都按到达顺序排进去，三档打断都是**按队列位置**来的（掀页 / 掀摞 / 全部），本来就不该按
+    /// 来源分家。此前的「只埋属主」（最近有块入队的那个来源）是替身做法——全局热键拿不到
+    /// 「当前会话」是谁，就近埋一个了事。代价是「所有摞别说了」只对 claude 生效：pi 那一刻
+    /// 也在队列里，内容被丢了，它后续送来的页却还会照念（半吊子）。
     ///
-    /// **turnStack 里的轮同样按属主挑**：它们是「已声明、块还没到」的轮，此刻容器里还没有对应的段，
-    /// 只按段立碑就会漏掉它们——打断之后它们陆续送来的字会照常播出来
+    /// **turnStack 里的轮同样算「当前存在的」**：它们是「已声明、块还没到」的轮，此刻容器里
+    /// 还没有对应的段，只按段立碑就会漏掉它们——打断之后它们陆续送来的字会照常播出来
     ///（2026-10-17 `E7` 实测：清空队列时 pending=0，墓碑一个没立，打断后同一轮照样开口）。
-    ///
-    /// - Parameter buryTurns: `true` = 连「这些摞的将来」一起作废（用户显式放弃内容）；
-    ///   `false` = 只清此刻场上这些，**它们的后续增量照常开口**（说话只是闭一下嘴，
-    ///   不是「这摞我不要了」——见 `bargeIn`）。
     @discardableResult
-    func discardAll(buryTurns: Bool = true) -> [String] {
-        let owner = lastActiveSource
-        var ids = turnStack.filter { $0.source == owner }.map(\.id)
-        ids += segments.filter { $0.source == owner }.compactMap(\.turnID)
-        ids += front.filter { $0.source == owner }.compactMap(\.turnID)
+    func discardAll() -> [String] {
+        var ids = turnStack
+        ids += segments.compactMap(\.turnID)
+        ids += front.compactMap(\.turnID)
         turnStack.removeAll()
         segments.removeAll()
         front.removeAll()
-        if buryTurns { ids.forEach { bury($0) } }
+        ids.forEach { bury($0) }
         signal()
         return ids
     }
@@ -620,7 +597,6 @@ actor PlaybackSession {
     @discardableResult
     func appendFirst(_ jobs: [PlaybackBlock]) -> Bool {
         guard !jobs.isEmpty else { return false }
-        noteSource(jobs[0].source)
         let seg = makeSegment(turnID: nil, source: jobs[0].source, sealed: true,
                               pages: newPage(jobs, pageNote: nil))
         front.insert(seg, at: 0)
@@ -649,11 +625,12 @@ actor PlaybackSession {
     ///
     /// **墓碑只归用户显式放弃内容**——立碑点一共三处，全是「用户说了不要」：
     /// `takeHeadStack`（Ctrl+1 掀摞）· `cancelTurn`（pi 的 `{cancel}`）·
-    /// `discardAll(buryTurns: true)`（Ctrl+2 全掀）。
+    /// `discardAll`（Ctrl+2 全掀）。
     ///
     /// **不立碑的两处**：收尾（`sealTurn`）——那不是放弃，只是「说完了」；
-    /// 右⌘说话（`bargeIn` 的 `.speech`）——那只是「闭一下嘴让我说」，
-    /// 埋了碑会把 Claude 这一摞后续送来的页**静默丢弃**
+    /// 右⌘说话——那是「你停一下」，走 `PlaybackQueue.pausePlayback()`（设备停渲染、内容一条不删），
+    /// 根本不进这条路；早先它误用了「全掀」，于是被清场顺手埋了碑，
+    /// Claude 这一摞后续送来的页**静默丢弃**
     /// （2026-10-23 实测：20:20 说话 → 20:23 同一摞的新页撞碑消失，891 字 / 15 块一句没出声）。
     ///
     /// 墓碑按**外部 turn_id** 记（增量就是拿外部号来的，问的是「这个号还能不能再来」）。
