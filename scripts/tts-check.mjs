@@ -175,13 +175,13 @@ async function speakNow(source, text) {
   s.end();
 }
 
-// 掐 + 掀某一档：mode=page | stack | all，逐字对应 Ctrl+2 / Ctrl+1 / Ctrl+Esc。
+// 掐 + 掀某一档：mode=page | stack | all，逐字对应 Ctrl+1 / Ctrl+2 / Ctrl+3。
 async function skip(mode) {
   const s = await conn();
   s.end(`{type:skip,mode:${mode},tag:${runId}}\n`);
 }
 
-// 全场打断：停当前 + 清空排队（同 Ctrl+Esc），命令是 `ivox skip --all`。
+// 全场打断：停当前 + 清空排队（同 Ctrl+3），命令是 `ivox skip --all`。
 // 历史的 `ivox quiet`（发 `{type:stop}`）已随该帧一起退役，改用 `{type:skip,mode:all}`。
 async function skipAll() {
   const s = await conn();
@@ -409,7 +409,7 @@ async function runCase(c) {
   // 打出证据——只降级失败，通过的不动；不掩盖，也别把它当产品缺陷。
   //（普通播报已不再 bargeIn，因此不再作废用例的流式轮次；保留此项是因为它仍会插播。）
   const foreign = log.grep(new RegExp(`队列入队: source=(?!c\\d\\d${runId})`), t0);
-  // 外部全场打断（别的终端跑 `ivox skip --all` / 手动按 Ctrl+Esc）会在用例播到一半时
+  // 外部全场打断（别的终端跑 `ivox skip --all` / 手动按 Ctrl+3）会在用例播到一半时
   // 掐掉本轮，尾音/收尾/恢复类断言必然失真——同样降级为 skip 并给出证据。
   // 判据是「跳过请求」而非旧的「收到停止播放指令」：那句文案早在停止帧退役时就没了，
   // 旧正则从此永不命中（一条沉默的假绿检测，本次一并修掉）。
@@ -606,7 +606,7 @@ const cases = [
   },
 
   // ───────── E7：全场打断作废全部流式轮（你开口 = 全场闭嘴）─────────
-  // 语义：全场打断（`ivox skip --all`，同 Ctrl+Esc）不只停当场，还作废此前所有流式轮。
+  // 语义：全场打断（`ivox skip --all`，同 Ctrl+3）不只停当场，还作废此前所有流式轮。
   // 场景：在 Claude 里提交 prompt 时，pi 手里正在生成的那一轮后续增量不该再开口
   //（否则「我说话电脑就不说了」不成立——当场静音了，下一句生成出来照样念）。
   {
@@ -803,7 +803,7 @@ const cases = [
   },
 
   // ───────── P1：掀页后接着播下一页 ─────────
-  // 需求：Ctrl+2 = 掐 + 掀当前页。掀完必须落到下一页，而不是把队列掀空。
+  // 需求：Ctrl+1 = 掐 + 掀当前页。掀完必须落到下一页，而不是把队列掀空。
   {
     name: "P1-skip-page-then-next",
     async run(ctx) {
@@ -882,7 +882,7 @@ const cases = [
     },
   },
 
-  // ───────── S1：掀摞（Ctrl+1）并由墓碑拦住该摞后续增量（场景 6 + 2）─────────
+  // ───────── S1：掀摞（Ctrl+2）并由墓碑拦住该摞后续增量（场景 6 + 2）─────────
   {
     name: "S1-skip-stack-and-tombstone",
     async run(ctx) {
@@ -913,7 +913,7 @@ const cases = [
 
   // ───────── S3：无分组内容各自成摞（场景 10）─────────
   // 回归 2026-10-18 现场：无编号来源（如 `ivox speak`）全走无分组入队，而旧实现把它们
-  // 全并进队尾那个无分组段 → 不同时间的多次回复被焊成一摞 → Ctrl+1 掀一次
+  // 全并进队尾那个无分组段 → 不同时间的多次回复被焊成一摞 → Ctrl+2 掀一次
   // 连后到的一起掀掉（实测 34 块里只有 6 块是新回复）。
   // 判据：掀完之后**后面那条还得能接着播**——这一条正是「一摞 = 一次入队」在无分组下
   // 成立的唯一可观测证据，用带 turn_id 的 S1 永远测不到。
@@ -966,7 +966,9 @@ const cases = [
     },
   },
   // ───────── I1：用户插队（Opt+Z 译文 / --now） ─────────
-  // 需求：译文是唯一的机器开口，只临时插队——念完即走，原队列一个不丢，且不立墓碑。
+  // 需求：译文是唯一的机器开口——**暂停**在播的、译文走独立节点念、念完接着播，
+  // 原队列一条不删、不立墓碑。译文**不进队列管道**，故它自己打「译文合成开始/完成」，
+  // 认它得认这两行，不能去队列的「TTS 合成开始」里找。
   {
     name: "I1-insert-front-keeps-queue",
     async run(ctx) {
@@ -984,16 +986,26 @@ const cases = [
       const settled = await ctx.settled(60000);
       ctx.check(!!settled, "未收尾");
 
-      const all = ctx.log.grep(/TTS 合成开始/, ctx.t0);
-      const dict = all.filter((h) => h.msg.includes(`[${dictSrc}-`));
+      const dict = ctx.log.grep(/译文合成开始/, ctx.t0)
+        .filter((h) => h.msg.includes(`[${dictSrc}]`));
       ctx.check(dict.length >= 1, "译文没有被合成");
+
+      // 暂停 → 恢复：译文念完必须接回原处（一条不删）
+      const paused = ctx.log.grep(/播报暂停/, ctx.t0)[0];
+      const resumed = ctx.log.grep(/播报恢复/, ctx.t0)[0];
+      ctx.check(!!paused, "插队时没有暂停在播的");
+      ctx.check(!!resumed, "译文念完后没有恢复播报");
+      if (paused && resumed) {
+        ctx.check(resumed.ts > paused.ts, "恢复早于暂停，顺序反了");
+      }
+
+      // 原队列一条不丢：翻译期间原内容照常合成（预取不停），且译文之后仍有原内容在合成
+      const all = ctx.log.grep(/TTS 合成开始/, ctx.t0);
+      const orig = all.filter((h) => /\[c\d\d/.test(h.msg));
+      ctx.check(orig.length >= 2, `原文内容有丢失（原文侧只合成了 ${orig.length} 次）`);
       ctx.check(
-        all.some((h) => /\[c\d\d/.test(h.msg) && h.ts > (dict[0]?.ts ?? Infinity)),
+        orig.some((h) => h.ts > (dict[0]?.ts ?? Infinity)),
         "译文之后原队列没有继续播（可能被墓碑拦掉了）",
-      );
-      ctx.check(
-        all.filter((h) => /\[c\d\d/.test(h.msg)).length >= 2,
-        `原文内容有丢失（原文侧只合成了 ${all.filter((h) => /\[c\d\d/.test(h.msg)).length} 次）`,
       );
       ctx.noBad();
     },

@@ -48,24 +48,24 @@ private struct AudioChunk: Sendable {
 
 /// 打断来源：与 `PlaybackJob.source`（这段播报是谁发的）是一对账的标识——
 /// 前者回答「谁在说」，这个回答「这次打断是谁干的」。打断权**只归用户物理快捷键**
-/// （Opt+Z 译文、Ctrl+Esc 掀页 / Ctrl+1 掀摞 / Ctrl+2 全掀）；agent 流式轮只排队、不打断。
+/// （Opt+Z 译文、Ctrl+1 掀页 / Ctrl+2 掀摞 / Ctrl+3 全掀）；agent 流式轮只排队、不打断。
 ///
 /// **右⌘说话不在这里**：那是「你停一下」（`pausePlayback()`：设备停渲染、内容一条不删），
 /// 不是「你别说了」（本枚举这三档：内容丢弃、这些摞的将来也不再来）。
 enum InterruptSource: Sendable, CustomStringConvertible {
     /// Opt+Z 划词翻译（用户主动朗读，speakUserInitiated）
     case dict
-    /// Ctrl+2 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，静音播报即可。
+    /// Ctrl+3 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，静音播报即可。
     /// **不碰背景音乐**——借还音乐是右⌘ 录音那条的事（见文件头）
     case esc
-    /// Ctrl+1 掀摞：丢正在播的这一**摞**（一次回复，连同后来的页），从下一摞接着播。
+    /// Ctrl+2 掀摞：丢正在播的这一**摞**（一次回复，连同后来的页），从下一摞接着播。
     /// 与 `.esc` 的分工——那个全场闭嘴，这个只掀当前、后面的照播。
     case skip
-    /// Ctrl+Esc 掀页：丢掉当前这一**页**剩下的块，从下一页接着念。
+    /// Ctrl+1 掀页：丢掉当前这一**页**剩下的块，从下一页接着念。
     /// 手动打断三档里的「轻」（`.skip` = 中：掀整摞；`.esc` = 掀桌：全掀）。
     ///
     /// ⚠️ 键位对照以 `GlobalKeyTap.bindings` 与 `Daemon.setUpHotKeys()` 为准：
-    /// Ctrl+Esc 掀页 · Ctrl+1 掀摞 · Ctrl+2 全掀。本枚举曾把前两者写反，
+    /// Ctrl+1 掀页 · Ctrl+2 掀摞 · Ctrl+3 全掀。本枚举曾把前两者写反，
     /// 文档跟着抄错了两份（`requirements.md` / `queue.md`），照错注释抄会再漂回去。
     case skipPage
     /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
@@ -114,6 +114,11 @@ actor PlaybackQueue {
     /// 0.6 秒是「能分辨但不打断」的量级——再长就让人以为卡住了。
     private static let stackGapSeconds: Double = 0.6
 
+    /// 正在念译文（插队节点在出声）：同时只允许一个。
+    private var isSpeakingInterruption = false
+    /// 最近一帧字幕：暂停/恢复时用它把字幕**接回去**（译文念完，字幕回到原来那一页）。
+    private var lastCaptionFrame: CaptionFrame?
+
     /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播**歌词式的一帧**
     ///（这一页的句子 + 念到第几句），收起广播 nil。
     /// 在**本 actor 上**被调用，实现方自己切回主线程再碰 UI。
@@ -159,10 +164,18 @@ actor PlaybackQueue {
         onCaption = sink
     }
 
+    /// 收起字幕（同时清掉「暂停时要接回去的那句」——内容都没了，没什么可接的）。
+    private func hideCaption() {
+        lastCaptionFrame = nil
+        onCaption?(nil)
+    }
+
     /// 音频侧报「这句开始响」（带着块号）→ 问身份层要「这一页的句子 + 第几句」→ 给字幕。
     private func emitCaption(_ seq: UInt) async {
         guard let ctx = await session.captionContext(forSeq: seq) else { return }
-        onCaption?(CaptionFrame(lines: ctx.lines, index: ctx.index, stack: ctx.stack))
+        let frame = CaptionFrame(lines: ctx.lines, index: ctx.index, stack: ctx.stack)
+        lastCaptionFrame = frame
+        onCaption?(frame)
     }
 
     /// 队列中等待播放的条数（/health 用）
@@ -245,8 +258,8 @@ actor PlaybackQueue {
 
     /// 弱分组入队（Claude 的 MessageDisplay：一次回复按行批分多次短连接送来）。
     /// 分组号是 **`turn_id`（一次回复 = 一摞）**，不是 `message_id`（一条 message = 一页）——
-    /// 「一摞 = 一段」是「Ctrl+1 掀整摞」成立的前提：一次回复里夹了工具调用就会有**好几页**，
-    /// 按页分段的话 Ctrl+1 只能掀掉一页。
+    /// 「一摞 = 一段」是「Ctrl+2 掀整摞」成立的前提：一次回复里夹了工具调用就会有**好几页**，
+    /// 按页分段的话 Ctrl+2 只能掀掉一页。
     ///
     /// **老接口，保留是因为它把「新开一摞」包起来了**；返回助理自编的摞号，
     /// 调用方拿它记住「外部 group ↔ 助理摞号」，后续同摞的页改走 `appendToStack`。
@@ -331,7 +344,7 @@ actor PlaybackQueue {
         player.resumeOutput()
     }
 
-    /// 掀页（Ctrl+2）：掐掉正在念的这一块，并丢掉**用户此刻正在听的那一页**的剩余块，
+    /// 掀页（Ctrl+1）：掐掉正在念的这一块，并丢掉**用户此刻正在听的那一页**的剩余块，
     /// 从下一页接着念。形象说法：**这页不要了，听下一页**（一页 = 一个 MessageDisplay）。
     /// 「跳播放块」没有意义——用户听不出块边界在哪，他感知的单位是页。
     ///
@@ -342,7 +355,7 @@ actor PlaybackQueue {
     func skipCurrentPage(_ origin: InterruptSource) async {
         let taken = await session.takeHeadPage()   // 起点此刻定死，掐不掐都拿它
         await preemptCurrent(origin)
-        onCaption?(nil)   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
+        hideCaption()   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
         // 起点与丢了多少块都要落日志：掀页与"没翻动"在外部看起来一样（都是没声音），
         // 只有这两行能区分「当时没东西可掀」和「确实翻过去了、翻的是哪一页」。
@@ -351,7 +364,7 @@ actor PlaybackQueue {
         await pumpOrSettle()   // 还有块则接着播；若这摞正等下一批字则原地等
     }
 
-    /// 掀摞（Ctrl+1）：掐掉正在念的这一块，并丢掉**用户此刻正在听的那一摞**的全部内容，
+    /// 掀摞（Ctrl+2）：掐掉正在念的这一块，并丢掉**用户此刻正在听的那一摞**的全部内容，
     /// 从下一摞接着播。形象说法：**这摞不要了，听下一摞**（一摞 = 一次回复）。
     /// 与 `cancelTurn` 的区别：那个是「自取消不占打断来源」、也不掐在播（等它自己播完）；
     /// 这个是用户主动掀，必须立刻掐在播、丢段、前移。与 `cancelAll` 的区别：那个清全场，
@@ -362,7 +375,7 @@ actor PlaybackQueue {
     func skipCurrentBucket(_ origin: InterruptSource) async {
         let taken = await session.takeHeadStack()   // 起点此刻定死
         await preemptCurrent(origin)
-        onCaption?(nil)   // 被掀掉的那一摞立刻从字幕撤下；下一摞开始响时会重新报
+        hideCaption()   // 被掀掉的那一摞立刻从字幕撤下；下一摞开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移
         // 摞号与页号都是资料室自编的，所以**不论来的是 claude / pi / ivox speak，
         // 日志里都报得出「第几摞」**——早先这里打外部 turn_id，无编号的来源只能打「无分组」，
@@ -381,12 +394,42 @@ actor PlaybackQueue {
     /// 做成**一个原子方法**而不在调用方 `掐 + 入队` 两步拼：actor 可重入，两步之间会插进别的消息。
     func speakUserInitiated(_ newJobs: [PlaybackJob]) async {
         guard !newJobs.isEmpty else { return }
-        Log.info("用户主动开口（Opt+Z 划词译文）：插队到队首，其余排队内容保留")
-        await preemptCurrent(.dict)
-        await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起新的
-        // 译文自成一段插到队首立刻播；其余段顺序不动。
-        await session.appendFirst(newJobs.map(\.asBlock))
-        if currentTask == nil { startPipeline() }
+        guard !isSpeakingInterruption else {
+            Log.info("用户主动开口（Opt+Z 划词译文）：上一个译文还在念，这次忽略")
+            return
+        }
+        isSpeakingInterruption = true
+        defer { isSpeakingInterruption = false }
+
+        Log.info("用户主动开口（Opt+Z 划词译文）：播报暂停，译文走独立节点念，念完接着播（内容一条不删）")
+        // 暂停前的那一帧字幕：译文念完，字幕要接回去
+        let resumeFrame = lastCaptionFrame
+        player.pauseOutput()   // 只是暂停：缓冲原样留着（和右⌘说话一个语义）
+        do {
+            for job in newJobs {
+                // 译文不进队列管道，管道那两条「TTS 合成开始/完成」不覆盖它——
+                // 译文没出声时若日志里什么都不留，事后无从判断是合成失败还是根本没触发。
+                // 故这里单打一对带来源的日志，自检与人工排查都认它。
+                Log.info("译文合成开始 [\(job.source)] chars=\(job.text.count)")
+                let startedAt = Date()
+                let stream = await engine.synthesizeStream(
+                    text: job.text, voiceID: job.voiceID,
+                    trace: TTSTrace(seq: 0, source: job.source))
+                var isFirst = true
+                for try await pcm in stream {
+                    await player.writeInterruption(pcm: pcm, startsSentence: isFirst ? job.text : nil)
+                    isFirst = false
+                }
+                let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
+                Log.info("译文合成完成 [\(job.source)] \(elapsed)s")
+            }
+            await player.waitInterruptionFinished()   // 译文真的念完了再恢复主节点
+        } catch {
+            Log.warn("译文朗读失败：\(error.localizedDescription)")
+        }
+        player.stopInterruption()
+        player.resumeOutput()   // 从暂停处接着播
+        if let frame = resumeFrame { onCaption?(frame) }   // 字幕接回原来那一页
     }
 
     // MARK: - 内部
@@ -422,7 +465,7 @@ actor PlaybackQueue {
             // 不给这条后门，收尾后 audibleTurn 会一直报着一个早就不响的摞。
             await session.retireSpentSegments(afterSilence: true)
             invalidateIdleGrace()
-            onCaption?(nil)
+            hideCaption()
             Log.info("播报结束: 队列已空，字幕收起")
         }
     }
@@ -494,13 +537,13 @@ actor PlaybackQueue {
         player.cancelPendingPlayback()
     }
 
-    /// 掀桌：掐掉在播 + 清空全部排队内容（右⌘ 说话 / Ctrl+Esc 闭嘴）。
+    /// 掀桌：掐掉在播 + 清空全部排队内容（右⌘ 说话 / Ctrl+3 闭嘴）。
     private func bargeIn(_ origin: InterruptSource?) async {
         let label = origin?.description ?? "自取消"
         let n = await session.pendingCount
         Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(n))、作废管道 seq\(pipelineSeq&+1))；后续增量一并作废")
         await session.discardAll()   // 清容器 + 给属主的摞立墓碑（它们后续的增量也别来了）
-        onCaption?(nil)   // 掀桌：字幕立刻收（插队/掀摞不走这里——它们的字幕由下一句广播接续）
+        hideCaption()   // 掀桌：字幕立刻收（掀摞不走这里——它们的字幕由下一句广播接续）
         await preemptCurrent(origin)
     }
 
@@ -655,7 +698,7 @@ actor PlaybackQueue {
         // 实测「声音停 → 字幕收」隔着 30~96 秒（下一句隔 20~130 秒才来也照挂），
         // 看着就是「没内容了浮层还停很久」。这里跟**声音**走：管道排空即撤。
         // 只在**自己还是当前管道**时撤：被顶替的旧管道不能把新管道刚报的那句擦掉。
-        if currentTaskSeq == seq { onCaption?(nil) }
+        if currentTaskSeq == seq { hideCaption() }
         if currentTaskSeq == seq { currentTask = nil }   // 已被新管道顶替则不清
         await Task.yield()
         // 收尾窗口兜底：drain 等待尾音期间新入队的内容，旧管道正在收尾、currentTask 尚非 nil，

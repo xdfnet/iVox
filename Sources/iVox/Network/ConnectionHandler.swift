@@ -13,7 +13,7 @@ actor ConnectionHandler: SocketConnectionHandler {
     /// 所以「这批材料属于哪一摞」这张对照表归**跑腿的**记。2026-10-18 起从助理内部
     /// 挪到这里：原先助理靠 `turnID == group` 去容器里检索，等于承认「外部号就是身份」，
     /// 于是「无编号 ⇒ 可以合并」这种推断长了出来，把同一来源的两次回复焊成一摞
-    /// （Ctrl+1 掀一次 34 块，其中只有 6 块是新回复）。
+    /// （Ctrl+2 掀一次 34 块，其中只有 6 块是新回复）。
     private var stackOfExternalGroup: [String: Int] = [:]
 
     /// 递一批分组材料：第一次自开一摞，之后同 group 的续批拿**助理发的号**并进去。
@@ -157,7 +157,7 @@ actor ConnectionHandler: SocketConnectionHandler {
         var closed = false
         // 页号：扩展在每条 assistant message 开始时发一帧 `{page}`（一条 message = 一页，
         // 与 Claude 那边"一页 = 一个 MessageDisplay"同构）。服务端自己数就行——页号只要保证
-        // 「同一页的块相等、不同页不等」，不需要扩展给 id。Ctrl+2「读下一页」靠它当靶心。
+        // 「同一页的块相等、不同页不等」，不需要扩展给 id。Ctrl+1「读下一页」靠它当靶心。
         var pageSeq = 0
         // 长度帧状态：读到 "<n>\n" 后，记录还差多少字节正文；非 nil 时不按行解析。
         var expectBytes: Int? = nil
@@ -246,7 +246,7 @@ actor ConnectionHandler: SocketConnectionHandler {
         return n <= Self.maxFrameBytes ? n : nil
     }
 
-    /// - Parameter page: 这一页的页号（`页序` 由 `{page}` 帧驱动），Ctrl+2「读下一页」的靶心
+    /// - Parameter page: 这一页的页号（`页序` 由 `{page}` 帧驱动），Ctrl+1「读下一页」的靶心
     private nonisolated func emitStreamBlock(_ raw: String, source: String,
                                              voiceID: String, turn: String, page: String,
                                              chain: StreamOpChain) {
@@ -282,7 +282,7 @@ actor ConnectionHandler: SocketConnectionHandler {
             let source = inner.split(separator: ",")
                 .first { $0.hasPrefix("source:") }
                 .map { String($0.dropFirst("source:".count)) }
-            Log.info("收到停止帧，忽略：打断权只归快捷键与 ivox skip（右⌘ 说话 / Ctrl+Esc 闭嘴 / Opt+Z 译文）(source=\(source ?? "未知") fd=\(fd) bytes=\(data.count))")
+            Log.info("收到停止帧，忽略：打断权只归快捷键与 ivox skip（右⌘ 说话 / Ctrl+3 闭嘴 / Opt+Z 译文）(source=\(source ?? "未知") fd=\(fd) bytes=\(data.count))")
             return
         }
 
@@ -312,7 +312,7 @@ actor ConnectionHandler: SocketConnectionHandler {
 
         // 分块入队：整条一次合成会长时间占住播放（且要等整段合成完才出声），逐句入队才能边合成边播
         let chunks = cleaned.isEmpty ? [] : splitSentences(cleaned)
-        // pageID：这一块属于哪一页（Claude 的 message_id）——Ctrl+2「读下一页」的靶心
+        // pageID：这一块属于哪一页（Claude 的 message_id）——Ctrl+1「读下一页」的靶心
         let jobs = chunks.map { PlaybackJob(text: $0, voiceID: voiceID, source: source, pageID: page) }
         if let group {
             if isFinal {
@@ -344,7 +344,7 @@ actor ConnectionHandler: SocketConnectionHandler {
     }
 
     /// 跳过请求 `{type:skip,mode:page|stack|all}`：手动打断三档的命令行入口（`ivox skip`
-    /// 及其 `--stack` / `--all`），落到的就是 Ctrl+2 / Ctrl+1 / Ctrl+Esc 分派的那几个方法。
+    /// 及其 `--stack` / `--all`），落到的就是 Ctrl+1 / Ctrl+2 / Ctrl+3 分派的那几个方法。
     /// 三档都**只碰播报、不碰背景音乐**（音乐只归语音输入），故与热键逐字同路径。
     private nonisolated func handleSkip(fd: Int32, header: String) {
         defer { Darwin.close(fd) }
@@ -510,7 +510,7 @@ actor ConnectionHandler: SocketConnectionHandler {
             case "voice":  explicitVoice = pair[1]
             // 分组号 = 一**摞**（hook 传 turn_id）：同一摞的各页并进同一桶，让跳摞/掀桌能拦住后续页
             case "group":  group = pair[1].isEmpty ? nil : pair[1]
-            // 页号 = 一**页**（hook 传 message_id）：Ctrl+2「读下一页」按它翻页
+            // 页号 = 一**页**（hook 传 message_id）：Ctrl+1「读下一页」按它翻页
             case "page":   page = pair[1].isEmpty ? nil : pair[1]
             case "end":    isFinal = true
             // now：用户自己要求现在念（Opt+Z 译文 / `ivox speak --now`）→ **插队**，不是排队。

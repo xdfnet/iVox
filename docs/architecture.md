@@ -188,7 +188,8 @@ Daemon (actor)
 
 `PlaybackSession`（actor）：唯一持有容器与全部身份记账。容器三层——
 **段 Segment**（一次回复 = 一摞 / 普通播报）→ **页 Page**（一条消息）→ **块 Block**（1~80 字合成单位），
-外加一个独立的**加急段**列表（Opt+Z 译文）排在最前。游标指向当前块但**不把它弹出容器**。
+外加一个独立的**加急段**列表（`front`）排在最前——⚠️ **2026-10-26 起没有调用方了**：
+译文改走独立播放节点、压根不进队列（见下节），这套双游标结构暂时留着没删。
 墓碑 `deadTurns` 拦用户显式作废的摞的后续增量（**右⌘说话不算作废**——它是「暂停不删」，不清场也不埋）。
 
 `PlaybackQueue`（actor）：只管播放。连续管道 `processNext` 逐块 `synthesizeStream → player.write`，
@@ -263,7 +264,7 @@ Daemon (actor)
   与翻译的「白 / 半透明白」**同一套颜色**（不另立一套）。
   曾经是两个独立窗口、靠一个手写死的「96 点间隙」错开——译文长了、字幕长了就撞
 - **两摞之间有分界**：换摞时插 **0.6 秒静音**（换气，`AudioPlayer.writeSilence`），
-  同时字幕窗口顶部亮一条细线（1.5 秒后撤）。加急段不插静音（用户要它立刻响）
+  同时字幕窗口顶部亮一条细线（1.5 秒后撤）
 - **字幕是歌词式的**：屏上留着**这一页的块**（每块 ≤80 字），正在念的那块亮着、
   逐字往前推（卡拉OK），念过的整块留着、后面的暗着。逐字进度**自己算**：
   不新增音频信号，按「念了多久 × 语速」估，语速用上一句的实际用时校正
@@ -275,7 +276,7 @@ Daemon (actor)
 - **落点**：水平居中、垂直贴底（`inset` 是底边距可见区底边的点数）。纯几何，
   `origin(...)` 是 static 便于单测（渲染与几何分开测，测几何不用开窗口）
 - **内容一空就收窗**，不留残余：早先留了「等 3 秒再收」的机制，想让音乐别在两句之间抖——
-  实际是把问题换个地方摆：用户按 Ctrl+2 掀桌，字幕还挂着最后那句 3 秒、音乐也压着 3 秒。
+  实际是把问题换个地方摆：用户按 Ctrl+3 掀桌，字幕还挂着最后那句 3 秒、音乐也压着 3 秒。
   空了就收（`overlay.lingerSeconds` 已作废）
 - **背景音乐让路只跟浮层走**：浮窗在屏上 → 汽水音乐降 5 格；**浮窗一消失立刻恢复**。
   早先还掺了「iVox 正在出声」这半个判据（播报起落信号），飞哥否了：
@@ -294,7 +295,7 @@ Daemon (actor)
 - **right ⌘/⌃ 按下**：过 150ms 长按阈值 → 查授权 → **先试录**；`record()` 成功了才暂停音乐 +
   取消 TTS + 出浮窗（见下「副作用在录上之后」）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 用户快捷键五个：right⌘ 说话、Opt+Z 插队念译文、Ctrl+2 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+1 跳整摞、Ctrl+Esc 读下一页。**pi 新轮与停止帧不再打断**，一律排队
+- 用户快捷键五个：right⌘ 说话、Opt+Z 插队念译文、Ctrl+3 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+2 跳整摞、Ctrl+1 读下一页。**pi 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - 需要设备控制与数据访问权限（`AXIsProcessTrustedWithOptions`）
 - **副作用发生在「真的在录」之后**：原先一按下就先打断播报、暂停音乐，然后才建 recorder——
@@ -319,7 +320,7 @@ Daemon (actor)
   `HotKeySpec.defaultChord`，解析器与默认值都在 `iVoxKit/HotKeySpec.swift`（纯逻辑、可测）。改完跑
   `ivox restart` 生效。**本节及下文提到的所有键位都是默认值**——实际生效的看 `daemon.log` 里的
   「热键: 动作 = 键位」各行；配错时那里会写明是哪个动作、错在哪、退回了哪个默认
-- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Opt+Z` → `TranslationService`；`Opt+Q/A/X/S/C` → `QuickActionsService`；`Ctrl+2` / `Ctrl+1` / `Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掀桌 / 跳整摞 / 读下一页）
+- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Opt+Z` → `TranslationService`；`Opt+Q/A/X/S/C` → `QuickActionsService`；`Ctrl+3` / `Ctrl+2` / `Ctrl+1` → `PlaybackQueue`（手动打断三档：掀桌 / 跳整摞 / 读下一页）
 - 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
 - ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
 - 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Opt+Z` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
@@ -530,7 +531,7 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-**打断权只归 ivox 快捷键**（right⌘ 说话 / Opt+Z 插队译文 / 手动三档：Ctrl+Esc 读下一页 · Ctrl+1 跳整摞 · Ctrl+2 掀桌）；`hook.sh` **不再有 interrupt 分支**（手动打断在 `ivox skip` 三档：`--page` 读下一页 / `--stack` 跳整摞 / `--all` 全场闭嘴），`UserPromptSubmit` 亦不挂。
+**打断权只归 ivox 快捷键**（right⌘ 说话 / Opt+Z 插队译文 / 手动三档：Ctrl+1 读下一页 · Ctrl+2 跳整摞 · Ctrl+3 掀桌）；`hook.sh` **不再有 interrupt 分支**（手动打断在 `ivox skip` 三档：`--page` 读下一页 / `--stack` 跳整摞 / `--all` 全场闭嘴），`UserPromptSubmit` 亦不挂。
 
 | 工具 | 配置/挂载 | 回复播报 |
 |------|----------|----------|

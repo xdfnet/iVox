@@ -61,7 +61,7 @@ with open(path, 'w') as f:
 }
 
 # UserPromptSubmit 打断 hook 已**废弃**：不再自动挂「提交即打断」。
-# 飞哥决策——打断权只归快捷键（右⌘ 说话 / Ctrl+Esc 闭嘴 / Opt+Z 译文），
+# 飞哥决策——打断权只归快捷键（右⌘ 说话 / Ctrl+3 闭嘴 / Opt+Z 译文），
 # 任何 agent 会话轮次（提交、自动续写、后台）都**不再打断**播报（分桶排队播全）。
 # 此前每次 make update 都经这里把 `hook.sh interrupt` 写回 settings.json，
 # 与「不自动打断」决策相悖且造成提交即触发 interrupt 的重复/错乱。保留签名壳但不做事，

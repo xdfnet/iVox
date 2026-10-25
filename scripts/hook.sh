@@ -27,7 +27,7 @@ rotate_hook_log() {
 rotate_hook_log
 
 # 必须两个参数：动作（msgdisplay|end）+ 来源。来源与动作一个都不能猜，宁缺毋滥。
-# 注：interrupt 分支已移除——打断权只归快捷键（右⌘/Opt+Z/Ctrl+Esc）与命令行 `ivox skip`，
+# 注：interrupt 分支已移除——打断权只归快捷键（右⌘/Opt+Z/Ctrl+2）与命令行 `ivox skip`，
 # 不再经 hook.sh 自动打断。（`ivox quiet` 已随停止帧一起删除。）
 if [[ "$#" -lt 2 ]]; then exit 0; fi
 if [[ "$1" == "msgdisplay" ]]; then
@@ -145,7 +145,7 @@ except Exception:
   [[ -n "$grp" ]] && args+=(--group "$grp")
   # **延后 300ms 再发收尾信号**：Stop 与 MessageDisplay 是两次独立的钩子调用，谁先抵达 socket
   # 并不保证——实测 27 轮里 14 轮 Stop 比正文早到 10~20 毫秒。Stop 先到就把这一摞盖了印，
-  # **最后一页正文落在它之后**，于是那一页自成一摞（用户按 Ctrl+1 想掀整轮，掀不到最后这页），
+  # **最后一页正文落在它之后**，于是那一页自成一摞（用户按 Ctrl+2 想掀整轮，掀不到最后这页），
   # 字幕与汽水音量还会在中途收一次又起一次。
   # 延后一点让正文先落地，两条通路就按「先内容、后收尾」的顺序到。
   # 放在后台：钩子必须立刻返回（Claude Code 等它返回才继续），不能在这儿睡。

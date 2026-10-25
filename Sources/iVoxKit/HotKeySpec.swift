@@ -146,9 +146,9 @@ public enum HotKeySpec {
         case .openTerminalPi:     return chord(keyName: "s", modifiers: .option)    // Opt+S
         case .copyPath:           return chord(keyName: "c", modifiers: .option)    // Opt+C
         case .translate:          return chord(keyName: "z", modifiers: .option)    // Opt+Z
-        case .skipPage:           return chord(keyName: "esc", modifiers: .control) // Ctrl+Esc
-        case .skipBucket:         return chord(keyName: "1", modifiers: .control)   // Ctrl+1
-        case .skipAll:            return chord(keyName: "2", modifiers: .control)   // Ctrl+2
+        case .skipPage:           return chord(keyName: "1", modifiers: .control)   // Ctrl+1 掀页
+        case .skipBucket:         return chord(keyName: "2", modifiers: .control)   // Ctrl+2 掀摞
+        case .skipAll:            return chord(keyName: "3", modifiers: .control)   // Ctrl+3 全掀
         }
     }
 

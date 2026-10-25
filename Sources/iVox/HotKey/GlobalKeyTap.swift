@@ -201,12 +201,16 @@ final class GlobalKeyTap: @unchecked Sendable {
             // 这里在匹配之前把每个 Esc 的真实 flags 与命中与否落盘，等复现一次即可定案。
             // 排查完请连同「热键触发补日志」一起决定去留。
             if keyCode == 0x35 {
+                // [取证探针] Esc 带着哪些修饰位、是**哪个进程**发出来的。
+                // 2026-10-26「幽灵翻页」定案：系统仍认为 Ctrl 按着（修饰键的松键事件丢了），
+                // tap 看到 Ctrl+Esc → 把正在播的那一页整个掀掉。Esc 已不作热键（改用数字键），
+                // 这行留着当取证工具：下次再遇到修饰键残留，能直接看出是谁发的。
                 let raw = event.flags.rawValue
-                let hit = bindings.first { $0.keyCode == 0x35 && $0.modifiers == flags }
-                let hitName = (hit?.action == .skipPage) ? "skipPage(翻页)" : "无"
+                let stdFlags = event.flags.intersection(Self.modifierMask)
+                let pid = event.getIntegerValueField(.eventSourceUnixProcessID)
                 Log.info("[探针] Esc keyDown: rawFlags=0x\(String(raw, radix: 16)) "
-                       + "stdFlags=0x\(String(flags.rawValue, radix: 16)) "
-                       + "命中=\(hitName) "
+                       + "stdFlags=0x\(String(stdFlags.rawValue, radix: 16)) "
+                       + "sourcePid=\(pid) "
                        + "tapUptime=\(String(format: "%.2f", ProcessInfo.processInfo.systemUptime))")
             }
             guard let binding = bindings.first(where: {
@@ -292,7 +296,18 @@ final class GlobalKeyTap: @unchecked Sendable {
                 continue
             }
             do {
-                configChords[action] = try HotKeySpec.parseChord(value)
+                let chord = try HotKeySpec.parseChord(value)
+                // **Ctrl+Esc 已作废**：Esc 是别的 app 的「中断」键，修饰键的松键事件
+                // 偶尔会丢，系统仍认为 Ctrl 按着 → tap 看到 Ctrl+Esc → 把正在播的
+                // 那一页整个掀掉（2026-10-26 实测连掀 4 次，听感是「刚念一个字就被切走」）。
+                // 掀页改用数字键（Ctrl+1/2/3），这里把老配置里的 Ctrl+Esc 直接退回默认。
+                if chord.keyName == "esc" && chord.modifiers == [.control] {
+                    Log.warn("热键配置: \(action.rawValue) 的键位「\(value)」已作废"
+                            + "（Ctrl+Esc 会与别的 app 的中断键撞），改用默认 "
+                            + HotKeySpec.defaultChord(for: action).display)
+                    continue
+                }
+                configChords[action] = chord
             } catch {
                 Log.warn("热键配置: \(action.rawValue) 的键位「\(value)」无法解析（\(error)），"
                         + "改用默认 \(HotKeySpec.defaultChord(for: action).display)")

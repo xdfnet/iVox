@@ -11,6 +11,16 @@ import iVoxKit
 final class AudioPlayer: @unchecked Sendable {
     private let engine = AVAudioEngine()
     private let node = AVAudioPlayerNode()
+    /// **插队专用节点**：译文走它，主节点同时暂停保留缓冲。
+    ///
+    /// 为什么必须另开一个节点：同一个节点只有一个播放位置——已经播出去的声音没法往回退，
+    /// 译文也插不到「已排队的音频」前面。要同时做到「译文先念」与「正在播的一句不丢」，
+    /// 只能让两者各占一个节点。
+    private let interruptNode = AVAudioPlayerNode()
+    /// 插队节点里还没播完的 buffer 数（排空即「译文念完了」）。
+    private var interruptionPending = 0
+    /// 等插队播完的等待者（译文念完才恢复主节点）。
+    private var interruptionWaiters: [CheckedContinuation<Void, Never>] = []
     private let format: AVAudioFormat
     private let serialQueue = DispatchQueue(label: "ivox.audio")
     private var pendingCount = 0
@@ -72,6 +82,9 @@ final class AudioPlayer: @unchecked Sendable {
         serialQueue.sync {
             engine.attach(node)
             engine.connect(node, to: engine.mainMixerNode, format: format)
+            // 插队节点：与主节点并排挂在同一个引擎上（混音后一起出设备）
+            engine.attach(interruptNode)
+            engine.connect(interruptNode, to: engine.mainMixerNode, format: format)
             engine.prepare()
             do {
                 try engine.start()
@@ -86,6 +99,80 @@ final class AudioPlayer: @unchecked Sendable {
         waitForNodePlaying()
         started = true
         scheduleStallWatchdog()
+    }
+
+    /// 排一段**插队**音频（译文）：走专用节点，主节点这会儿是暂停的。
+    ///
+    /// 主节点的缓冲原样留着（一条不丢），译文从另一个节点出声，念完主节点接着播。
+    /// 与主节点的写路径**完全分开**：不共用 pendingFrames 计数、不触发主节点的背压，
+    /// 也不参与主节点的 prime/世代——它只是插一脚，说完就走。
+    func writeInterruption(pcm: Data, startsSentence: String?) async {
+        let frames = AVAudioFrameCount(pcm.count / 2)
+        guard frames > 0 else { return }
+        serialQueue.sync {
+            guard started else { return }
+            if !interruptNode.isPlaying {
+                interruptNode.play()
+                waitForNodePlaying()
+            }
+            guard let buffer = AVAudioPCMBuffer(pcmFormat: format, frameCapacity: frames) else { return }
+            buffer.frameLength = frames
+            pcm.withUnsafeBytes { src in
+                guard let srcPtr = src.baseAddress?.assumingMemoryBound(to: Int16.self) else { return }
+                if let dst = buffer.int16ChannelData?.pointee {
+                    dst.initialize(from: srcPtr, count: Int(frames))
+                }
+            }
+            interruptionPending += 1
+            interruptNode.scheduleBuffer(buffer, completionCallbackType: .dataConsumed) { [weak self] _ in
+                guard let self else { return }
+                self.serialQueue.async {
+                    self.interruptionPending = max(0, self.interruptionPending - 1)
+                    // 插队节点排空了 = 译文念完了 → 唤醒等着恢复主节点的人
+                    if self.interruptionPending == 0 {
+                        let waiters = self.interruptionWaiters
+                        self.interruptionWaiters.removeAll()
+                        for w in waiters { w.resume() }
+                    }
+                }
+            }
+            if let text = startsSentence {
+                // 字幕也跟着走：翻译朗读时字幕显示的就是译文那句
+                onSentenceStarted?(text, 0)
+            }
+        }
+    }
+
+    /// 等插队内容播完（译文念完了才恢复主节点，免得两个声音叠在一起）。
+    ///
+    /// **有超时兜底**：插队节点万一卡住（设备异常、buffer 没被消费），不能把整个播报
+    /// 永远按在暂停上——超时就当念完了，恢复主节点（顶多两个声音叠一下）。
+    func waitInterruptionFinished(timeoutSeconds: Double = 30) async {
+        await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
+            serialQueue.async {
+                if self.interruptionPending == 0 {
+                    continuation.resume()
+                    return
+                }
+                self.interruptionWaiters.append(continuation)
+                self.serialQueue.asyncAfter(deadline: .now() + timeoutSeconds) {
+                    let waiters = self.interruptionWaiters
+                    self.interruptionWaiters.removeAll()
+                    for w in waiters { w.resume() }
+                }
+            }
+        }
+    }
+
+    /// 打断时收掉插队节点（译文也别念了）。
+    func stopInterruption() {
+        serialQueue.sync {
+            interruptNode.stop()
+            interruptionPending = 0
+            let waiters = interruptionWaiters
+            interruptionWaiters.removeAll()
+            for w in waiters { w.resume() }
+        }
     }
 
     /// 排一段静音（**换气**：两摞之间留个空隙，听着像换了一段）。
@@ -331,6 +418,11 @@ final class AudioPlayer: @unchecked Sendable {
             prefetcherWaiters.removeAll()
             needsPrime = true      // 取消后新播放段需要重新唤醒
             node.stop()
+            interruptNode.stop()   // 插队的译文也别念了
+            interruptionPending = 0
+            let waiters = interruptionWaiters
+            interruptionWaiters.removeAll()
+            for w in waiters { w.resume() }
             // **暂停中不唤醒**：用户还在说话，播报不该又出声。`paused` 是「用户正在说话」
             // 这个全局状态，只由 resumeOutput() 解除——管道被掐断也不解除（那摞内容已被丢弃，
             // 但剩下的队列仍要等用户说完才出声）。

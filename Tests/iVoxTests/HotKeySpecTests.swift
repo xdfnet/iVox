@@ -90,9 +90,9 @@ final class HotKeySpecTests: XCTestCase {
         XCTAssertEqual(HotKeySpec.defaultChord(for: .openTerminalCodex).display, "opt+x")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .openTerminalPi).display, "opt+s")
         XCTAssertEqual(HotKeySpec.defaultChord(for: .copyPath).display, "opt+c")
-        XCTAssertEqual(HotKeySpec.defaultChord(for: .skipAll).display, "ctrl+2")
-        XCTAssertEqual(HotKeySpec.defaultChord(for: .skipBucket).display, "ctrl+1")
-        XCTAssertEqual(HotKeySpec.defaultChord(for: .skipPage).display, "ctrl+esc")
+        XCTAssertEqual(HotKeySpec.defaultChord(for: .skipAll).display, "ctrl+3")
+        XCTAssertEqual(HotKeySpec.defaultChord(for: .skipBucket).display, "ctrl+2")
+        XCTAssertEqual(HotKeySpec.defaultChord(for: .skipPage).display, "ctrl+1")
     }
 
     func testDefaultChordsAreAllDistinct() {

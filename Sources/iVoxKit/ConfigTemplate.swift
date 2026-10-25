@@ -35,9 +35,9 @@ openTerminalCodex = "opt+x"     # 开终端并跑 codex ｜ 默认 opt+x ｜ 任
 openTerminalPi = "opt+s"        # 开终端并跑 pi ｜ 默认 opt+s ｜ 任意组合键
 copyPath = "opt+c"              # 复制 Finder 选中路径 ｜ 默认 opt+c ｜ 任意组合键
 translate = "opt+z"             # 划词翻译（复制→翻译→浮窗+朗读）｜ 默认 opt+z ｜ 任意组合键
-skipPage = "ctrl+esc"           # 读下一页（掐断+掀掉当前页剩余的块）｜ 默认 ctrl+esc ｜ 任意组合键
-skipBucket = "ctrl+1"           # 跳整摞（掐断+丢弃这一摞的全部内容）｜ 默认 ctrl+1 ｜ 任意组合键
-skipAll = "ctrl+2"              # 闭嘴（全掀）｜ 默认 ctrl+2 ｜ 任意组合键
+skipPage = "ctrl+1"            # 读下一页（掐断+掀掉当前页剩余的块）｜ 默认 ctrl+1 ｜ 任意组合键
+skipBucket = "ctrl+2"           # 跳整摞（掐断+丢弃这一摞的全部内容）｜ 默认 ctrl+2 ｜ 任意组合键
+skipAll = "ctrl+3"              # 闭嘴（全掀）｜ 默认 ctrl+3 ｜ 任意组合键
 voice = "rightcmd"              # 按住说话（长按）｜ 默认 rightcmd ｜ rightcmd/rightctrl/rightcmd+rightctrl/none
 
 # ── 语音输入 ───────────────────────────────────────────
