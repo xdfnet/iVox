@@ -226,8 +226,6 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLea
 ```bash
 make check-tts                      # 播报黑盒自检：压真实 daemon，21 个用例（需先 ivox on，模型就绪）
 make check-tts ARGS="-f tail"       # 只跑匹配用例；--strict 让 advisory 计入失败；--managed 自行重启守护进程
-touch /tmp/ivox-hook-muted          # ⚠️ 跑之前先落静音闸，见下
-trash /tmp/ivox-hook-muted          # 跑完提起
 ```
 
 `scripts/tts-check.mjs`（零依赖 Node，仅用 `node:` 内置模块）经 Unix socket 发流式帧、`GET /health` 探运行态、增量 tail `daemon.log` 断言：协议正确性、合成时长、轮次隔离、取消丢弃迟到帧、EOF 残尾、并行取消不拖垮在跑的轮（pi 复现）、停止哨兵作废在跑的轮、多轮交错时队首轮等块不得空转（`E8`）、密集打断压测、打断后活性、尾音完整（`needsAudio`，无设备自动 skip）。断言要数「队列状态」等 DEBUG 行，而 daemon 默认只留 INFO 及以上（`Logger` 的级别门限），所以脚本自己 `launchctl setenv IVOX_LOG_LEVEL=debug` + `kickstart` 重启 daemon，跑完 unset 环境变量——**这是它跟普通 `ivox on` 唯一的区别，别把它改回附加到已在跑的 daemon**（2026-10-17：日志门限一落地，`E3`/`A-tail` 两条靠 DEBUG 行吃饭的断言直接假红）。**它是排障工具，不是每次改动都要跑的回归**：日常改动用 `make test` + 单点验证（临时脚本压真实 socket、看 `daemon.log`）；只有正常播报出问题（没声音/卡住/串音/未收尾）时才用它定位。**但改播报队列核心（`PlaybackQueue` / `ConnectionHandler` 的收尾·打断·入队）时必须跑一次全量**——2026-10-16 踩过：三个用例悄悄腐烂成假绿（两条正则与日志格式失配、一条断言过严、一条被自检自己的噪声检测抓成 skip），全靠一次全量才暴露；修完全量 13/13。**2026-10-19 拆成三进程后又跑全量：19 pass / 0 fail / 1 advisory**；
@@ -240,7 +238,8 @@ DEBUG 不可见，会把靠 DEBUG 行吃饭的 `E3`/`A-tail` 降级为 skip 并�
 唯一那条 advisory 是 `B-synthesis-leads-playback`（合成领先播放 3.7s ≈ 4s 高水位）——跨进程后
 预取余量变薄的已知代价，**不是回归，别去"修"**。
 
-**跑之前必须落静音闸**：`touch /tmp/ivox-hook-muted`（跑完 `trash` 提起）。自检压的是真实 daemon，而**真人对话的播报走同一个队列**——你一边跟我聊，队列就被我的回复占满，用例要么被噪声检测 skip，要么因合成被挤成欠载而假红。2026-10-17 实测：有对话 `pass=14 fail=1 skip=4`，落闸后 `pass=19 fail=0 skip=0`。这个闸在 `scripts/hook.sh` 里，走**哨兵文件而不是环境变量**：hook 由 Claude Code 的 harness 拉起，环境在它启动时定死，改不动；文件每次执行都重新判断。闸在手上可见（`ls /tmp/ivox-hook-muted`），不怕忘。
+**静音闸由 `scripts/tts-check.sh` 自己落、自己收**（2026-10-25 改）：自检压的是真实 daemon，而**真人对话的播报走同一个队列**——你一边跟我聊，队列就被我的回复占满，用例要么被噪声检测 skip，要么因合成被挤成欠载而假红。2026-10-17 实测：有对话 `pass=14 fail=1 skip=4`，落闸后 `pass=19 fail=0 skip=0`。这个闸在 `scripts/hook.sh` 里，走**哨兵文件而不是环境变量**：hook 由 Claude Code 的 harness 拉起，环境在它启动时定死，改不动；文件每次执行都重新判断。
+⚠️ **以前是人手动落、手动撤**（`touch` / `trash`），2026-10-25 漏撤过一次 → 闸一直挂着 → Claude 的播报全被挡在门外，表现为「没声也没字幕」。现在闸的落与收都在脚本里（`trap` 兜住失败与 Ctrl-C），**人不用管**；真要手动查：`ls /tmp/ivox-hook-muted`。
 
 ## 版本号
 
