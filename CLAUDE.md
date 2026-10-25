@@ -37,16 +37,17 @@ Sources/iVox/          — 主程序 target
   EntryPoint.swift     — @main, ArgumentParser 子命令
 
   ── 七个能力域（目录与 README 功能表、ivox status 一一对应）──
-  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（播报字幕，config 可开关；`captions.screen` 可按屏的 UUID 钉到指定屏）+ PlaybackSignal（播报起落信号，给「给背景让路」用）
+  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（**浮窗的字幕层**：只造视图，config 可开关）+ PlaybackSignal（播报起落信号，给「给背景让路」用）
     TTS/               — 合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
   SpeechInput/         — 语音输入：右⌘ 录音 + ASR + 浮窗（事件由 HotKey 层送来）+ ClaudeAskService（ASR 出文后送问 Claude）
-  Translation/         — 划词翻译（Opt+Z）：复制 → 翻译 → 浮窗 + 朗读
+  Translation/         — 划词翻译（Opt+Z）：复制 → 翻译 → 浮窗的译文层 + 朗读
   QuickActions/        — 快速操作：Finder/终端快捷（Opt+Q/A/X/S/C）
   WeChat/              — 微信桥接：ilink HTTP 客户端 + 长轮询平台
   MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI + HTTPResponseHandler）+ MediaController + AudioAppRegistry + HealthSnapshot + SodaVolumeDucker（播报时给汽水音乐压音量）
   Screen/              — 屏幕锁：ScreenControl（ivox lock / ivox unlock + Web 滑块，走 HID 真键）
 
   ── 基础设施（跨能力域）──
+  Overlay/             — 屏幕上那块 iVox 浮窗：IvoxOverlay（宿主：选屏、落点、堆叠）+ OverlaySlot（槽位：字幕/译文各一个）。**使用方只造视图**，落点与层序归宿主；`[overlay]` 段管钉屏与间距
   HotKey/              — 键盘事件层：GlobalKeyTap（**收**键：独占 tap，按归属路由给上面几家）+ HidInjector（**发**键：往常驻 ESP32-S3 注入器发真硬件事件，串行队列）
   Network/             — SocketServer（Unix domain socket IPC）+ ConnectionHandler（帧解析与分派）
   Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop；装配与热键分派
@@ -88,7 +89,9 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
 微信 ilink 长轮询 → WeChatPlatform（**只发消息，不发声**，不进本图这条线）
                                            │   ├─ TSPRemote ─→ 誊清员子进程 `ivox tts --serve`（mlx-audio-swift）
                                                                    │   └─ AudioPlayer (AVAudioEngine)
-                                                                   │        └─ CaptionPanel (播报字幕，可选)
+                                                                   │        └─ IvoxOverlay (浮窗宿主)
+                                                                   │             ├─ CaptionPanel (字幕层，可选)
+                                                                   │             └─ TranslationPanel (译文层)
                                                                    ├─ GlobalKeyTap (键盘事件层，一个 tap)
                                                                    │    ├─ SpeechInputService (右⌘ + ASR)
                                                                    │    ├─ TranslationService (Opt+Z 划词翻译)

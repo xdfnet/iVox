@@ -19,6 +19,8 @@ actor Daemon {
     private var quickActions: QuickActionsService?
     /// 播报字幕浮窗（配置开启才创建）
     private var captionPanel: CaptionPanel?
+    /// 屏幕上的那块 iVox 浮窗：字幕、译文都是往它里面放内容的「使用方」
+    private var overlay: IvoxOverlay?
     private let mediaController: MediaController
     private var wechat: WeChatPlatform?
     private var claudeAsk: ClaudeAskService?
@@ -111,6 +113,11 @@ actor Daemon {
             startMediaHTTPServer()
         }
         startModelLoading()
+        let overlay = await MainActor.run { IvoxOverlay(config: config.resolvedOverlay) }
+        self.overlay = overlay
+        // 屏幕清单打出来：以后想改钉哪块屏，从这里抄 UUID（配置 overlay.screen）
+        let screens = await MainActor.run { ScreenIdentity.inventory() }
+        Log.info("屏幕清单: \(screens)")
         await setUpHotKeys()
         await setUpCaption()
         await setUpSodaVolume()
@@ -283,8 +290,9 @@ actor Daemon {
     /// 装配热键：键盘事件层收到组合键后，按**能力归属**分派给各自的服务。
     /// 划词翻译与 Finder 快捷是两个独立能力域，这里只做分发，不把逻辑揉在一起。
     private func setUpHotKeys() async {
+        guard let overlay else { return }
         let coordinator = await MainActor.run {
-            TranslationCoordinator(config: config, queue: queue)
+            TranslationCoordinator(config: config, queue: queue, overlay: overlay)
         }
         let quickActionsService = await MainActor.run { QuickActionsService() }
         translationCoordinator = coordinator
@@ -320,24 +328,22 @@ actor Daemon {
         Log.info("热键已装配（划词翻译 \(speak)；QuickActions 五项；手动打断三档：跳整摞 / 掀桌 / 读下一页）")
     }
 
-    /// 播报字幕（配置开启才装）：把队列广播的「正在念的这句」显示到屏幕下方浮窗。
+    /// 播报字幕（配置开启才装）：把队列广播的「正在念的这句」显示到浮窗的字幕层。
     /// 队列在后台 actor、AppKit 必须在主线程——跨过去由闭包里的 `Task { @MainActor in }` 承担。
     private func setUpCaption() async {
         guard config.resolvedCaptions.resolvedEnabled else {
             Log.info("播报字幕: 未开启（config 的 captions.enabled）")
             return
         }
+        guard let overlay else { return }
         let panel = await MainActor.run {
-            CaptionPanel(config: config.resolvedCaptions)
+            CaptionPanel(config: config.resolvedCaptions, slot: overlay.slot(.caption))
         }   // 面板是 @MainActor 类型，构造要在主线程
         captionPanel = panel
         await queue.setCaptionSink { text in
             Task { @MainActor in panel.update(text) }
         }
         Log.info("播报字幕: 已开启")
-        // 屏幕清单打出来：以后想改钉哪块屏，从这里抄 UUID（配置 captions.screen）
-        let screens = await MainActor.run { ScreenIdentity.inventory() }
-        Log.info("屏幕清单: \(screens)")
     }
 
     /// 播报期间给汽水音乐让路：播报开始降几格音量、播完升回去。

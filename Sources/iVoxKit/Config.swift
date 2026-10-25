@@ -89,35 +89,64 @@ public struct PlaybackConfig: Codable, Sendable {
 
 }
 
-/// 字幕浮窗在屏上的落点。
-public enum CaptionPosition: String, Codable, Sendable, CaseIterable {
-    /// 贴底（默认）：浮窗底边距可见区底边 `inset` 点
-    case bottom
-    /// 贴顶：浮窗顶边距可见区顶边 `inset` 点
-    case top
-    /// 垂直居中
-    case center
+/// iVox 浮窗（屏幕上那块窗）的位置与堆叠规则。
+///
+/// 播报字幕、划词译文都是往这块浮窗里放内容的「使用方」，浮窗本身落在哪儿由这里一处说了算。
+public struct OverlayConfig: Codable, Sendable {
+    /// 浮窗钉在哪块屏：那块屏的 UUID；空 = 跟着鼠标所在的那块屏。
+    ///
+    /// 填 UUID 而不是序号/型号：同型号同分辨率的两块屏（两块 Redmi 27 NU）只有 UUID 认得出，
+    /// 而这个 UUID 系统自己拿来记屏幕摆位——拔插、重启、改分辨率都不变。
+    public var screen: String
+    /// 距屏幕可见区底边的点数（浮窗统一贴底）
+    public var inset: Double
+    /// 两层内容之间的距离（字幕在下、译文在上）
+    public var gap: Double
+
+    /// 缺字段用默认值：TOML 里只写要改的那一项也能加载
+    public init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.screen = try c.decodeIfPresent(String.self, forKey: .screen) ?? Self.default.screen
+        self.inset = try c.decodeIfPresent(Double.self, forKey: .inset) ?? Self.default.inset
+        self.gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? Self.default.gap
+    }
+
+    public init(screen: String = "", inset: Double = 18, gap: Double = 8) {
+        self.screen = screen
+        self.inset = inset
+        self.gap = gap
+    }
+
+    /// 默认值真源（全仓只此一处）。
+    public static let `default` = OverlayConfig()
+
+    /// 空串按「没指定屏」算 = 跟鼠标所在屏
+    public var resolvedScreen: String? {
+        let trimmed = screen.trimmingCharacters(in: .whitespacesAndNewlines)
+        return trimmed.isEmpty ? nil : trimmed
+    }
+    /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
+    public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
+
+    enum CodingKeys: String, CodingKey, CaseIterable {
+        case screen
+        case inset
+        case gap
+    }
 }
 
-/// 播报字幕（**独立一段**，不塞在播报里）：开关 + 钉在哪块屏 + 长什么样、落在哪儿。
+/// 播报字幕（**独立一段**，不塞在播报里）：开关 + 长什么样。
 ///
 /// 2026-10-24 从 `[playback]` 挪出来：字幕是「屏幕上的显示」，跟「播报怎么排队收尾」
 /// 是两件事，混在一段里时用户改字幕开关要去翻播报的配置。
+/// 2026-10-25 再挪走三项：字幕与译文合成一块浮窗后，**落在哪儿、钉哪块屏归浮窗管**
+/// （见 `OverlayConfig`），这段只留「显不显示、长什么样」。
 ///
 /// 字段一律**非可选 + 缺省用默认**（同 `SpeechInputConfig` 的写法）：默认值只写这一处，
 /// 模板与代码由测试钉住不会出现两份。旧配置缺字段也能加载。
 public struct CaptionsConfig: Codable, Sendable {
     /// 是否显示播报字幕（念到哪句就在屏上显示哪句）
     public var enabled: Bool
-    /// 字幕钉在哪块屏：那块屏的 UUID；空 = 主屏。
-    ///
-    /// 填 UUID 而不是序号/型号：同型号同分辨率的两块屏（两块 Redmi 27 NU）只有 UUID 认得出，
-    /// 而这个 UUID 系统自己拿来记屏幕摆位——拔插、重启、改分辨率都不变。
-    public var screen: String
-    /// 落点：贴底 / 贴顶 / 垂直居中
-    public var position: CaptionPosition
-    /// 距落点那条边的点数
-    public var inset: Double
     /// 内容宽度上限（超出折行）
     public var maxWidth: Double
     /// 内容高度上限＝可见高的比例（超出截尾）
@@ -133,9 +162,6 @@ public struct CaptionsConfig: Codable, Sendable {
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? Self.default.enabled
-        self.screen = try c.decodeIfPresent(String.self, forKey: .screen) ?? Self.default.screen
-        self.position = try c.decodeIfPresent(CaptionPosition.self, forKey: .position) ?? Self.default.position
-        self.inset = try c.decodeIfPresent(Double.self, forKey: .inset) ?? Self.default.inset
         self.maxWidth = try c.decodeIfPresent(Double.self, forKey: .maxWidth) ?? Self.default.maxWidth
         self.maxHeightRatio = try c.decodeIfPresent(Double.self, forKey: .maxHeightRatio) ?? Self.default.maxHeightRatio
         self.fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? Self.default.fontSize
@@ -143,13 +169,9 @@ public struct CaptionsConfig: Codable, Sendable {
         self.cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? Self.default.cornerRadius
     }
 
-    public init(enabled: Bool = false, screen: String = "", position: CaptionPosition = .bottom,
-                inset: Double = 18, maxWidth: Double = 600, maxHeightRatio: Double = 0.3,
+    public init(enabled: Bool = false, maxWidth: Double = 600, maxHeightRatio: Double = 0.3,
                 fontSize: Double = 16, padding: Double = 14, cornerRadius: Double = 10) {
         self.enabled = enabled
-        self.screen = screen
-        self.position = position
-        self.inset = inset
         self.maxWidth = maxWidth
         self.maxHeightRatio = maxHeightRatio
         self.fontSize = fontSize
@@ -157,24 +179,16 @@ public struct CaptionsConfig: Codable, Sendable {
         self.cornerRadius = cornerRadius
     }
 
-    /// 默认值真源（全仓只此一处）：字幕默认关、贴底 18 点、宽 600、字号 16。
+    /// 默认值真源（全仓只此一处）：字幕默认关、宽 600、字号 16。
     public static let `default` = CaptionsConfig()
 
     /// 字幕默认关：它会一直占着屏幕，只在你明确要看时才开
     public var resolvedEnabled: Bool { enabled }
-    /// 空串按「没指定屏」算 = 主屏
-    public var resolvedScreen: String? {
-        let trimmed = screen.trimmingCharacters(in: .whitespacesAndNewlines)
-        return trimmed.isEmpty ? nil : trimmed
-    }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case enabled
-        case screen
-        case position
-        case inset
         case maxWidth
         case maxHeightRatio
         case fontSize
@@ -325,6 +339,8 @@ public struct Config: Codable, Sendable {
     public var playback: PlaybackConfig? = nil
     /// 播报字幕（独立段：屏幕上的显示，与「播报怎么排队收尾」分开）
     public var captions: CaptionsConfig? = nil
+    /// iVox 浮窗（屏幕上的那块窗）：落在哪儿、钉哪块屏。字幕与译文都往它里面放。
+    public var overlay: OverlayConfig? = nil
     /// 来源 → 音色 id 的映射。**`"default"` 键就是默认音色**（没有来源时用它），
     /// 所以不再单设一个 `defaultVoice` 字段——一处说清，别两处各写一遍。
     public var sourceVoices: [String: String]
@@ -364,6 +380,7 @@ public struct Config: Codable, Sendable {
     public var resolvedTTS: TTSConfig { .default }
     public var resolvedPlayback: PlaybackConfig { playback ?? .default }
     public var resolvedCaptions: CaptionsConfig { captions ?? .default }
+    public var resolvedOverlay: OverlayConfig { overlay ?? .default }
     public var resolvedTranslation: TranslationConfig { translation ?? .default }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
@@ -371,6 +388,7 @@ public struct Config: Codable, Sendable {
         case speechInput
         case translation
         case playback
+        case overlay
         case captions
         case sourceVoices
         case wechat
@@ -520,6 +538,31 @@ private func migrateCaptionKeys(_ object: inout [String: Any]) -> Bool {
     return moved
 }
 
+/// 字幕键挪到浮窗段迁移（2026-10-25）：字幕与译文合成一块浮窗后，**落在哪儿、钉哪块屏
+/// 归浮窗管**，字幕那段只留「显不显示、长什么样」。
+///
+/// 老配置里写着 `captions.screen` / `captions.inset` / `captions.position`——
+/// 照搬会让用户的钉屏设置**无声失效**（浮窗悄悄跟到鼠标屏去，看着像「钉屏坏了」）。
+/// 这里把前两个搬进 `[overlay]` 段照常生效；`position` 那个能力已经没有了（浮窗统一贴底），
+/// 直接丢掉并由审计告诉用户把这行删掉。
+private func migrateOverlayKeys(_ object: inout [String: Any]) -> Bool {
+    guard var captions = object["captions"] as? [String: Any] else { return false }
+    var overlay = object["overlay"] as? [String: Any] ?? [:]
+    var moved = false
+    if let value = captions.removeValue(forKey: "screen"), overlay["screen"] == nil {
+        overlay["screen"] = value
+        moved = true
+    }
+    if let value = captions.removeValue(forKey: "inset"), overlay["inset"] == nil {
+        overlay["inset"] = value
+        moved = true
+    }
+    if captions.removeValue(forKey: "position") != nil { moved = true }
+    if captions.isEmpty { object.removeValue(forKey: "captions") } else { object["captions"] = captions }
+    if !overlay.isEmpty { object["overlay"] = overlay }
+    return moved
+}
+
 /// 老 JSON 配置 → TOML。顺手把老写法的 `defaultVoice` 并进 `sourceVoices.default`。
 public func migrateLegacyJSON(_ from: String, to: String) throws {
     let data = try Data(contentsOf: URL(fileURLWithPath: from))
@@ -543,6 +586,10 @@ private func decodeConfig(_ object: [String: Any]) throws -> Config {
     if migrateCaptionKeys(&object) {
         Log.info("配置迁移：字幕键已从 playback 段挪到 captions 段（enabled / screen）——"
                  + "请把 config.toml 里那两行挪到 [captions] 段")
+    }
+    if migrateOverlayKeys(&object) {
+        Log.info("配置迁移：字幕的落点键已挪到 overlay 段（screen / inset）——"
+                 + "请把 config.toml 里那两行挪到 [overlay] 段；captions.position 已作废，删掉即可")
     }
     guard JSONSerialization.isValidJSONObject(object),
           let data = try? JSONSerialization.data(withJSONObject: object) else {
@@ -601,9 +648,12 @@ public func validate(_ config: Config) throws {
             throw ConfigError.invalidConfig("sourceVoices.\(source) 不存在: \(id)")
         }
     }
+    // 浮窗的落点数字：写错（负数）当场报错，别等渲染时才发现
+    let overlay = config.resolvedOverlay
+    if overlay.inset < 0 { throw ConfigError.invalidConfig("overlay.inset 不能为负") }
+    if overlay.gap < 0 { throw ConfigError.invalidConfig("overlay.gap 不能为负") }
     // 字幕的外观数字：写错（负数、零宽、比例超 1）当场报错，别等渲染时才发现
     let captions = config.resolvedCaptions
-    if captions.inset < 0 { throw ConfigError.invalidConfig("captions.inset 不能为负") }
     if captions.maxWidth <= 0 { throw ConfigError.invalidConfig("captions.maxWidth 必须大于 0") }
     if captions.maxHeightRatio <= 0 || captions.maxHeightRatio > 1 {
         throw ConfigError.invalidConfig("captions.maxHeightRatio 必须在 0~1 之间")

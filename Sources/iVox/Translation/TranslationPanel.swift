@@ -1,19 +1,17 @@
 import AppKit
 import iVoxKit
 
-// 屏幕下方的翻译结果浮窗（歌词式）。
+// 划词译文的浮层：浮窗里的**译文那一层**。
 
-/// 一个非交互浮层：不抢焦点、悬于所有窗口、跨 Space、到点自隐。
+/// 浮窗里的**译文那一层**的使用方：只管「长什么样、什么时候收」。
 ///
-/// 范本是 `SpeechInput/OverlayPanel.swift`（已验证在无 `NSApplication` 事件循环的
-/// daemon 里能正常显示）：同样的 `NSPanel` 组合 —— `nonactivatingPanel` 不抢焦点、
-/// `level = .floating` 悬于所有窗口、`canJoinAllSpaces` 跨 Space。
+/// 落点、选屏、跟字幕叠在一起时的上下次序都归 `IvoxOverlay`（浮窗宿主）管——
+/// 这一层只交出一个画好的视图。译文与字幕曾各占一个窗口、靠一个手写死的 96 点间隙错开；
+/// 合成一块浮窗后，上下次序由容器结构保证，不再靠魔法数字。
 ///
 /// 内容两种排法，按**原文是不是一个词**分：
 /// - **单词**：`feature　功能、特性` —— 横排一行，原文小一号、略暗
-/// - **一句**：原文在上（12pt 灰）、译文在下（16pt 白），便于回看对应
-///
-/// 位置固定在鼠标所在屏的下方居中，宽度随内容、高度有上限（超出截译文）。
+/// - **一句**：原文在上（灰）、译文在下（白），便于回看对应
 ///
 /// **刻意不做**：拖拽移动、点击外部关闭、文本选择。这三样都要 key window / 输入焦点，
 /// 当前 daemon 形态给不了；替代是「再按一次 Opt+Z 覆盖 + 到点自己消失」。
@@ -23,9 +21,6 @@ final class TranslationPanel {
     private static let maxContentWidth: CGFloat = 600
     /// 内容区高度上限占屏幕可见高的比例（超过就截译文）
     private static let maxHeightRatio: CGFloat = 0.45
-    /// 距屏幕可见区底部的留白：抬到播报字幕（24pt，贴底）**之上**，两者不重叠。
-    /// 曾是 28pt（与字幕同区），飞哥定了「翻译在上、字幕在下」之后上移。
-    private static let bottomInset: CGFloat = 96
     private static let padding: CGFloat = 14
     private static let cornerRadius: CGFloat = 10
     private static let gap: CGFloat = 6
@@ -33,52 +28,39 @@ final class TranslationPanel {
     private static let originalFontSize: CGFloat = 16
     private static let translatedFontSize: CGFloat = 16
 
-    private var panel: NSPanel?
+    /// 浮窗里的译文槽位
+    private let slot: IvoxOverlay.Slot
     /// 兜底定时器：鼠标一直不动时的最后保险（正常靠鼠标移动收起）
     private var hideWorkItem: DispatchWorkItem?
     /// 显示时的鼠标位置；此后鼠标一动就认为「看完了」
     private var anchorPoint: NSPoint = .zero
     private var mouseWatchTask: Task<Void, Never>?
 
-    /// 在**鼠标所在那块屏**的下方居中显示，`timeoutSeconds` 后自动隐藏。
-    ///
-    /// 鼠标位置在这里现取（`NSEvent.mouseLocation`，AppKit 全局坐标）——**不能**用
-    /// 热键回调里的 `CGEvent.location`：那是屏幕坐标、**左上原点**，而 `NSScreen` 与
-    /// `NSPanel` 用**左下原点**，混着算会选错屏幕（踩过）。
+    /// - Parameter slot: 浮窗里的译文槽位。
+    init(slot: IvoxOverlay.Slot) {
+        self.slot = slot
+    }
+
+    /// 在浮窗的译文层显示 `translated`（`original` 为空串表示只显示一段，如出错提示）。
     ///
     /// - Parameters:
     ///   - original: 选中的原文；传空串表示只显示一段（如出错提示）
     ///   - translated: 译文
+    ///   - timeoutSeconds: 兜底隐藏秒数（鼠标一动就提前收起）
     func show(original: String, translated: String, timeoutSeconds: Double) {
-        let mouse = NSEvent.mouseLocation
-        let screen = NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.main
-        let visible = screen?.visibleFrame ?? NSRect(x: 0, y: 0, width: 1440, height: 900)
-
+        let visible = slot.visibleFrame
         let view = makeContentView(
             original: original,
             translated: translated,
             maxWidth: min(Self.maxContentWidth, visible.width - 80),
-            maxHeight: (visible.height - Self.bottomInset * 2) * Self.maxHeightRatio
+            maxHeight: visible.height * Self.maxHeightRatio
         )
-        let size = view.frame.size
-        let panel = ensurePanel()
-        // 顺序要紧：先把面板调到内容尺寸，**再**装 contentView。
-        // 反过来 `panel.contentView = view` 会按面板当时的 contentRect（初始 100×40）
-        // 重设 view 的 frame，算好的尺寸就丢了（踩过：弹窗永远是那个初始小条）。
-        panel.setContentSize(size)
-        view.frame = NSRect(origin: .zero, size: size)
-        panel.contentView = view
-
-        panel.setFrameOrigin(NSPoint(
-            x: visible.midX - size.width / 2,
-            y: visible.minY + Self.bottomInset
-        ))
-        panel.orderFrontRegardless()
-        Log.debug("划词翻译: 浮窗 \(Int(size.width))×\(Int(size.height)) @ (\(Int(panel.frame.minX)),\(Int(panel.frame.minY)))")
+        slot.set(view)
+        Log.debug("划词翻译: 浮窗 \(Int(view.frame.width))×\(Int(view.frame.height))")
 
         // 划完词手就停在鼠标上，眼睛看着浮窗；一旦手移开（要滚动、点别处、打字），
         // 就说明看完了。比「固定几秒」准得多——读到什么时候就留到什么时候。
-        anchorPoint = mouse
+        anchorPoint = NSEvent.mouseLocation
         startWatchingMouse()
         scheduleHide(after: timeoutSeconds)   // 兜底：鼠标一直不动时的最后保险
     }
@@ -88,7 +70,7 @@ final class TranslationPanel {
         hideWorkItem = nil
         mouseWatchTask?.cancel()
         mouseWatchTask = nil
-        panel?.orderOut(nil)
+        slot.set(nil)
     }
 
     // MARK: - 内部
@@ -120,24 +102,6 @@ final class TranslationPanel {
         }
         hideWorkItem = item
         DispatchQueue.main.asyncAfter(deadline: .now() + seconds, execute: item)
-    }
-
-    private func ensurePanel() -> NSPanel {
-        if let panel { return panel }
-        let panel = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 100, height: 40),
-            styleMask: [.nonactivatingPanel, .fullSizeContentView, .borderless],
-            backing: .buffered,
-            defer: false
-        )
-        panel.isFloatingPanel = true
-        panel.level = .floating
-        panel.backgroundColor = .clear
-        panel.isOpaque = false
-        panel.hasShadow = true
-        panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary]
-        self.panel = panel
-        return panel
     }
 
     /// 深色圆角容器 + 按内容排好的文本。
@@ -192,6 +156,11 @@ final class TranslationPanel {
         container.wantsLayer = true
         container.layer?.backgroundColor = NSColor(calibratedWhite: 0.12, alpha: 0.96).cgColor
         container.layer?.cornerRadius = Self.cornerRadius
+        // 阴影挂在**这一层**上而不是浮窗上：浮窗本身是透明的，panel 的阴影会画成一个方框
+        container.layer?.shadowColor = NSColor.black.cgColor
+        container.layer?.shadowOpacity = 0.35
+        container.layer?.shadowRadius = 10
+        container.layer?.shadowOffset = .zero
 
         // 从顶部往下摆（AppKit 原点在左下，所以要倒着算 y）
         var y = size.height - Self.padding

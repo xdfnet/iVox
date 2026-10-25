@@ -39,6 +39,7 @@ public enum ConfigAudit {
         "translation": TranslationConfig.CodingKeys.allCases.map(\.stringValue),
         "playback": PlaybackConfig.CodingKeys.allCases.map(\.stringValue),
         "captions": CaptionsConfig.CodingKeys.allCases.map(\.stringValue),
+        "overlay": OverlayConfig.CodingKeys.allCases.map(\.stringValue),
         "sourceVoices": ["default"],
         "wechat": WeChatConfig.CodingKeys.allCases.map(\.stringValue),
         "voices": VoiceInfo.CodingKeys.allCases.map(\.stringValue),
@@ -55,6 +56,16 @@ public enum ConfigAudit {
     public static let movedKeys: [String: String] = [
         "playback.captions": "captions.enabled",
         "playback.captionScreen": "captions.screen",
+        "captions.screen": "overlay.screen",
+        "captions.inset": "overlay.inset",
+    ]
+
+    /// **已作废**的键：老配置里还有它，但这个能力已经没有了。
+    ///
+    /// 跟「挪过位置」分开：挪过去的键换个地方还能用；作废的键**没有新位置**，
+    /// 只是留在那儿装样子——留着它还容易被当成「还有效」而误调。
+    public static let obsoleteKeys: [String: String] = [
+        "captions.position": "浮窗统一贴底，落点不再可配（把这行删掉即可）",
     ]
 
     /// 某段的已知键（动态段返回空集——不检查内层）。
@@ -93,6 +104,13 @@ public enum ConfigAudit {
             if let dict = value as? [String: Any] {
                 for subKey in dict.keys where !known.contains(subKey) {
                     let path = "\(key).\(subKey)"
+                    if let obsolete = obsoleteKeys[path] {
+                        issues.append(ConfigUnknownKey(
+                            path: path, suggestion: nil,
+                            note: "已作废：\(obsolete)"
+                        ))
+                        continue
+                    }
                     if let moved = movedKeys[path] {
                         issues.append(ConfigUnknownKey(
                             path: path, suggestion: nil,

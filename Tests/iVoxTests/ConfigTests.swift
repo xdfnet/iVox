@@ -47,8 +47,8 @@ final class ConfigTests: XCTestCase {
 
         let config = try loadConfig(from: path)
         XCTAssertTrue(config.resolvedCaptions.resolvedEnabled, "老键 playback.captions 应照常生效")
-        XCTAssertEqual(config.resolvedCaptions.resolvedScreen, "D6F7A473-6F62-468C-8698-1B1944615CF7",
-                       "老键 playback.captionScreen 应照常生效")
+        XCTAssertEqual(config.resolvedOverlay.resolvedScreen, "D6F7A473-6F62-468C-8698-1B1944615CF7",
+                       "老键 playback.captionScreen 应照常生效（经 captions 段再落到 overlay 段）")
         XCTAssertEqual(config.resolvedPlayback.resolvedIdleGraceSeconds, 60, "同段里的别的键不该受影响")
     }
 
@@ -71,6 +71,52 @@ final class ConfigTests: XCTestCase {
 
         let config = try loadConfig(from: path)
         XCTAssertTrue(config.resolvedCaptions.resolvedEnabled)
-        XCTAssertEqual(config.resolvedCaptions.resolvedScreen, "AAAA")
+        XCTAssertEqual(config.resolvedOverlay.resolvedScreen, "AAAA")
+    }
+
+    // MARK: - 字幕落点挪到浮窗段（2026-10-25：字幕与译文合成一块浮窗）
+
+    /// 老配置把钉屏与落点写在 `[captions]` 段——升级后**不能无声失效**
+    ///（浮窗悄悄跟到鼠标屏去，看着像「钉屏坏了」）。
+    func testLegacyCaptionPlacementMovesToOverlaySection() throws {
+        let toml = """
+        [sourceVoices]
+        default = "taozi"
+
+        [captions]
+        enabled = true
+        screen = "84945B9B-26CB-4240-AA2A-7E86CF1B0942"
+        inset = 30
+        position = "top"
+        """
+        let path = NSTemporaryDirectory() + "ivox-legacy-overlay.toml"
+        try toml.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let config = try loadConfig(from: path)
+        XCTAssertEqual(config.resolvedOverlay.resolvedScreen, "84945B9B-26CB-4240-AA2A-7E86CF1B0942",
+                       "钉屏应挪到 overlay 段照常生效")
+        XCTAssertEqual(config.resolvedOverlay.inset, 30, "落点间距应挪到 overlay 段照常生效")
+        XCTAssertTrue(config.resolvedCaptions.resolvedEnabled, "字幕开关不该受迁移影响")
+    }
+
+    /// 新段优先：overlay 段已写了值，老的 captions 段不再覆盖它。
+    func testOverlaySectionWinsOverLegacyCaptionPlacement() throws {
+        let toml = """
+        [sourceVoices]
+        default = "taozi"
+
+        [captions]
+        screen = "OLD"
+
+        [overlay]
+        screen = "NEW"
+        """
+        let path = NSTemporaryDirectory() + "ivox-both-overlay.toml"
+        try toml.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let config = try loadConfig(from: path)
+        XCTAssertEqual(config.resolvedOverlay.resolvedScreen, "NEW")
     }
 }

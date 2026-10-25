@@ -81,8 +81,31 @@ final class ConfigAuditTests: XCTestCase {
     }
 
     func testNewCaptionsSectionKeysAreKnown() {
-        // 新段 [captions] 的键（enabled / screen）是真键，不该被点名
-        let issues = audit(#"{"captions": {"enabled": true, "screen": "AAA"}}"#)
+        // 新段 [captions] 的键（enabled / maxWidth…）是真键，不该被点名
+        let issues = audit(#"{"captions": {"enabled": true, "maxWidth": 600}}"#)
         XCTAssertTrue(issues.isEmpty, "实际: \(issues.map(\.path))")
+    }
+
+    func testCaptionPlacementKeysPointToOverlaySection() {
+        // 字幕与译文合成一块浮窗后，落点与钉屏归 [overlay] 管：老配置里的
+        // captions.screen / captions.inset 不该被当成「没人认领」——它们照常生效
+        // （见 ConfigTests 的迁移用例），只告诉用户新位置在哪儿
+        let issues = audit(#"{"captions": {"screen": "AAA", "inset": 30}}"#)
+        XCTAssertEqual(issues.map(\.path), ["captions.inset", "captions.screen"])
+        for issue in issues {
+            XCTAssertNotNil(issue.note, "\(issue.path) 应带「已挪到哪儿」的说明")
+            XCTAssertNil(issue.suggestion, "\(issue.path) 不该再被猜成别的键名")
+        }
+        XCTAssertTrue(ConfigAudit.describe(issues).contains("overlay.screen"))
+        XCTAssertTrue(ConfigAudit.describe(issues).contains("overlay.inset"))
+    }
+
+    func testObsoleteCaptionPositionIsReportedAsObsolete() {
+        // captions.position 这个能力已经没了（浮窗统一贴底）——要明确说「作废」，
+        // 不能让它混进「没人认领」里（那会让人以为是键名写错了）
+        let issues = audit(#"{"captions": {"position": "top"}}"#)
+        XCTAssertEqual(issues.map(\.path), ["captions.position"])
+        XCTAssertNotNil(issues.first?.note)
+        XCTAssertTrue(ConfigAudit.describe(issues).contains("已作废"))
     }
 }
