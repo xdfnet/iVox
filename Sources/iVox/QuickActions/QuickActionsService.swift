@@ -70,15 +70,20 @@ final class QuickActionsService {
             // 用 `--command=shell:<cmd>`（Ghostty 官方写法）而非 `-e`：**`-e` 每次都会弹 macOS 的
             // 「Allow Ghostty to execute "/bin/zsh"?」确认框**（Ghostty 的安全机制，
             // 目前没有配置项能关，issue #8648 仍在讨论），`--command` 不走那条通道。
-            // 实测 1.3.1：`shell:` 后的命令在**真 tty**（/dev/ttyNN）里跑，PATH 完整（含
-            // /opt/homebrew/bin、~/.local/bin），cwd 即 `--working-directory`——不必再套
-            // `zsh -lc` 去补 PATH（早先「initial-command 走 bash --noprofile、拿不到用户
-            // PATH」那条注释已过期）。
+            // 实测 1.3.1：`shell:` 后的命令在**真 tty**（/dev/ttyNN）里跑，cwd 即
+            // `--working-directory`。
             args.append("--command=shell:\(command)")
         }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = args
         config.createsNewApplicationInstance = true
+        // PATH 必须显式给过去：daemon 由 launchd 启动，继承的 PATH 只有系统那几项
+        // （`/usr/bin:/bin:/usr/sbin:/sbin`），不含 `~/.local/bin`（claude）与 Homebrew 的
+        // bin（codex/pi）；而 Ghostty 在 macOS 上经 `/usr/bin/login` + `--noprofile --norc`
+        // 启动 shell，**不读 profile**，PATH 只能由发起方给。
+        // ⚠️ 别改成「套 `zsh -lc` 让它自己读 profile」：那是绕路，且 `codex`/`pi` 是
+        // `#!/usr/bin/env node` 的脚本，`env node` 照样要在 PATH 里找 node。
+        config.environment = Self.ghosttyEnvironment()
         do {
             try await NSWorkspace.shared.openApplication(at: Self.ghosttyApp, configuration: config)
             if let command {
@@ -94,6 +99,19 @@ final class QuickActionsService {
         } catch {
             Log.warn("QuickActions: 打开 Ghostty 失败（装了没？brew install --cask ghostty）: \(error.localizedDescription)")
         }
+    }
+
+    /// Ghostty 子进程的环境变量：继承 daemon 自己的环境，只把 PATH 补上用户自装工具的目录。
+    ///
+    /// 为什么要补：daemon 由 launchd 启动，PATH 只有系统那几项；Ghostty 在 macOS 上又
+    /// 明令不读 profile，`claude`（`~/.local/bin`）、`codex`/`pi`（Homebrew 的 bin）就都找不到。
+    /// 目录清单的唯一真源在 `AppPaths.userBinDirs`（按 `HOME` 展开，不写死用户名）。
+    private static func ghosttyEnvironment() -> [String: String] {
+        var env = ProcessInfo.processInfo.environment
+        let base = env["PATH"] ?? "/usr/bin:/bin:/usr/sbin:/sbin"
+        let extra = AppPaths.userBinDirs.filter { !base.split(separator: ":").contains(Substring($0)) }
+        env["PATH"] = ([base] + extra).joined(separator: ":")
+        return env
     }
 
     // MARK: - 复制路径

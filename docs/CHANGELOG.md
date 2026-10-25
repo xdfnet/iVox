@@ -2,6 +2,19 @@
 
 ## 未发布 — 2026-10-25
 
+- **开终端的 PATH 由 daemon 显式传给 Ghostty** — 修 `Opt+A/X/S` 弹出窗口却报
+  `exec: claude: not found`（2026-10-25 飞哥实测反馈）
+  - 根因：daemon 由 launchd 启动，继承的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`；
+    而 Ghostty 在 macOS 上经 `/usr/bin/login` + `--noprofile --norc` 启动 shell，
+    **明令不读 profile** → `~/.zprofile` 加 PATH 的规则对它无效
+  - 修法：`NSWorkspace.OpenConfiguration.environment` 里把 PATH 补全再传给 Ghostty；
+    目录清单的唯一真源是 `AppPaths.userBinDirs`（`~/.local/bin` + Homebrew 的 bin，
+    按 `HOME` 展开、不写死用户名，Homebrew 前缀按实际存在的那个取）
+  - 连带修正昨天那条 `--command=shell:` 的结论：**「PATH 完整」是假绿**——那是在交互式
+    终端里测的、继承了完整 PATH；换 daemon 的真实环境就炸
+  - ⚠️ 记一条教训：**测 Ghostty 必须复刻 daemon 的环境**（`env -i PATH=/usr/bin:/bin:/usr/sbin:/sbin`），
+    否则交互式终端的富环境会替你把问题盖掉
+
 - **开终端改用 Ghostty 官方写法 `--command=shell:`** — 飞哥指出这是官方文档里的写法，实测
   （Ghostty 1.3.1）确认比原先的 `--initial-command=/bin/zsh -lc <cmd>` 更直接：
   - `shell:` 后的命令在**真 tty**（`/dev/ttyNN`）里跑，`cwd` 即 `--working-directory`，

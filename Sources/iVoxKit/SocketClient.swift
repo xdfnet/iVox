@@ -15,6 +15,22 @@ public enum AppPaths {
     public static var daemonLogPath: String { configDir + "/daemon.log" }
     public static var ttsLogPath: String { configDir + "/tts.log" }
     public static var binDir: String { expandTilde("~/.local/bin") }
+    /// 用户自装工具所在的目录（`claude` 在 `~/.local/bin`，`codex`/`pi` 在 Homebrew 的 bin）。
+    ///
+    /// launchd 起的 GUI 进程拿到的 PATH 只有系统那几项，**不含这些目录**；而 Ghostty 在
+    /// macOS 上经 `/usr/bin/login` + `--noprofile --norc` 启动 shell，**不读 profile**，
+    /// PATH 只能由发起方显式给过去——否则 `claude` 报 `not found`。
+    ///
+    /// Homebrew 的 prefix 在 Intel 是 `/usr/local`、Apple Silicon 是 `/opt/homebrew`，
+    /// 按实际存在的那个取；`~` 一律由 `HOME` 展开，不写死用户名。
+    public static var userBinDirs: [String] {
+        var dirs = [expandTilde("~/.local/bin")]
+        for prefix in ["/opt/homebrew/bin", "/usr/local/bin"] where FileManager.default.fileExists(atPath: prefix) {
+            dirs.append(prefix)
+            break
+        }
+        return dirs
+    }
 
     static func expandTilde(_ path: String) -> String {
         guard path.hasPrefix("~/") else { return path }
