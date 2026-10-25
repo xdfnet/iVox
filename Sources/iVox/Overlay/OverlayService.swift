@@ -32,7 +32,21 @@ final class OverlayService {
     struct Line: Sendable {
         let text: String
         let style: Style
+        /// 卡拉OK式高亮区间（**字符下标**）：区间内白色、区间外半透明白。
+        /// nil = 整行一个颜色（按 `style`）。
+        let highlight: Range<Int>?
+
+        init(text: String, style: Style = .normal, highlight: Range<Int>? = nil) {
+            self.text = text
+            self.style = style
+            self.highlight = highlight
+        }
     }
+
+    /// 屏上只有这两个颜色（翻译那双色）：主色 = 正文白，次色 = 半透明白。
+    /// **字幕的卡拉OK高亮也用它们**——不另立一套颜色。
+    private static let primaryColor = NSColor.white
+    private static let secondaryColor = NSColor.white.withAlphaComponent(0.55)
 
     private var channels: [Channel: [Line]] = [:]
     private var panel: NSPanel?
@@ -43,6 +57,10 @@ final class OverlayService {
     private var didWarnMissingScreen = false
     /// 浮层在不在屏上——**音乐让路的唯一判据**
     private var isWindowVisible = false
+    /// 上一轮画出来的文字与 label：卡拉OK式字幕每 100ms 推进一步高亮，
+    /// 整块重建视图会闪——文字没变就只换颜色。
+    private var renderedTexts: [String] = []
+    private var renderedLabels: [NSTextField] = []
     /// 音乐已经让过路了吗（降了但还没升回来）
     private var musicDucked = false
     private let ducker: SodaVolumeDucker
@@ -159,6 +177,13 @@ final class OverlayService {
         }
         if anchorScreen == nil { anchorScreen = pickScreen() }
 
+        // **文字没变就只改颜色**：卡拉OK式字幕的高亮每 100ms 推进一步，
+        // 整块重建视图会闪（连着闪十几下）。只换颜色不动尺寸 → 视觉上只有字在变亮。
+        if renderedTexts == lines.map(\.text), renderedLabels.count == lines.count {
+            for (label, line) in zip(renderedLabels, lines) { apply(line, to: label) }
+            return
+        }
+
         let padding = CGFloat(config.padding)
         let gap = CGFloat(config.gap)
         let visible = screenVisibleFrame
@@ -168,6 +193,7 @@ final class OverlayService {
         var labels: [NSTextField] = []
         for line in lines {
             let label = makeLabel(line.text, style: line.style)
+            apply(line, to: label)
             label.sizeToFit()
             if label.frame.width > widthLimit {
                 label.preferredMaxLayoutWidth = widthLimit
@@ -223,6 +249,9 @@ final class OverlayService {
         panel.setFrameOrigin(Self.origin(inset: CGFloat(config.inset),
                                          visible: visible,
                                          size: carrierSize))
+        renderedTexts = lines.map(\.text)
+        renderedLabels = labels
+
         panel.orderFrontRegardless()
         isWindowVisible = true
         updateMusic()
@@ -233,11 +262,40 @@ final class OverlayService {
     private func makeLabel(_ text: String, style: Style) -> NSTextField {
         let label = NSTextField(labelWithString: text)
         label.font = .systemFont(ofSize: CGFloat(config.fontSize))
-        label.textColor = style == .dim ? .white.withAlphaComponent(0.55) : .white
+        label.textColor = style == .dim ? Self.secondaryColor : Self.primaryColor
         label.alignment = .center
         label.lineBreakMode = .byWordWrapping
         label.maximumNumberOfLines = 0
         return label
+    }
+
+    /// 把一行的文字与颜色装进 label：整行一种色，或卡拉OK式（区间白、其余半透明白）。
+    private func apply(_ line: Line, to label: NSTextField) {
+        let font = label.font ?? .systemFont(ofSize: CGFloat(config.fontSize))
+        let attributed = NSMutableAttributedString(string: line.text, attributes: [
+            .font: font,
+            .foregroundColor: baseColor(for: line),
+        ])
+        if let h = line.highlight, !h.isEmpty {
+            let count = line.text.count
+            let lo = max(0, min(h.lowerBound, count))
+            let hi = max(lo, min(h.upperBound, count))
+            if hi > lo {
+                let start = line.text.index(line.text.startIndex, offsetBy: lo)
+                let end = line.text.index(line.text.startIndex, offsetBy: hi)
+                attributed.addAttribute(.foregroundColor, value: Self.primaryColor,
+                                        range: NSRange(start..<end, in: line.text))
+            }
+        }
+        label.attributedStringValue = attributed
+    }
+
+    /// 一行的底色：整行一种色时按 style；带高亮时底色一律次色（区间内才转主色）。
+    private func baseColor(for line: Line) -> NSColor {
+        if line.highlight == nil {
+            return line.style == .dim ? Self.secondaryColor : Self.primaryColor
+        }
+        return Self.secondaryColor
     }
 
     /// 浮窗所在那块屏的**可见区**（菜单栏让出的那条不算可用）。

@@ -192,6 +192,23 @@ actor PlaybackSession {
     }
 
     /// 播完（或作废）这一块：游标前移。块可能已被掀掉——照样前移，序号单调不会倒退。
+    /// 歌词式字幕要的一帧：**这一页的所有句子** + **念到第几句**。
+    ///
+    /// 按块号找它所在的那一页（块 = 一句）。页里已经念过的块仍在（只有掀页才整页删），
+    /// 所以这一页的句子就是「歌词的上下文」。
+    func captionContext(forSeq seq: UInt) -> (lines: [String], index: Int)? {
+        for list in [front, segments] {
+            for seg in list {
+                for page in seg.pages {
+                    if let i = page.blocks.firstIndex(where: { $0.seq == seq }) {
+                        return (page.blocks.map(\.text), i)
+                    }
+                }
+            }
+        }
+        return nil
+    }
+
     func commit(_ cursor: PlaybackCursor) {
         if cursor.isFront {
             if cursor.seq > frontCursor { frontCursor = cursor.seq }

@@ -35,7 +35,7 @@ final class AudioPlayer: @unchecked Sendable {
     private static let stallGrace: TimeInterval = 10
     /// 「某句开始被设备消费」回调（字幕用）：句首块被读出时触发——**比从合成侧取准得多**
     /// （合成领先播放一两句，字幕会早到）。由 PlaybackQueue 在 init 时一次性注入，之后只读。
-    var onSentenceStarted: (@Sendable (String) -> Void)?
+    var onSentenceStarted: (@Sendable (String, UInt) -> Void)?
     /// 「块 `seq` 的这一批已被设备读出」回调（发声点用）。
     /// 由 PlaybackQueue 在 init 时注入，之后只读。播放层只报事实——**不知道摞/页，也不推导起点**。
     var onBlockConsumed: (@Sendable (UInt) -> Void)?
@@ -183,7 +183,7 @@ final class AudioPlayer: @unchecked Sendable {
                     guard self.generation == gen else { return }   // 已被取消的旧世代回调直接丢弃
                     self.onConsumed(frames: Int(frames))
                     // 句首块被读出 ≈ 这句开始响：此刻才报字幕。世代校验已过，被掐掉的旧句不会误报
-                    if let text = startsSentence { self.onSentenceStarted?(text) }
+                    if let text = startsSentence, let seq { self.onSentenceStarted?(text, seq) }
                     // 发声点：同一块只报一次（一个块的 PCM 常拆成多个 buffer）
                     if let seq, seq > self.lastReportedSeq {
                         self.lastReportedSeq = seq

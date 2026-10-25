@@ -110,9 +110,10 @@ actor PlaybackQueue {
     ///（宁可早一点判"这摞说完"，也不能再出现"永远判不完"）。
     private static let maxSilenceWaitSeconds: Double = 10
 
-    /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播该句文本，收起广播 nil。
+    /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播**歌词式的一帧**
+    ///（这一页的句子 + 念到第几句），收起广播 nil。
     /// 在**本 actor 上**被调用，实现方自己切回主线程再碰 UI。
-    private var onCaption: (@Sendable (String?) -> Void)?
+    private var onCaption: (@Sendable (CaptionFrame?) -> Void)?
     private let player: AudioPlayer
     private let engine: any TTSProviding
     private let media: MediaController
@@ -124,8 +125,8 @@ actor PlaybackQueue {
         self.session = PlaybackSession(idleGraceSeconds: idleGraceSeconds)
         // 字幕跟**播放**走（不是合成）：句首块被设备读出时才报，与声音对齐。
         // 回调在播放器的 serialQueue 上，跳回本 actor 再转发（onCaption 是本 actor 状态）。
-        player.onSentenceStarted = { [weak self] text in
-            Task { await self?.emitCaption(text) }
+        player.onSentenceStarted = { [weak self] text, seq in
+            Task { await self?.emitCaption(seq) }
         }
         // 发声点：播放器报「哪一块的 PCM 被设备读出」这个**事实**，身份层存位置、推导起点。
         // 本层一个字的推导都不做——三层各干各的（见 PlaybackSession 文件头）。
@@ -148,15 +149,16 @@ actor PlaybackQueue {
     }
 
     /// 注入播报字幕接收端（`nil` = 关闭字幕）。
-    /// 文本来自**播放侧**（`AudioPlayer.onSentenceStarted`：句首块被设备读出），不是合成侧——
+    /// 时机来自**播放侧**（`AudioPlayer.onSentenceStarted`：句首块被设备读出），不是合成侧——
     /// 合成领先播放一两句，从那儿取会让字幕比声音早。
-    func setCaptionSink(_ sink: (@Sendable (String?) -> Void)?) {
+    func setCaptionSink(_ sink: (@Sendable (CaptionFrame?) -> Void)?) {
         onCaption = sink
     }
 
-    /// 音频侧报「这句开始响」→ 转发给字幕（已在本 actor 上）。
-    private func emitCaption(_ text: String) {
-        onCaption?(text)
+    /// 音频侧报「这句开始响」（带着块号）→ 问身份层要「这一页的句子 + 第几句」→ 给字幕。
+    private func emitCaption(_ seq: UInt) async {
+        guard let ctx = await session.captionContext(forSeq: seq) else { return }
+        onCaption?(CaptionFrame(lines: ctx.lines, index: ctx.index))
     }
 
     /// 队列中等待播放的条数（/health 用）

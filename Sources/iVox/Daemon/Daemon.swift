@@ -339,8 +339,8 @@ actor Daemon {
             CaptionPanel(service: overlay)
         }   // 面板是 @MainActor 类型，构造要在主线程
         captionPanel = panel
-        await queue.setCaptionSink { text in
-            Task { @MainActor in panel.update(text) }
+        await queue.setCaptionSink { frame in
+            Task { @MainActor in panel.update(frame) }
         }
         Log.info("播报字幕: 已开启")
     }

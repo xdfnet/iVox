@@ -98,7 +98,7 @@ public struct OverlayConfig: Codable, Sendable {
     /// 填 UUID 而不是序号/型号：同型号同分辨率的两块屏（两块 Redmi 27 NU）只有 UUID 认得出，
     /// 而这个 UUID 系统自己拿来记屏幕摆位——拔插、重启、改分辨率都不变。
     public var screen: String
-    /// 距屏幕可见区底边的点数（浮窗统一贴底）
+    /// 距**可见区底边**的点数（浮窗统一贴底；程序坞在底部时，可见区底边就是程序坞上沿）
     public var inset: Double
     /// 两层内容之间的距离（字幕在下、译文在上）
     public var gap: Double
@@ -126,7 +126,7 @@ public struct OverlayConfig: Codable, Sendable {
         self.maxHeightRatio = try c.decodeIfPresent(Double.self, forKey: .maxHeightRatio) ?? Self.default.maxHeightRatio
     }
 
-    public init(screen: String = "", inset: Double = 18, gap: Double = 8,
+    public init(screen: String = "", inset: Double = 20, gap: Double = 8,
                 padding: Double = 14, cornerRadius: Double = 10,
                 fontSize: Double = 16, maxWidth: Double = 600, maxHeightRatio: Double = 0.3) {
         self.screen = screen

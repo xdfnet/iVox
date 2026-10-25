@@ -37,7 +37,7 @@ Sources/iVox/          — 主程序 target
   EntryPoint.swift     — @main, ArgumentParser 子命令
 
   ── 七个能力域（目录与 README 功能表、ivox status 一一对应）──
-  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（**只管「有没有字幕这一行」**，其余交给浮窗服务）
+  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（**歌词式字幕**：把「这一页的句子 + 念到第几句」交给浮窗，逐字高亮自己算）
     TTS/               — 合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
   SpeechInput/         — 语音输入：右⌘ 录音 + ASR + 浮窗（事件由 HotKey 层送来）+ ClaudeAskService（ASR 出文后送问 Claude）
   Translation/         — 划词翻译（Opt+Z）：复制 → 翻译 → 交给浮窗服务两行（原文 + 译文）+ 朗读
@@ -47,7 +47,7 @@ Sources/iVox/          — 主程序 target
   Screen/              — 屏幕锁：ScreenControl（ivox lock / ivox unlock + Web 滑块，走 HID 真键）
 
   ── 基础设施（跨能力域）──
-  Overlay/             — 屏幕上那块 iVox 浮窗：**OverlayService 是公共服务**——一块载体（不是上下两个框）、排版、落点、选屏、去重（同一句话只显示一遍）、消失、以及背景音乐让路全归它；使用方只说「显示哪几行字」。`[overlay]` 段管钉屏与间距
+  Overlay/             — 屏幕上那块 iVox 浮窗：**OverlayService 是公共服务**——一块载体（不是上下两个框）、排版、落点、选屏、去重（同一句话只显示一遍）、消失、以及背景音乐让路全归它；使用方只说「显示哪几行字」（行里还能带一段**高亮区间**：卡拉OK式）。`[overlay]` 段管钉屏与间距
   HotKey/              — 键盘事件层：GlobalKeyTap（**收**键：独占 tap，按归属路由给上面几家）+ HidInjector（**发**键：往常驻 ESP32-S3 注入器发真硬件事件，串行队列）
   Network/             — SocketServer（Unix domain socket IPC）+ ConnectionHandler（帧解析与分派）
   Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop；装配与热键分派
