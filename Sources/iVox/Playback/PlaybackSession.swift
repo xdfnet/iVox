@@ -77,8 +77,6 @@ struct PlaybackSegment: Sendable {
 struct PlaybackCursor: Sendable {
     let seq: UInt
     let block: PlaybackBlock
-    /// 这一块是否属于加急段（Opt+Z 译文）——两条队列各有一套游标，`commit` 据此推进对的那条。
-    let isFront: Bool
 }
 
 actor PlaybackSession {
@@ -95,11 +93,6 @@ actor PlaybackSession {
     private static let recentTurnCapacity = 32
 
     private var segments: [PlaybackSegment] = []
-    /// 加急段（只有 Opt+Z 译文这一种）：**插到队首**，先于常规段播。
-    /// 单独一只列表而不是往 `segments` 头部插——序号单调递增，插在游标前面它就永远轮不到播；
-    /// 加急段自带一套游标（`frontCursor`），两段各走各的，语义清楚。
-    private var front: [PlaybackSegment] = []
-    private var frontCursor: UInt = 0
     /// 每块一个单调递增的号。
     private var nextSeq: UInt = 1
     /// 摞号发号器（资料室自编，见 `PlaybackSegment.localID`）。自增不复用，
@@ -154,11 +147,9 @@ actor PlaybackSession {
     /// 还有没有没播的块。
     var hasPending: Bool { nextCursor() != nil }
     /// 未播块总数（诊断用；深队列上是 O(n)，别放进热路径）。
-    var pendingCount: Int { count(in: front, after: frontCursor) + count(in: segments, after: cursorSeq) }
-
-    private func count(in list: [PlaybackSegment], after cursor: UInt) -> Int {
+    var pendingCount: Int {
         var n = 0
-        for s in list { for p in s.pages { n += p.blocks.filter { $0.seq > cursor }.count } }
+        for s in segments { for p in s.pages { n += p.blocks.filter { $0.seq > cursorSeq }.count } }
         return n
     }
     /// 是否还有没收尾的摞（还在生成、没说「说完了」）。宽限到点就是给它们盖印的。
@@ -167,24 +158,19 @@ actor PlaybackSession {
     /// 第一块。此前不算 → 流式轮一开、队列是空的，daemon 立刻报「播报结束：队列已空，字幕收起」——
     /// 那是句假话（字幕跟着抖一下，`A-tail` 用例也因此假红）。
     var anyUnsealed: Bool {
-        segments.contains { !$0.sealed } || front.contains { !$0.sealed } || !turnStack.isEmpty
+        segments.contains { !$0.sealed } || !turnStack.isEmpty
     }
     /// 未收尾的摞号（诊断日志用）。
     var unsealedIDs: [String] {
-        segments.filter { !$0.sealed }.compactMap(\.turnID) + front.filter { !$0.sealed }.compactMap(\.turnID)
+        segments.filter { !$0.sealed }.compactMap(\.turnID)
     }
 
     /// 游标之后的第一块——下一个该播的。**不把它从容器里取走**。
     func nextCursor() -> PlaybackCursor? {
-        if let c = first(in: front, after: frontCursor, isFront: true) { return c }
-        return first(in: segments, after: cursorSeq, isFront: false)
-    }
-
-    private func first(in list: [PlaybackSegment], after cursor: UInt, isFront: Bool) -> PlaybackCursor? {
-        for s in list {
+        for s in segments {
             for p in s.pages {
-                for b in p.blocks where b.seq > cursor {
-                    return PlaybackCursor(seq: b.seq, block: b, isFront: isFront)
+                for b in p.blocks where b.seq > cursorSeq {
+                    return PlaybackCursor(seq: b.seq, block: b)
                 }
             }
         }
@@ -197,12 +183,10 @@ actor PlaybackSession {
     /// 按块号找它所在的那一页（块 = 一句）。页里已经念过的块仍在（只有掀页才整页删），
     /// 所以这一页的句子就是「歌词的上下文」。摞号用来认「换了一轮」。
     func captionContext(forSeq seq: UInt) -> (lines: [String], index: Int, stack: Int)? {
-        for list in [front, segments] {
-            for seg in list {
-                for page in seg.pages {
-                    if let i = page.blocks.firstIndex(where: { $0.seq == seq }) {
-                        return (page.blocks.map(\.text), i, seg.localID)
-                    }
+        for seg in segments {
+            for page in seg.pages {
+                if let i = page.blocks.firstIndex(where: { $0.seq == seq }) {
+                    return (page.blocks.map(\.text), i, seg.localID)
                 }
             }
         }
@@ -211,20 +195,16 @@ actor PlaybackSession {
 
     /// 块属于哪一摞。**相邻两块摞号不同 = 换了一轮**（两摞连着读时要留个分界）。
     func stackID(forSeq seq: UInt) -> Int? {
-        for list in [front, segments] {
-            for seg in list {
-                if seg.pages.contains(where: { $0.blocks.contains(where: { $0.seq == seq }) }) {
-                    return seg.localID
-                }
+        for seg in segments {
+            if seg.pages.contains(where: { $0.blocks.contains(where: { $0.seq == seq }) }) {
+                return seg.localID
             }
         }
         return nil
     }
 
     func commit(_ cursor: PlaybackCursor) {
-        if cursor.isFront {
-            if cursor.seq > frontCursor { frontCursor = cursor.seq }
-        } else if cursor.seq > cursorSeq {
+        if cursor.seq > cursorSeq {
             cursorSeq = cursor.seq
         }
     }
@@ -256,30 +236,23 @@ actor PlaybackSession {
     }
 
     /// 发声点所在的段。返回 nil = 还没出声过（冷启动）或那一摞已被删除。
-    private func audibleStackTarget() -> (isFront: Bool, index: Int, turnID: String?)? {
-        guard let hit = locate(seq: audibleSeq) else { return nil }
-        return (hit.isFront, hit.segIndex, (hit.isFront ? front : segments)[hit.segIndex].turnID)
+    private func audibleStackTarget() -> (index: Int, turnID: String?)? {
+        guard let i = locate(seq: audibleSeq) else { return nil }
+        return (i, segments[i].turnID)
     }
 
     /// 发声点所在的页（页号由资料室自编，永远有值）。
-    private func audiblePageTarget() -> (isFront: Bool, segIndex: Int, pageIndex: Int, pageNo: Int)? {
-        guard let hit = locate(seq: audibleSeq) else { return nil }
-        let list = hit.isFront ? front : segments
-        guard let j = list[hit.segIndex].pages.firstIndex(where: { $0.blocks.contains { $0.seq == audibleSeq } })
+    private func audiblePageTarget() -> (segIndex: Int, pageIndex: Int, pageNo: Int)? {
+        guard let i = locate(seq: audibleSeq) else { return nil }
+        guard let j = segments[i].pages.firstIndex(where: { $0.blocks.contains { $0.seq == audibleSeq } })
         else { return nil }
-        return (hit.isFront, hit.segIndex, j, list[hit.segIndex].pages[j].localID)
+        return (i, j, segments[i].pages[j].localID)
     }
 
-    /// 按 seq 在两个容器里反查坐标。seq 全局单调（`pages(from:)` 统一盖章），
-    /// 所以一个号在两个容器里至多命中一次。
-    private func locate(seq: UInt) -> (isFront: Bool, segIndex: Int)? {
+    /// 按 seq 在容器里反查段下标。seq 全局单调（`stamp` 统一盖章），至多命中一次。
+    private func locate(seq: UInt) -> Int? {
         guard seq > 0 else { return nil }
-        func segIndex(in list: [PlaybackSegment]) -> Int? {
-            list.firstIndex { $0.pages.contains { p in p.blocks.contains { $0.seq == seq } } }
-        }
-        if let i = segIndex(in: front) { return (true, i) }
-        if let i = segIndex(in: segments) { return (false, i) }
-        return nil
+        return segments.firstIndex { $0.pages.contains { p in p.blocks.contains { $0.seq == seq } } }
     }
 
     // MARK: - 起点（过程干预只许看这两个 getter）
@@ -303,13 +276,11 @@ actor PlaybackSession {
     ///
     /// 先看发声点（准确，2026-10-17 引入）；发声点还没有记录时退回**队首**——
     /// 用户还没听到任何声音，即将播的那个就是他要听的。
-    /// 加急段（Opt+Z 译文）排在 `front`、先播，所以无发声记录时它优先。
     ///
     /// - Returns: `nil` = 容器里没有任何内容（队列真空 / 设备播空），此时过程干预退化成「只掐不掀」。
-    func headStackTarget() -> (isFront: Bool, index: Int, turnID: String?)? {
-        if let a = audibleStackTarget() { return (a.isFront, a.index, a.turnID) }
-        if let i = firstContentIndex(in: front) { return (true, i, front[i].turnID) }
-        if let i = firstContentIndex(in: segments) { return (false, i, segments[i].turnID) }
+    func headStackTarget() -> (index: Int, turnID: String?)? {
+        if let a = audibleStackTarget() { return (a.index, a.turnID) }
+        if let i = firstContentIndex(in: segments) { return (i, segments[i].turnID) }
         return nil
     }
 
@@ -320,9 +291,9 @@ actor PlaybackSession {
     var headPageNo: Int? {
         if let p = audiblePageTarget() { return p.pageNo }
         guard let head = headStackTarget(),
-              let j = firstContentPageIndex(in: (head.isFront ? front : segments)[head.index])
+              let j = firstContentPageIndex(in: segments[head.index])
         else { return nil }
-        return (head.isFront ? front : segments)[head.index].pages[j].localID
+        return segments[head.index].pages[j].localID
     }
 
 
@@ -382,12 +353,12 @@ actor PlaybackSession {
             Log.info("丢弃：turn=\(note) 那一摞已被放弃，它后续来的字不再开口（墓碑）")
             return .dead
         }
-        guard let hit = segmentIndex(localID: stack) else {
+        guard let idx = segmentIndex(localID: stack) else {
             Log.debug("第\(stack)摞已不在（被回收），外部号=\(note ?? "-")")
             return .gone
         }
         let blocks = stamp(jobs)
-        let joined = (hit.isFront ? front : segments)[hit.index].pages
+        let joined = segments[idx].pages
         let lastPage = joined.last
         // 端说过「说完了」就别再揭回「还在说」——收尾是终判，迟到的正文照播（一个字不丢），
         // 但不再拖住收尾（字幕/音量）。宽限封的印照旧可以揭（宽限只是猜「说完了」，不是判死）。
@@ -396,24 +367,14 @@ actor PlaybackSession {
         if let pageNote, let lastPage, lastPage.externalID == pageNote {
             var merged = lastPage
             merged.blocks.append(contentsOf: blocks)
-            if hit.isFront {
-                front[hit.index].pages[front[hit.index].pages.count - 1] = merged
-                if reopen { front[hit.index].sealed = false }
-            } else {
-                segments[hit.index].pages[segments[hit.index].pages.count - 1] = merged
-                // 又来货了：揭掉空闲宽限封的印（宽限只是猜「说完了」，不是判死）
-                if reopen { segments[hit.index].sealed = false }
-            }
+            segments[idx].pages[segments[idx].pages.count - 1] = merged
+            // 又来货了：揭掉空闲宽限封的印（宽限只是猜「说完了」，不是判死）
+            if reopen { segments[idx].sealed = false }
             lastFiling = SegmentFiling(stack: stack, turnID: note, pages: [merged.localID])
         } else {
             let page = PlaybackPage(localID: nextPageLocalID(), externalID: pageNote, blocks: blocks)
-            if hit.isFront {
-                front[hit.index].pages.append(page)
-                if reopen { front[hit.index].sealed = false }
-            } else {
-                segments[hit.index].pages.append(page)
-                if reopen { segments[hit.index].sealed = false }
-            }
+            segments[idx].pages.append(page)
+            if reopen { segments[idx].sealed = false }
             lastFiling = SegmentFiling(stack: stack, turnID: note, pages: [page.localID])
         }
         signal()
@@ -421,11 +382,8 @@ actor PlaybackSession {
     }
 
     /// 按助理自编的摞号定位段——**这是助理唯一允许的段查找方式**。
-    /// 加急段（Opt+Z 译文）与普通段共用同一个号空间。
-    private func segmentIndex(localID: Int) -> (isFront: Bool, index: Int)? {
-        if let i = front.firstIndex(where: { $0.localID == localID }) { return (true, i) }
-        if let i = segments.firstIndex(where: { $0.localID == localID }) { return (false, i) }
-        return nil
+    private func segmentIndex(localID: Int) -> Int? {
+        segments.firstIndex { $0.localID == localID }
     }
 
     /// 无分组的普通播报（`ivox speak` / hook 终稿）：**每次入队自成一段**。
@@ -504,9 +462,6 @@ actor PlaybackSession {
         for i in segments.indices where segments[i].turnID == id {
             segments[i].sealed = true; hit = true
         }
-        for i in front.indices where front[i].turnID == id {
-            front[i].sealed = true; hit = true
-        }
         // 记一笔「端说过说完了」：**这一记是终判**，迟到的正文照播，但不再揭回「还在说」
         // （见 `finishedTurns` 的注释——收尾与正文是两条通路，先后不保证）。
         if !finishedTurns.contains(id) {
@@ -524,7 +479,7 @@ actor PlaybackSession {
     /// 用户取消这一轮（pi 空流 `{cancel}`）：丢掉该轮内容并立墓碑，其后续增量一律不开口。
     @discardableResult
     func cancelTurn(_ id: String) -> Bool {
-        let dropped = sweepSegments(matching: id, in: &segments) + sweepSegments(matching: id, in: &front)
+        let dropped = sweepSegments(matching: id, in: &segments)
         bury(id)
         if let i = turnStack.firstIndex(of: id) { turnStack.remove(at: i) }
         signal()
@@ -550,7 +505,7 @@ actor PlaybackSession {
     @discardableResult
     func takeHeadStack() -> (localID: Int, turnID: String?, dropped: Int)? {
         guard let head = headStackTarget() else { return nil }
-        let seg = (head.isFront ? front : segments)[head.index]
+        let seg = segments[head.index]
         let dropped = seg.blockCount
         // **删除不 signal**：signal 的含义是「新内容来了，宽限不必再等」。掀是在**删**内容——
         // 发了 signal 会把宽限计时器唤醒，让它误判「来新货了、别盖印」，宽限就此作废而没有
@@ -558,8 +513,7 @@ actor PlaybackSession {
         //
         // 顺手把它前面那些「已播完、一块没剩」的段一并清掉：它们从没被用户作废，
         // **不立墓碑**，纯粹是历史垃圾（`segments` 只增不减，不清就会越堆越多）。
-        if head.isFront { front.removeFirst(head.index + 1) }
-        else { segments.removeFirst(head.index + 1) }
+        segments.removeFirst(head.index + 1)
         // 只给正在听的那摞立墓碑：它才是用户明确放弃的。**只有外部 turn_id 能立墓碑**——
         // 无编号的稿子一次性送完、不会再有后续增量，没东西可拦。
         if let id = head.turnID { bury(id) }
@@ -576,20 +530,14 @@ actor PlaybackSession {
     @discardableResult
     func takeHeadPage() -> (pageNo: Int, dropped: Int)? {
         // 起点先看发声点；还没出声过（冷启动）才退回队首的那一页。
-        let hit: (isFront: Bool, seg: Int, page: Int)
+        let hit: (seg: Int, page: Int)
         if let a = audiblePageTarget() {
-            hit = (a.isFront, a.segIndex, a.pageIndex)
+            hit = (a.segIndex, a.pageIndex)
         } else if let h = headStackTarget(),
-                  let j = firstContentPageIndex(in: (h.isFront ? front : segments)[h.index]) {
-            hit = (h.isFront, h.index, j)
+                  let j = firstContentPageIndex(in: segments[h.index]) {
+            hit = (h.index, j)
         } else {
             return nil
-        }
-        if hit.isFront {
-            let page = front[hit.seg].pages[hit.page]
-            front[hit.seg].pages.removeFirst(hit.page + 1)
-            if front[hit.seg].isEmpty { front.remove(at: hit.seg) }
-            return (page.localID, page.blocks.count)
         }
         let page = segments[hit.seg].pages[hit.page]
         segments[hit.seg].pages.removeFirst(hit.page + 1)
@@ -629,7 +577,7 @@ actor PlaybackSession {
             }
             return n
         }
-        return takeSpent(&front) + takeSpent(&segments)
+        return takeSpent(&segments)
     }
 
     /// 全掀：清空容器，**当前存在的所有摞**立墓碑。
@@ -649,26 +597,11 @@ actor PlaybackSession {
     func discardAll() -> [String] {
         var ids = turnStack
         ids += segments.compactMap(\.turnID)
-        ids += front.compactMap(\.turnID)
         turnStack.removeAll()
         segments.removeAll()
-        front.removeAll()
         ids.forEach { bury($0) }
         signal()
         return ids
-    }
-
-    /// 加急入队（Opt+Z 译文）：插到队首，**只掐在播、其余排队内容一律保留**。
-    /// 无分组天生收尾（它不是「还在生成」的摞）。
-    @discardableResult
-    func appendFirst(_ jobs: [PlaybackBlock]) -> Bool {
-        guard !jobs.isEmpty else { return false }
-        let seg = makeSegment(turnID: nil, source: jobs[0].source, sealed: true,
-                              pages: newPage(jobs, pageNote: nil))
-        front.insert(seg, at: 0)
-        lastFiling = SegmentFiling(stack: seg.localID, turnID: nil, pages: seg.pages.map(\.localID))
-        signal()
-        return true
     }
 
     /// 建一段并从资料室的发号器取号——**任何段都不许绕过它**，
@@ -757,7 +690,6 @@ actor PlaybackSession {
         turnStack.removeAll()
         guard !ids.isEmpty || !declared.isEmpty else { return [] }
         for i in segments.indices { segments[i].sealed = true }
-        for i in front.indices { front[i].sealed = true }
         let all = ids + declared
         Log.info("空闲 \(Int(idleGraceSeconds))秒无新内容，判定说完了：盖上 \(all.joined(separator: ","))")
         signal()

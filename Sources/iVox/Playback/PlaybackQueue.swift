@@ -608,14 +608,14 @@ actor PlaybackQueue {
                     try Task.checkCancellation()
 
                     // **换摞留个空隙**：两摞连着读分不清哪是一轮的开头（用户反馈）。
-                    // 换摞时插一小段静音——像换段换气。加急段（Opt+Z 译文插队）**不插**：
-                    // 用户主动要它立刻响，让它等半秒是添乱。
-                    if !cursor.isFront, let stack = await session.stackID(forSeq: cursor.seq),
+                    // 换摞时插一小段静音——像换段换气。
+                    // （Opt+Z 译文不走这里：它有独立节点，不在队列里，故不必豁免。）
+                    if let stack = await session.stackID(forSeq: cursor.seq),
                        let last = lastStackID, stack != last {
                         Log.debug("换摞: 插 \(Int(Self.stackGapSeconds * 1000)) 毫秒静音（摞 \(last) → \(stack)）")
                         await player.writeSilence(seconds: Self.stackGapSeconds)
                     }
-                    if !cursor.isFront { lastStackID = await session.stackID(forSeq: cursor.seq) }
+                    lastStackID = await session.stackID(forSeq: cursor.seq)
 
                     // 预取门控：已排队音频足够多就先别开下一句，等设备消费到低水位。
                     try await player.awaitPrefetchCapacity()

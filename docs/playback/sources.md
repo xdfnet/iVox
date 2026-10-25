@@ -44,7 +44,7 @@
 | **B. hook 增量分批** | 工具渲染时按行批触发 hook，每批带增量 | Claude Code（MessageDisplay） | 每批 payload 里带 `turn_id` + `message_id`（缺失时回落）；Stop 只有 `session_id`，靠 `lastturn/` 反查 | 外部 Stop 钩子（**可能丢**），丢了靠宽限兜底 |
 | **C. hook 终了一次** | 工具结束时触发 hook，payload 带完整回复 | 暂无接入方；**任何能配 stop hook 且 payload 有 `last_assistant_message` 的工具**都能接 | 拿 payload 里的 turn 号当摞号，没有就回落 `session_id` 反查；**一摞一页、不带 `--page`**——与 `ivox speak` 同形 | Stop 即完整，无缺口 |
 | **D. 一次性 speak** | 命令行丢一段文本进来 | `ivox speak`（人工、脚本） | 无 | 发完即完整 |
-| **E. 插队播报** | 用户主动开口，要立刻响 | Opt+Z 划词译文 | 无 | 发完即完整，**插队到队首** |
+| **E. 插队播报** | 用户主动开口，要立刻响 | Opt+Z 划词译文 | 无 | 发完即完整；**不进队列**，主节点暂停 + 独立节点念完接着播 |
 
 **D 是陌生人，不插队。** 哪怕是用户自己在终端敲的，纸进了队列也没有名牌，
 没人说得清它是哪一摞的后半截——老老实实排队。要插队必须显式 `--now`，

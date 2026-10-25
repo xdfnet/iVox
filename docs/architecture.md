@@ -188,14 +188,14 @@ Daemon (actor)
 
 `PlaybackSession`（actor）：唯一持有容器与全部身份记账。容器三层——
 **段 Segment**（一次回复 = 一摞 / 普通播报）→ **页 Page**（一条消息）→ **块 Block**（1~80 字合成单位），
-外加一个独立的**加急段**列表（`front`）排在最前——⚠️ **2026-10-26 起没有调用方了**：
-译文改走独立播放节点、压根不进队列（见下节），这套双游标结构暂时留着没删。
+（**容器只有一层**：译文不上桌——它走独立播放节点，压根不进队列，见下节。
+早先它会插到队首，于是容器有「加急段 + 常规摞」两层、双游标，2026-10-26 整套删掉。）
 墓碑 `deadTurns` 拦用户显式作废的摞的后续增量（**右⌘说话不算作废**——它是「暂停不删」，不清场也不埋）。
 
 `PlaybackQueue`（actor）：只管播放。连续管道 `processNext` 逐块 `synthesizeStream → player.write`，
 块间不 drain（设备零停顿）；**所有路径的收尾收敛到唯一的 `pumpOrSettle()`**（有活补起管道 /
 没活收字幕 / 仍有未封的段就起空闲宽限）；`pipelineSeq` 代号作废在途管道。打断权只归用户快捷键，
-三档全是「掐 + 掀」，Opt+Z 译文走插队。
+三档全是「掐 + 掀」，Opt+Z 译文走「暂停 + 独立节点念 + 念完接着播」。
 
 **取舍理由、维护约束与踩过的坑一律见 [`playback/queue.md`](playback/queue.md)**（本节只留地图，
 细节在两处重复就会各自漂移——2026-10-17 的架构文档漂移就是这么发生的）。
@@ -345,7 +345,7 @@ Daemon (actor)
   - ⚠️ **macOS 给同型号两块屏起的编号不是「第几块」**：`localizedName` 里「Redmi 27 NU (2)」是**上层那块**（主屏、菜单栏那块），「(1)」是下层那块——别照 `system_profiler` 的列出顺序数，那儿是另一回事
 
 - 翻译走 `iVoxKit.TranslationService`（`actor`）：Google 主/备**双通道容灾**，或 OpenAI 兼容；**直连失败自动走兜底代理**（`translation.proxyURL`），直连用短超时探测（`directProbeTimeoutSeconds`），成功后记住「该走代理」
-- 朗读走 `PlaybackQueue.speakUserInitiated()`：**插队**——掐掉在播的那一句让译文立刻响，但**不掀桌**（其余段全保留、流式轮不作废）。与 hook 汇报的「只排队」语义相反
+- 朗读走 `PlaybackQueue.speakUserInitiated()`：**主节点只暂停**（缓冲原样留着、正在念的那一句不掐断）→ 译文从**独立播放节点**出声 → 念完从原处接着播，字幕也接回原来那一页。**译文不进队列** → 队列顺序一点没变、其余内容一个不丢。与 hook 汇报的「只排队」语义相反
 - 浮窗**刻意不做**拖拽 / 点击外部关闭 / 文本选择——这三样都要 key window，当前无 `NSApplication` 事件循环的形态给不了
 - CLI 侧 `ivox translate <text> [--selection] [--json]`**不依赖 daemon**，是整条链路的可验证接缝
 

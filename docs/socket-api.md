@@ -298,7 +298,7 @@ daemon，daemon 没起来就发不出解锁键。解锁还要求系统**没睡�
 # TTS
 ivox speak "你好"                          # 纯文本
 ivox speak -s myapp -v mizai "hello"      # 指定来源和音色
-ivox speak --now "打断先念这句"            # 插队：掐掉在播的、这句先念，念完接着播原来的（= {now:1}）
+ivox speak --now "打断先念这句"            # 插队：主节点只暂停、这句从独立节点念，念完接着播原来的（= {now:1}）
 
 # ASR
 ivox listen < 录音.wav                     # stdin

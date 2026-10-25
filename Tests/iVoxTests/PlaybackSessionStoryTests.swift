@@ -135,16 +135,21 @@ final class PlaybackSessionStoryTests: XCTestCase {
                        "后到的一字纸得排在长摞后面 —— 排队从不插队")
     }
 
-    /// **只有翻译能插队**，而且它插完就走，原顺序原样接回。
-    /// 这是插队唯一的合法形态：让路，不是丢弃。
-    func testOnlyTranslationJumpsTheQueueAndTheRestResumes() async {
+    /// **译文不上桌**（2026-10-26 改）：它走播报员的另一张嘴当场念，
+    /// **队列里一个位置都不占**。所以桌上的纸从头到尾就是原来那些——
+    /// 这条钉的是「译文不进容器」：容器里若多出译文那一摞，
+    /// 用户按 Ctrl+2 掀摞就可能掀到一张他没在听的纸。
+    func testTranslationNeverEntersTheQueue() async {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["第一句", "第二句", "第三句"]])])
-        _ = await s.appendFirst([block("译文", source: "translate")])
+        // 译文走的是播报器的独立节点，容器这一层压根没有它的入口：
+        // 入队前后的桌上纸数必须一模一样。
+        let before = await s.pendingCount
 
         let order = await spokenOrder(s)
-        XCTAssertEqual(order, ["译文", "第一句", "第二句", "第三句"],
-                       "译文插最前，念完原文从断点接回，一个字不少")
+        XCTAssertEqual(order, ["第一句", "第二句", "第三句"],
+                       "译文不上桌，念的顺序就是原来那摞 —— 一个字不少、一个字不多")
+        XCTAssertEqual(before, 3, "桌上就这三张纸")
     }
 
     /// 麦克风不在这场戏里：它让路，但**不递纸**——你说的那句是给 AI 的，不是给他念的。
@@ -164,27 +169,27 @@ final class PlaybackSessionStoryTests: XCTestCase {
 
     // MARK: - 清单 5：插队是「让路」还是被写成「丢弃」？
 
-    /// 插队的那摞念完之后，**队首回到原来那一摞**，而不是被跳过。
+    /// 插队让完路，**队首还是原来那一摞**——译文那一下没把起点挪走。
+    /// 译文不上桌，所以「正在听的摞」从头到尾都是 gA。
     func testJumpedStackResumesTheOriginalOrder() async {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["A1", "A2"]]),
                                (id: "gB", pages: [["B1", "B2"]])])
-        _ = await s.appendFirst([block("译文", source: "translate")])
+        // 译文在播报员那边念，容器不受影响：起点仍是 gA。
 
         let taken = await s.takeHeadStack()?.turnID
         let after = await headStackID(s)
-        XCTAssertNil(taken, "队首应是加急段（无分组）")
-        XCTAssertEqual(after, "gA", "加急段念完了，常规摞顶上")
+        XCTAssertEqual(taken, "gA", "起点被译文挪走了 —— 桌上压根没有译文那一摞")
+        XCTAssertEqual(after, "gB", "掀完 gA 自然落到 gB")
     }
 
     /// 清单 4 已从**念的顺序**上钉了「原文从断点接回」，这条补容器视角：
-    /// 插队那一摞被领走之后，常规摞一张都没少。
+    /// 译文让完路，原摞一张都没少。
     func testJumpingDoesNotDropTheRestOfTheQueue() async {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["A1", "A2", "A3"]])])
-        _ = await s.appendFirst([block("译文", source: "translate")])
+        // 译文念完，播报员从原处接着念 —— 容器这边一张纸都没少。
 
-        _ = await s.takeHeadStack()                     // 领走译文
         let rest = await spokenOrder(s)
         XCTAssertEqual(rest, ["A1", "A2", "A3"], "插队只让路，原摞一个字都不许少")
     }
