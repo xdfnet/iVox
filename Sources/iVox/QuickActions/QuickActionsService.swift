@@ -24,14 +24,17 @@ import iVoxKit
 @MainActor
 final class QuickActionsService {
     private static let ghosttyApp = URL(fileURLWithPath: "/Applications/Ghostty.app")
-    private static let ghosttyBundleID = "com.mitchellh.ghostty"
 
     func handle(_ hotKey: HotKeyAction, at location: CGPoint) async {
         switch hotKey {
         case .translate:
             break   // 不属于本域；Daemon 分派时已排除，这里只是穷举
         case .openTerminal:
-            await openTerminalOrFocus()
+            // 在 Finder 选中项处新开一个终端窗口。早先这里有个「Ghostty 已在跑就只聚焦、
+            // 不开新窗口」的分支（怕连按五下开五个终端），但它不切目录——用户选了文件夹按
+            // Opt+Q 却只看到老窗口被叫到前面，等于「没反应」（2026-10-25 实测反馈）。
+            // 这一档的语义就是「在哪儿选就在哪儿开」，复用老窗口反而丢了这个语义。
+            await openTerminal(running: nil)
         case .openTerminalClaude:
             await openTerminal(running: "claude")
         case .openTerminalCodex:
@@ -49,20 +52,7 @@ final class QuickActionsService {
 
     // MARK: - 开终端
 
-    /// 不带命令的 Opt+Q：**Ghostty 已经在跑就把它叫到前面，不再开新窗口**。
-    /// 连按五下开五个终端是最明显的「后面干活的压力」，而这一档本来就没命令要执行，
-    /// 复用没有副作用。代价：不再保证落在 Finder 当前目录（已在跑的窗口目录未知，
-    /// 取它要向 Ghostty 要 Automation 授权，不值当）——需要指定目录用 ⌘⇧↩ 新开。
-    private func openTerminalOrFocus() async {
-        if let app = NSRunningApplication.runningApplications(
-            withBundleIdentifier: Self.ghosttyBundleID).first {
-            let ok = app.activate(options: [.activateAllWindows])
-            Log.info("QuickActions: Ghostty 已在运行，\(ok ? "已聚焦" : "聚焦失败")（不再开新窗口）")
-            return
-        }
-        await openTerminal(running: nil)
-    }
-
+    /// 不带命令的 Opt+Q：**在 Finder 选中项处新开一个终端窗口**。
     private func openTerminal(running command: String?) async {
         guard let dir = finderPath(preferContainer: true), !dir.isEmpty else {
             Log.warn("QuickActions: 取不到 Finder 目录")
