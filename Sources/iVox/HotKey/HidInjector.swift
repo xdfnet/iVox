@@ -36,7 +36,7 @@ enum HidError: LocalizedError, Sendable {
 actor HidInjector {
     static let shared = HidInjector()
 
-    /// 设备地址（静态 IP，见 esp32-hid-lab 的 README）。
+    /// 设备地址（静态 IP，见 esp32-lab 的 README）。
     private static let host = "192.168.100.3"
     private static let port = 80
 
