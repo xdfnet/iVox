@@ -2,6 +2,17 @@
 
 ## 未发布 — 2026-10-25
 
+- **开终端改用 Ghostty 官方写法 `--command=shell:`** — 飞哥指出这是官方文档里的写法，实测
+  （Ghostty 1.3.1）确认比原先的 `--initial-command=/bin/zsh -lc <cmd>` 更直接：
+  - `shell:` 后的命令在**真 tty**（`/dev/ttyNN`）里跑，`cwd` 即 `--working-directory`，
+    **PATH 完整**（含 `/opt/homebrew/bin`、`~/.local/bin`）——原先那层 `zsh -lc`
+    是为补 PATH 而加的，实测**不需要**（早先「`--initial-command` 走
+    `bash --noprofile --norc -c`、拿不到用户 PATH」的判断已过期）
+  - 顺手修正一条**记岔的坑**：`open --args` 并不会拆坏含空格的参数，真相是
+    **不加引号时被本机 shell 先拆了**；整体加引号边界完好
+  - `docs/architecture.md` 同步：开终端参数、`--command` 用法与 PATH 结论都更新；
+    另修一条**已过期**的现状描述（`Opt+Q` 早改成「总是新开窗口」，文档还写着「已在跑就聚焦」）
+
 - **快捷键默认值整体重排** — 飞哥给了一份新的 `[hotkeys]` 块要求「按这个更新默认值」。
   新默认：**Opt+Q** 开终端 / **Opt+A** 开终端跑 `claude` / **Opt+X** codex / **Opt+S** pi /
   **Opt+C** 复制路径 / **Opt+Z** 划词翻译；打断三档与右⌘ 不动。

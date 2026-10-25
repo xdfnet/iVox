@@ -316,10 +316,10 @@ Daemon (actor)
 `Sources/iVox/QuickActions/QuickActionsService.swift`
 
 - `Opt+Q` 在 Finder 当前目录开终端；`Opt+A`/`Opt+X`/`Opt+S` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
-- `Opt+Q`（不带命令）在 Ghostty **已经在跑时改为聚焦**而非开新窗口——连按五下开五个终端是最明显的「后面干活的压力」。取舍：复用时不保证落在 Finder 当前目录（取已在跑的窗口目录要向 Ghostty 要 Automation 授权，不值当）。带命令的三个**仍开新实例**（见下条实测坑②，这条不能破）
-- 开终端走 **Ghostty**（`--working-directory` + `--initial-command` 是它的原生 CLI 参数）：一条 LaunchServices 调用就够，**不需要**临时 `.command` 文件，也不沾 Terminal 的 Automation 授权
-- 三个实测坑：① 参数必须经 `NSWorkspace.OpenConfiguration.arguments`（数组）下发——命令行 `open --args` 会把**含空格的参数拆坏**；② **必须配 `createsNewApplicationInstance`**，复用已运行的 Ghostty 实例时参数会被**静默忽略**（命令根本不跑）；③ **不用 `-e`**——它每次弹 macOS 的「Allow Ghostty to execute」确认框，Ghostty 目前无配置项可关
-- 命令写作 `--initial-command=/bin/zsh -lc <cmd>`：该参数默认经 `/bin/bash --noprofile --norc -c` 执行，套一层 login shell 才拿得到用户 PATH（`/opt/homebrew/bin`、`~/.local/bin` 都不在 GUI 进程的最小 PATH 里）；另配 `--wait-after-command=true` 让命令退出后**保留窗口**（Ghostty 默认关窗，与原先 Terminal 的行为不一致，退出 claude 时会看不到最后的输出）
+- `Opt+Q`（不带命令）**总是新开窗口**（2026-10-25 改）：早先有「Ghostty 已经在跑就只聚焦、不开新窗口」的分支（怕连按五下开五个终端），但它不切目录——用户选了文件夹按 Opt+Q 却只看到老窗口被叫到前面，等于「没反应」。这一档的语义就是「在哪儿选就在哪儿开」。带命令的三个同理，都走新实例（见下条实测坑②，这条不能破）
+- 开终端走 **Ghostty**（`--working-directory` + `--command=shell:` 是它的原生 CLI 参数）：一条 LaunchServices 调用就够，**不需要**临时 `.command` 文件，也不沾 Terminal 的 Automation 授权
+- 三个实测坑：① 参数必须经 `NSWorkspace.OpenConfiguration.arguments`（数组）下发——命令行 `open --args` 只有**整体加引号**时才保住含空格参数的边界（2026-10-25 实测：不加引号是被**本机 shell** 拆掉的，不是 `open` 拆的）；② **必须配 `createsNewApplicationInstance`**，复用已运行的 Ghostty 实例时参数会被**静默忽略**（命令根本不跑）；③ **不用 `-e`**——它每次弹 macOS 的「Allow Ghostty to execute」确认框，Ghostty 目前无配置项可关
+- 命令写作 `--command=shell:<cmd>`（Ghostty 官方写法，`shell:` 后面是一整条命令、不再套 `bash -c`）。实测 1.3.1：它在**真 tty**（`/dev/ttyNN`）里跑，PATH 完整（含 `/opt/homebrew/bin`、`~/.local/bin`），cwd 即 `--working-directory`——**不必**再套 login shell 去补 PATH（早先「`--initial-command` 走 `bash --noprofile --norc -c`、拿不到用户 PATH」那条判断已过期）。另配 `--wait-after-command=true` 让命令退出后**保留窗口**（Ghostty 默认关窗，与原先 Terminal 的行为不一致，退出 claude 时会看不到最后的输出）
 - 取 Finder 路径仍走 AppleScript（唯一需要 Automation 授权的点，面积很小）
 - 选中项是**文件**时：开终端取它的**所在目录**，复制路径取**文件本身**
 

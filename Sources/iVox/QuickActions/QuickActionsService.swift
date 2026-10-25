@@ -67,12 +67,14 @@ final class QuickActionsService {
         // 的行为就是留着窗口，这里对齐它。
         var args = ["--working-directory=\(dir)", "--wait-after-command=true"]
         if let command {
-            // 用 `--initial-command` 而非 `-e`：**`-e` 每次都会弹 macOS 的
+            // 用 `--command=shell:<cmd>`（Ghostty 官方写法）而非 `-e`：**`-e` 每次都会弹 macOS 的
             // 「Allow Ghostty to execute "/bin/zsh"?」确认框**（Ghostty 的安全机制，
-            // 目前没有配置项能关，issue #8648 仍在讨论），initial-command 不走那条通道。
-            // 它默认经 `/bin/bash --noprofile --norc -c` 执行，所以这里再套一层 login shell
-            // 才拿得到用户 PATH（/opt/homebrew/bin、~/.local/bin 都不在 GUI 的最小 PATH 里）。
-            args.append("--initial-command=/bin/zsh -lc \(command)")
+            // 目前没有配置项能关，issue #8648 仍在讨论），`--command` 不走那条通道。
+            // 实测 1.3.1：`shell:` 后的命令在**真 tty**（/dev/ttyNN）里跑，PATH 完整（含
+            // /opt/homebrew/bin、~/.local/bin），cwd 即 `--working-directory`——不必再套
+            // `zsh -lc` 去补 PATH（早先「initial-command 走 bash --noprofile、拿不到用户
+            // PATH」那条注释已过期）。
+            args.append("--command=shell:\(command)")
         }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = args
