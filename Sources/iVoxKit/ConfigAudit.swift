@@ -58,6 +58,11 @@ public enum ConfigAudit {
         "playback.captionScreen": "captions.screen",
         "captions.screen": "overlay.screen",
         "captions.inset": "overlay.inset",
+        "captions.padding": "overlay.padding",
+        "captions.cornerRadius": "overlay.cornerRadius",
+        "captions.fontSize": "overlay.fontSize",
+        "captions.maxWidth": "overlay.maxWidth",
+        "captions.maxHeightRatio": "overlay.maxHeightRatio",
     ]
 
     /// **已作废**的键：老配置里还有它，但这个能力已经没有了。

@@ -2,7 +2,8 @@ import AppKit
 import Foundation
 import iVoxKit
 
-// 汽水音乐音量让路：播报开始时把它的应用内音量降几格，播报结束再升回去。
+// 汽水音乐音量让路：iVox 占用注意力时（正在播报，或浮窗在屏上）把它的应用内音量降几格，
+// 闲下来再升回去。谁在占用由浮窗服务判断（见 `OverlayService`），这里只管调音量。
 //
 // 为什么走 ESP32 真 HID 而不在本机合成按键：汽水音乐**丢弃 CGEvent 合成键**（实测：
 // 合成音量键毫无反应），只有真硬件事件才被它当成用户操作。通道见 `HidInjector`。
@@ -14,7 +15,7 @@ import iVoxKit
 // 本机读不到它。只能「降几格 / 升几格」——音量本来就低时会触底，播完升回去不等于原值，
 // 这是「不读当前格数」的已知代价。
 
-/// 播报期间给汽水音乐让路的音量调节器。
+/// iVox 占用注意力期间给汽水音乐让路的音量调节器。
 ///
 /// 只在汽水音乐**正在运行**时才动手：这些是真实硬件按键，会同时送到前台 App，
 /// 汽水音乐没开时按下去只会误伤当前窗口。
@@ -33,7 +34,7 @@ actor SodaVolumeDucker {
     /// 已经让过路了吗（降了但还没升回去）。
     private var ducked = false
 
-    /// 播报起落 → 让路/收声。
+    /// iVox 占用的起落 → 让路/恢复。
     func handle(_ signal: PlaybackSignal) async {
         switch signal {
         case .started:
@@ -45,12 +46,12 @@ actor SodaVolumeDucker {
                 return
             }
             ducked = true
-            Log.info("汽水音乐音量: 播报开始，降 \(Self.steps) 格")
+            Log.info("汽水音乐音量: 让路，降 \(Self.steps) 格")
             await send(keys: Self.volumeDownKeys)
         case .ended:
             guard ducked else { return }
             ducked = false
-            Log.info("汽水音乐音量: 播报结束，升 \(Self.steps) 格")
+            Log.info("汽水音乐音量: 恢复，升 \(Self.steps) 格")
             await send(keys: Self.volumeUpKeys)
         }
     }

@@ -87,6 +87,8 @@ final class ConfigTests: XCTestCase {
         enabled = true
         screen = "84945B9B-26CB-4240-AA2A-7E86CF1B0942"
         inset = 30
+        padding = 20
+        cornerRadius = 6
         position = "top"
         """
         let path = NSTemporaryDirectory() + "ivox-legacy-overlay.toml"
@@ -97,6 +99,8 @@ final class ConfigTests: XCTestCase {
         XCTAssertEqual(config.resolvedOverlay.resolvedScreen, "84945B9B-26CB-4240-AA2A-7E86CF1B0942",
                        "钉屏应挪到 overlay 段照常生效")
         XCTAssertEqual(config.resolvedOverlay.inset, 30, "落点间距应挪到 overlay 段照常生效")
+        XCTAssertEqual(config.resolvedOverlay.padding, 20, "载体内边距应挪到 overlay 段照常生效")
+        XCTAssertEqual(config.resolvedOverlay.cornerRadius, 6, "载体圆角应挪到 overlay 段照常生效")
         XCTAssertTrue(config.resolvedCaptions.resolvedEnabled, "字幕开关不该受迁移影响")
     }
 

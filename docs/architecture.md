@@ -49,7 +49,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
 
 | 能力域 | 目录 | 子系统 |
 |---|---|---|
-| 自动播报 | `Sources/iVox/Playback/` | PlaybackQueue、PlaybackSession、AudioPlayer、CaptionPanel（字幕层）、**TTSProviding（契约）/ TSPRemote（远程引擎）/ TTSServer（誊清员）/ TTSTrace**、TTSEngine（仅 `IVOX_TTS=local`） |
+| 自动播报 | `Sources/iVox/Playback/` | PlaybackQueue、PlaybackSession、AudioPlayer、CaptionPanel（字幕行）、**TTSProviding（契约）/ TSPRemote（远程引擎）/ TTSServer（誊清员）/ TTSTrace**、TTSEngine（仅 `IVOX_TTS=local`） |
 | 语音输入 | `Sources/iVox/SpeechInput/` | SpeechInput |
 | 划词翻译 | `Sources/iVox/Translation/` | Translation |
 | 快速操作 | `Sources/iVox/QuickActions/` | QuickActions |
@@ -249,21 +249,30 @@ Daemon (actor)
   另：密码以明文走局域网 HTTP 到板子（固件无 TLS），同一 WiFi 上抓到包的人能还原它
 - Web 控制台上是**一个滑块、两个方向**：右滑锁定、左滑解锁（滑块位置即锁屏状态）
 
-### IvoxOverlay — 屏幕上那块 iVox 浮窗
+### OverlayService — 屏幕上那块 iVox 浮窗（公共服务）
 
-`Sources/iVox/Overlay/IvoxOverlay.swift`
+`Sources/iVox/Overlay/OverlayService.swift`
 
-屏幕上**只有一块** iVox 浮窗；播报字幕与划词译文是它的两个**槽位**（使用方）。
+屏幕上**只有一块** iVox 浮窗，它是 iVox 内部的一个**公共服务**：播报字幕与划词译文是它的**使用方**。
 
-- **宿主只管几何**：选屏、落点（贴底居中）、各层从上到下的堆叠、什么时候显示/收窗。
-  落点与堆叠是纯几何（`origin(...)` / `stackLayout(...)`，static 便于单测，渲染与几何分开测）
-- **使用方只管内容**：各自造自己的视图交上去——字幕是单行白字（`CaptionPanel`），
-  译文是「单词横排 / 原文在上译文在下」（`TranslationPanel`）。**外观与排版归使用方**，
-  宿主不碰；**消失时机也归使用方**（字幕跟播报状态、译文跟鼠标移动 + 超时兜底）
-- **层序 = 槽位枚举的声明顺序**：字幕在下、译文在上。曾是两个独立窗口、靠一个手写死的
-  「96 点间隙」错开；合成一块窗后，上下次序由容器结构保证，不再靠魔法数字
+- **使用方只说「显示哪几行字」**：`show(channel, lines)` / `hide(channel)`。
+  外观、排版、落点、选屏、去重、消失的等待、背景音乐让路，全在服务里
+- **一块载体**：所有行装进**同一个** `NSPanel`、同一层圆角与阴影（不是上下两个框）。
+  曾经是两个独立窗口、靠一个手写死的「96 点间隙」错开——译文长了、字幕长了就撞
+- **去重：同一句话只显示一遍**。字幕那行是 iVox 正在念的一句，译文那行是用户主动要的结果；
+  划词译文会被朗读，念出来的那句正是译文的一部分 → 字幕成了译文的**回声**。
+  重叠时**去掉字幕那行、留下译文**（译文是用户要的东西，字幕只是它的影子）。
+  判据只拿译文的**正文那行**比：原文那行是用户随手选的英文短词，拿它比会误伤不相干的字幕
+- **排列**：译文在上、字幕在下
+- **落点**：水平居中、垂直贴底（`inset` 是底边距可见区底边的点数）。纯几何，
+  `origin(...)` 是 static 便于单测（渲染与几何分开测，测几何不用开窗口）
+- **消失要等一会儿**：内容全空后先等 `overlay.lingerSeconds`（默认 3 秒）再收窗——
+  这段等待归服务自己管，也正是它让背景音乐不会在两句之间来回抖
+- **背景音乐让路归它管**：浮窗在屏上**或** iVox 正在出声 → 汽水音乐降 5 格；
+  **浮窗一消失立刻开始恢复**。「停」用现成的音量让路（`SodaVolumeDucker`）——真暂停做不到：
+  汽水音乐丢弃合成键，改数值不切播放状态，抖不起来
 - **显示期间不换屏**：浮窗一出现就锚定那块屏，不跟鼠标跑（跟鼠标走会让人一动鼠标浮窗就跳）
-- **阴影挂在每一层上**，不挂浮窗：浮窗本身透明，panel 的阴影会画成一个方框
+- **阴影挂在载体那一层**，不挂浮窗：浮窗本身透明，panel 的阴影会画成一个方框
 - 语音输入的波形浮窗（`OverlayPanel`，SwiftUI 胶囊 + 动画）**不在其中**：形状与生命周期都不同，
   暂不并入
 
@@ -316,11 +325,11 @@ Daemon (actor)
 
 `Sources/iVox/Translation/`（AppKit/CG 侧）+ `Sources/iVoxKit/Translation/`（纯逻辑，可单测）
 
-- `Opt+Z` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 浮窗的译文层（`TranslationPanel`，歌词式排版）+ 可选朗读
+- `Opt+Z` → 模拟 `Cmd+C` 取选中文本（`ClipboardReader`，用 `changeCount` 校验剪贴板**真的变了**，而不是 iDict 那样盲等 50ms）→ 翻译 → 浮窗的译文行（`TranslationPanel` 造「原文 + 译文」两行交给浮窗服务）+ 可选朗读
 - **贵的动作押后**：先弹「读取选区…」占位 → 读剪贴板校验 → 弹「翻译中…」→ **等 200ms 提交点才发请求**。期间又按一次（世代推进）就到此为止，请求压根不发——误触的代价从「一次请求 + 一次朗读」降到「一个闪一下的空窗」
 - **连按是「后写胜出」而非丢弃**：`generation` 世代号，在途的那一代回来发现号变了就作废、不上屏不朗读。原先 `guard !inFlight else { return }` 是直接丢第二次，换了个选区想再译一次白按
 - **译文零重复推理**：`TranslationService`（actor）两层——**在途去重**（同一段文字并发时后到的等同一次的结果）与**最近 16 条译文缓存**（FIFO，键带 `provider|model`，切后端不拿旧译文顶账）。命中缓存**照样朗读**：用户想听的是译文，缓存省的是生成，不是他的耳朵
-- **屏幕上那块 iVox 浮窗只有一块**：字幕与译文是它的两个**槽位**，各自造自己的内容视图交上去（`IvoxOverlay`，见下节）；语音波形（`OverlayPanel`）是另一块独立浮窗——形状与生命周期都不同，暂不并
+- **屏幕上那块 iVox 浮窗只有一块**：字幕与译文是它的**使用方**，各自把要显示的行交给它（`OverlayService`，见下节）；语音波形（`OverlayPanel`）是另一块独立浮窗——形状与生命周期都不同，暂不并
 - **浮窗钉在哪块屏**：配置 `[overlay]` 段的 `screen` 填那块屏的 **UUID**（`ScreenIdentity`，macOS 由 EDID 派生、系统自己拿它记屏幕摆位，拔插/重启/改分辨率都不变）；不填就跟鼠标所在的那块屏。**为什么不用序号/型号/坐标**：同型号同分辨率的两块屏（两块 Redmi 27 NU）在 vendor/model/serial 上完全相同，只有 UUID 认得出；序号随插拔漂移、坐标随摆放变。钉的屏没接上时落回跟鼠标并告警一次
   - ⚠️ **macOS 给同型号两块屏起的编号不是「第几块」**：`localizedName` 里「Redmi 27 NU (2)」是**上层那块**（主屏、菜单栏那块），「(1)」是下层那块——别照 `system_profiler` 的列出顺序数，那儿是另一回事
 
@@ -382,13 +391,13 @@ Daemon (actor)
   │                              与 AudioPlayer（音频回调走 AudioPlayer 的 serialQueue）
   ├── SocketServer (非 actor)  → 回调 Daemon 的 actor 隔离方法
   ├── SpeechInputService       → CGEvent 回调 → actor 方法
-  ├── IvoxOverlay (@MainActor)  → 浮窗宿主：选屏、落点、堆叠各使用方的内容
-  └── CaptionPanel (@MainActor)→ 队列的音频回调 → Task { @MainActor } 更新字幕层
+  ├── OverlayService (@MainActor)→ 浮窗公共服务：选屏、落点、排版、去重、消失等待、音乐让路
+  └── CaptionPanel (@MainActor)→ 队列的音频回调 → Task { @MainActor } 更新字幕行
 ```
 
 Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。用 `let capture = varValue` 创建值拷贝再传入闭包。
 
-**往 UI（AppKit）方向的边界：一律回主线程**。后台 actor（如队列的音频回调）要更新浮窗时走 `Task { @MainActor in panel.update(...) }`。浮窗自身或标 `@MainActor`（`CaptionPanel` / `IvoxOverlay`——调用点本就在主线程上，标注零成本），或刻意不标、由调用方切线程（`OverlayPanel`——持有者不是 MainActor 类，标注会把整条链拖成 async）。两者都是有意的取舍，不是不一致。
+**往 UI（AppKit）方向的边界：一律回主线程**。后台 actor（如队列的音频回调）要更新浮窗时走 `Task { @MainActor in panel.update(...) }`。浮窗自身或标 `@MainActor`（`CaptionPanel` / `OverlayService`——调用点本就在主线程上，标注零成本），或刻意不标、由调用方切线程（`OverlayPanel`——持有者不是 MainActor 类，标注会把整条链拖成 async）。两者都是有意的取舍，不是不一致。
 
 ## 数据流
 
@@ -411,7 +420,8 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 7. 每块播完（或失败/取消）都 `session.commit(cursor)` **无条件前移**——不前移就会卡在同一块上死循环
 8. 整条管道末端 drain() 一次，等跨块尾音播完
 9. 还有没收尾的摞（`session.anyUnsealed`：未封的段 **+ 已声明未到字的流式轮**）但队列已空 → 起空闲宽限；
-   否则收字幕（**不还音乐，播报早就不碰它了**）。宽限是**兜底**（60 秒），常态是端说完了就立刻收
+   否则收字幕（**音乐由浮窗服务管**：浮窗还在屏上就一直让着路，浮窗一消失才恢复）。宽限是**兜底**
+   （60 秒），常态是端说完了就立刻收
    （端说了「说完了」= `session.finishedTurns` 记一笔：**收尾是终判**，后到的正文照念但不再揭回
    「还在说」——收尾与正文是两条独立通路，谁先到没保证）
 ```

@@ -37,17 +37,17 @@ Sources/iVox/          — 主程序 target
   EntryPoint.swift     — @main, ArgumentParser 子命令
 
   ── 七个能力域（目录与 README 功能表、ivox status 一一对应）──
-  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（**浮窗的字幕层**：只造视图，config 可开关）+ PlaybackSignal（播报起落信号，给「给背景让路」用）
+  Playback/            — 自动播报：PlaybackQueue + PlaybackSession + AudioPlayer + CaptionPanel（**只管「有没有字幕这一行」**，其余交给浮窗服务）+ PlaybackSignal（播报起落信号，给「给背景让路」用）
     TTS/               — 合成层：TTSProviding（契约）+ TSPRemote（默认，跨进程）+ TTSServer/TTSEngine（誊清员子进程）+ TTSTrace
   SpeechInput/         — 语音输入：右⌘ 录音 + ASR + 浮窗（事件由 HotKey 层送来）+ ClaudeAskService（ASR 出文后送问 Claude）
-  Translation/         — 划词翻译（Opt+Z）：复制 → 翻译 → 浮窗的译文层 + 朗读
+  Translation/         — 划词翻译（Opt+Z）：复制 → 翻译 → 交给浮窗服务两行（原文 + 译文）+ 朗读
   QuickActions/        — 快速操作：Finder/终端快捷（Opt+Q/A/X/S/C）
   WeChat/              — 微信桥接：ilink HTTP 客户端 + 长轮询平台
-  MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI + HTTPResponseHandler）+ MediaController + AudioAppRegistry + HealthSnapshot + SodaVolumeDucker（播报时给汽水音乐压音量）
+  MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI + HTTPResponseHandler）+ MediaController + AudioAppRegistry + HealthSnapshot + SodaVolumeDucker（iVox 占用注意力时给汽水音乐压音量）
   Screen/              — 屏幕锁：ScreenControl（ivox lock / ivox unlock + Web 滑块，走 HID 真键）
 
   ── 基础设施（跨能力域）──
-  Overlay/             — 屏幕上那块 iVox 浮窗：IvoxOverlay（宿主：选屏、落点、堆叠）+ OverlaySlot（槽位：字幕/译文各一个）。**使用方只造视图**，落点与层序归宿主；`[overlay]` 段管钉屏与间距
+  Overlay/             — 屏幕上那块 iVox 浮窗：**OverlayService 是公共服务**——一块载体（不是上下两个框）、排版、落点、选屏、去重（同一句话只显示一遍）、消失的等待、以及背景音乐让路全归它；使用方只说「显示哪几行字」。`[overlay]` 段管钉屏、间距与等待秒数
   HotKey/              — 键盘事件层：GlobalKeyTap（**收**键：独占 tap，按归属路由给上面几家）+ HidInjector（**发**键：往常驻 ESP32-S3 注入器发真硬件事件，串行队列）
   Network/             — SocketServer（Unix domain socket IPC）+ ConnectionHandler（帧解析与分派）
   Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop；装配与热键分派
@@ -68,7 +68,7 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   AudioPipeline.swift  — 重采样
   Translation/         — 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗
 
-Tests/iVoxTests/       — 测试（18 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests、CaptionLayoutTests、TSPRemoteSlowSynthesisTests 例外，@testable import iVox；TestSocketServer 是共用假 socket server）
+Tests/iVoxTests/       — 测试（18 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests、OverlayServiceTests、TSPRemoteSlowSynthesisTests 例外，@testable import iVox；TestSocketServer 是共用假 socket server）
 
 docs/                  — README.md（索引 + 分类规则）· architecture.md · hook-chain.md · socket-api.md · native-bridge.md（微信链路实测依据）；playback/ 放播报五层：paper.md（比喻，**建立直觉但不裁决**）· purpose.md（取舍，**有分歧听它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研
 scripts/               — 装机与部署：runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）
@@ -89,9 +89,9 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
 微信 ilink 长轮询 → WeChatPlatform（**只发消息，不发声**，不进本图这条线）
                                            │   ├─ TSPRemote ─→ 誊清员子进程 `ivox tts --serve`（mlx-audio-swift）
                                                                    │   └─ AudioPlayer (AVAudioEngine)
-                                                                   │        └─ IvoxOverlay (浮窗宿主)
-                                                                   │             ├─ CaptionPanel (字幕层，可选)
-                                                                   │             └─ TranslationPanel (译文层)
+                                                                   │        └─ OverlayService (浮窗公共服务：一块载体)
+                                                                   │             ├─ CaptionPanel (字幕行，可选)
+                                                                   │             └─ TranslationPanel (译文行)
                                                                    ├─ GlobalKeyTap (键盘事件层，一个 tap)
                                                                    │    ├─ SpeechInputService (右⌘ + ASR)
                                                                    │    ├─ TranslationService (Opt+Z 划词翻译)
@@ -122,7 +122,7 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
 
 - **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者：右⌘（默认；配置可改成右⌃ 或两者）→ `SpeechInputService`，`Opt+Z` → `TranslationService`，`Opt+Q/A/X/S/C` → `QuickActionsService`，`Ctrl+2`/`Ctrl+1`/`Ctrl+Esc` → `PlaybackQueue`（手动打断三档：掐+全掀 / 掐+掀摞 / 掐+掀页）（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `iVoxKit/HotKeySpec.swift` 的 `HotKeyAction` 加一个动作 + `defaultChord` 给默认键位 + 在 `setUpHotKeys` 加一个消费者**（`GlobalKeyTap` 里不再有键位表，它只消费）。**键位可在配置 `hotkeys` 段按动作名改**（TOML 写法 `translate = "opt+z"`；首次安装会写全量默认键位）；⚠️ 默认键位有**两份副本**：代码兜底 `HotKeySpec.defaultChord` 与模板 `iVoxKit/ConfigTemplate.swift`（安装脚本不再内嵌第三份，改默认要同步这两处）；配错时启动日志会写明（哪个动作、错在哪、退回哪个默认），生效的键位逐行打「热键: 动作 = 键位」。改完跑 `ivox restart`（只重启进程，不动登录自启开关）。 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Opt+Z 毫无反应"。
 - **防误触也在 tap 层判，一处判完**：① **同键冷却，按键分档**——`Opt+Z` 0.2s（它靠后写胜出连按，冷却只挡连击）、三个打断键 0.3s（翻页掀摞本就该能连按）、其余 1s；冷却中**仍然吃掉事件**只是不执行（漏给目标 app 更糟），走 `systemUptime`，只在 tap 线程读写。② **语音键（右⌘，默认只有它）有 150ms 长按阈值**——按下不足就松开判为误触，按下沿直接丢弃（很多 App 用右⌘，碰一下就打断播报+暂停音乐+开麦代价太大）。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」的第二句吃掉。
-- **右⌘ 语音：副作用发生在「真的在录」之后**——按下经阈值与授权检查后**先试录**，`record()` 成功了才 `pausePlayback`（**暂停播报输出**，不删内容：麦克风要干净，用户说的却是「你停一下」不是「你别说了」）→ `pause`（暂停音乐）→ 浮窗「聆听中…」+ Tink + 波形；松开右⌘再 `resumePlayback` 从原位接着播。**不做设备预检**：耳机类麦克风按需唤醒，预检「设备在不在」会误判、把本来能用的设备焊死；按下就试这一下、试活了算数。失败时播报不动、音乐不停，只在日志写清原因（**授权层与设备层分开报**：TCC 状态 vs CoreAudio 的默认输入设备名，`AVAudioSession` 是 iOS 独有的、macOS 走 CoreAudio）。失败路径的 recorder 进**隔离区**延迟 1 秒释放——`record()` 返回 false 时 audio queue 的回调线程已经起来了，立刻析构会 `objc_loadWeak` 野指针（2026-10-19 实测 SIGSEGV）。**全项目借还背景音乐只此一家**：只有说话时借（按下 pause、松开 resume）。**播报链路不改音乐的播放状态**——它做的是另一码事：播报开始把汽水音乐音量降 5 格、播完升回（改数值不切状态，所以不会抖，见 `MediaControl/SodaVolumeDucker.swift`）。
+- **右⌘ 语音：副作用发生在「真的在录」之后**——按下经阈值与授权检查后**先试录**，`record()` 成功了才 `pausePlayback`（**暂停播报输出**，不删内容：麦克风要干净，用户说的却是「你停一下」不是「你别说了」）→ `pause`（暂停音乐）→ 浮窗「聆听中…」+ Tink + 波形；松开右⌘再 `resumePlayback` 从原位接着播。**不做设备预检**：耳机类麦克风按需唤醒，预检「设备在不在」会误判、把本来能用的设备焊死；按下就试这一下、试活了算数。失败时播报不动、音乐不停，只在日志写清原因（**授权层与设备层分开报**：TCC 状态 vs CoreAudio 的默认输入设备名，`AVAudioSession` 是 iOS 独有的、macOS 走 CoreAudio）。失败路径的 recorder 进**隔离区**延迟 1 秒释放——`record()` 返回 false 时 audio queue 的回调线程已经起来了，立刻析构会 `objc_loadWeak` 野指针（2026-10-19 实测 SIGSEGV）。**全项目借还背景音乐只此一家**：只有说话时借（按下 pause、松开 resume）。**播报链路不改音乐的播放状态**——它做的是另一码事：iVox 占用注意力时（正在出声，**或浮窗在屏上**）把汽水音乐音量降 5 格，**浮窗一消失就恢复**（改数值不切状态，所以不会抖；判据与恢复时机归浮窗服务 `Overlay/OverlayService.swift`，按下去的动作在 `MediaControl/SodaVolumeDucker.swift`）。
 
 - **合成引擎有两个实现，装点在 `Daemon.init`**：`any TTSProviding` 默认是 `TSPRemote`（跨进程到
   誊清员 `ivox tts --serve`）；设环境变量 `IVOX_TTS=local` 退回进程内 `TTSEngine`，仅供调试期对照。
@@ -221,7 +221,7 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests
 xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLeadInGetsNoPseudoPeriod
 ```
 
-测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config / Translation / **PlaybackSessionStory**（第 9 个，测摞的分段与墓碑归属）。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
+测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config / Translation / **PlaybackSessionStory**（测摞的分段与墓碑归属）/ **OverlayService**（测浮窗落点几何与去重判据）。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
 
 ```bash
 make check-tts                      # 播报黑盒自检：压真实 daemon，21 个用例（需先 ivox on，模型就绪）

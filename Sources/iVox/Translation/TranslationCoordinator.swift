@@ -21,12 +21,12 @@ final class TranslationCoordinator {
     /// 连按 Opt+Z 时**不再丢弃**第二次——用户换了选区就是想再译一次，旧的让位给新的。
     private var generation: UInt = 0
 
-    init(config: Config, queue: PlaybackQueue, overlay: IvoxOverlay) {
+    init(config: Config, queue: PlaybackQueue, overlay: OverlayService) {
         self.appConfig = config
         self.translateConfig = config.resolvedTranslation
         self.service = TranslationService(config: translateConfig)
         self.queue = queue
-        self.panel = TranslationPanel(slot: overlay.slot(.translation))
+        self.panel = TranslationPanel(service: overlay)
     }
 
     var isEnabled: Bool { translateConfig.enabled }

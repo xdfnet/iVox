@@ -102,6 +102,18 @@ public struct OverlayConfig: Codable, Sendable {
     public var inset: Double
     /// 两层内容之间的距离（字幕在下、译文在上）
     public var gap: Double
+    /// 载体内边距（每边）：内容离载体边缘的距离
+    public var padding: Double
+    /// 载体圆角
+    public var cornerRadius: Double
+    /// 字号
+    public var fontSize: Double
+    /// 一行文字的宽度上限（超出折行）
+    public var maxWidth: Double
+    /// 内容总高度上限＝可见高的比例（超出截最后一行）
+    public var maxHeightRatio: Double
+    /// 内容空了之后，等多久浮层才消失（秒）
+    public var lingerSeconds: Double
 
     /// 缺字段用默认值：TOML 里只写要改的那一项也能加载
     public init(from decoder: Decoder) throws {
@@ -109,12 +121,27 @@ public struct OverlayConfig: Codable, Sendable {
         self.screen = try c.decodeIfPresent(String.self, forKey: .screen) ?? Self.default.screen
         self.inset = try c.decodeIfPresent(Double.self, forKey: .inset) ?? Self.default.inset
         self.gap = try c.decodeIfPresent(Double.self, forKey: .gap) ?? Self.default.gap
+        self.padding = try c.decodeIfPresent(Double.self, forKey: .padding) ?? Self.default.padding
+        self.cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? Self.default.cornerRadius
+        self.fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? Self.default.fontSize
+        self.maxWidth = try c.decodeIfPresent(Double.self, forKey: .maxWidth) ?? Self.default.maxWidth
+        self.maxHeightRatio = try c.decodeIfPresent(Double.self, forKey: .maxHeightRatio) ?? Self.default.maxHeightRatio
+        self.lingerSeconds = try c.decodeIfPresent(Double.self, forKey: .lingerSeconds) ?? Self.default.lingerSeconds
     }
 
-    public init(screen: String = "", inset: Double = 18, gap: Double = 8) {
+    public init(screen: String = "", inset: Double = 18, gap: Double = 8,
+                padding: Double = 14, cornerRadius: Double = 10,
+                fontSize: Double = 16, maxWidth: Double = 600, maxHeightRatio: Double = 0.3,
+                lingerSeconds: Double = 3) {
         self.screen = screen
         self.inset = inset
         self.gap = gap
+        self.padding = padding
+        self.cornerRadius = cornerRadius
+        self.fontSize = fontSize
+        self.maxWidth = maxWidth
+        self.maxHeightRatio = maxHeightRatio
+        self.lingerSeconds = lingerSeconds
     }
 
     /// 默认值真源（全仓只此一处）。
@@ -125,6 +152,8 @@ public struct OverlayConfig: Codable, Sendable {
         let trimmed = screen.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
+    /// 消失等待：负数当 0（立刻收）
+    public var resolvedLingerSeconds: Double { max(0, lingerSeconds) }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
 
@@ -132,6 +161,12 @@ public struct OverlayConfig: Codable, Sendable {
         case screen
         case inset
         case gap
+        case padding
+        case cornerRadius
+        case fontSize
+        case maxWidth
+        case maxHeightRatio
+        case lingerSeconds
     }
 }
 
@@ -147,36 +182,15 @@ public struct OverlayConfig: Codable, Sendable {
 public struct CaptionsConfig: Codable, Sendable {
     /// 是否显示播报字幕（念到哪句就在屏上显示哪句）
     public var enabled: Bool
-    /// 内容宽度上限（超出折行）
-    public var maxWidth: Double
-    /// 内容高度上限＝可见高的比例（超出截尾）
-    public var maxHeightRatio: Double
-    /// 字号
-    public var fontSize: Double
-    /// 内边距
-    public var padding: Double
-    /// 圆角
-    public var cornerRadius: Double
 
     /// 缺字段用默认值：TOML 里只写要改的那一项也能加载
     public init(from decoder: Decoder) throws {
         let c = try decoder.container(keyedBy: CodingKeys.self)
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? Self.default.enabled
-        self.maxWidth = try c.decodeIfPresent(Double.self, forKey: .maxWidth) ?? Self.default.maxWidth
-        self.maxHeightRatio = try c.decodeIfPresent(Double.self, forKey: .maxHeightRatio) ?? Self.default.maxHeightRatio
-        self.fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? Self.default.fontSize
-        self.padding = try c.decodeIfPresent(Double.self, forKey: .padding) ?? Self.default.padding
-        self.cornerRadius = try c.decodeIfPresent(Double.self, forKey: .cornerRadius) ?? Self.default.cornerRadius
     }
 
-    public init(enabled: Bool = false, maxWidth: Double = 600, maxHeightRatio: Double = 0.3,
-                fontSize: Double = 16, padding: Double = 14, cornerRadius: Double = 10) {
+    public init(enabled: Bool = false) {
         self.enabled = enabled
-        self.maxWidth = maxWidth
-        self.maxHeightRatio = maxHeightRatio
-        self.fontSize = fontSize
-        self.padding = padding
-        self.cornerRadius = cornerRadius
     }
 
     /// 默认值真源（全仓只此一处）：字幕默认关、宽 600、字号 16。
@@ -189,11 +203,6 @@ public struct CaptionsConfig: Codable, Sendable {
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case enabled
-        case maxWidth
-        case maxHeightRatio
-        case fontSize
-        case padding
-        case cornerRadius
     }
 }
 
@@ -557,6 +566,20 @@ private func migrateOverlayKeys(_ object: inout [String: Any]) -> Bool {
         overlay["inset"] = value
         moved = true
     }
+    if let value = captions.removeValue(forKey: "padding"), overlay["padding"] == nil {
+        overlay["padding"] = value
+        moved = true
+    }
+    if let value = captions.removeValue(forKey: "cornerRadius"), overlay["cornerRadius"] == nil {
+        overlay["cornerRadius"] = value
+        moved = true
+    }
+    for key in ["fontSize", "maxWidth", "maxHeightRatio"] {
+        if let value = captions.removeValue(forKey: key), overlay[key] == nil {
+            overlay[key] = value
+            moved = true
+        }
+    }
     if captions.removeValue(forKey: "position") != nil { moved = true }
     if captions.isEmpty { object.removeValue(forKey: "captions") } else { object["captions"] = captions }
     if !overlay.isEmpty { object["overlay"] = overlay }
@@ -588,8 +611,9 @@ private func decodeConfig(_ object: [String: Any]) throws -> Config {
                  + "请把 config.toml 里那两行挪到 [captions] 段")
     }
     if migrateOverlayKeys(&object) {
-        Log.info("配置迁移：字幕的落点键已挪到 overlay 段（screen / inset）——"
-                 + "请把 config.toml 里那两行挪到 [overlay] 段；captions.position 已作废，删掉即可")
+        Log.info("配置迁移：字幕的落点与外观键已挪到 overlay 段（screen / inset / padding / cornerRadius / "
+                 + "fontSize / maxWidth / maxHeightRatio）——请把 config.toml 里那几行挪到 [overlay] 段；"
+                 + "captions.position 已作废，删掉即可")
     }
     guard JSONSerialization.isValidJSONObject(object),
           let data = try? JSONSerialization.data(withJSONObject: object) else {
@@ -652,15 +676,16 @@ public func validate(_ config: Config) throws {
     let overlay = config.resolvedOverlay
     if overlay.inset < 0 { throw ConfigError.invalidConfig("overlay.inset 不能为负") }
     if overlay.gap < 0 { throw ConfigError.invalidConfig("overlay.gap 不能为负") }
-    // 字幕的外观数字：写错（负数、零宽、比例超 1）当场报错，别等渲染时才发现
-    let captions = config.resolvedCaptions
-    if captions.maxWidth <= 0 { throw ConfigError.invalidConfig("captions.maxWidth 必须大于 0") }
-    if captions.maxHeightRatio <= 0 || captions.maxHeightRatio > 1 {
-        throw ConfigError.invalidConfig("captions.maxHeightRatio 必须在 0~1 之间")
+    if overlay.padding < 0 { throw ConfigError.invalidConfig("overlay.padding 不能为负") }
+    if overlay.cornerRadius < 0 { throw ConfigError.invalidConfig("overlay.cornerRadius 不能为负") }
+    if overlay.fontSize <= 0 { throw ConfigError.invalidConfig("overlay.fontSize 必须大于 0") }
+    if overlay.maxWidth <= 0 { throw ConfigError.invalidConfig("overlay.maxWidth 必须大于 0") }
+    if overlay.maxHeightRatio <= 0 || overlay.maxHeightRatio > 1 {
+        throw ConfigError.invalidConfig("overlay.maxHeightRatio 必须在 0~1 之间")
     }
-    if captions.fontSize <= 0 { throw ConfigError.invalidConfig("captions.fontSize 必须大于 0") }
-    if captions.padding < 0 { throw ConfigError.invalidConfig("captions.padding 不能为负") }
-    if captions.cornerRadius < 0 { throw ConfigError.invalidConfig("captions.cornerRadius 不能为负") }
+    if overlay.lingerSeconds < 0 { throw ConfigError.invalidConfig("overlay.lingerSeconds 不能为负") }
+    // 字幕只有开关，没有别的要校的
+    let captions = config.resolvedCaptions
     // 翻译配置缺失或未启用都不算错（划词翻译可整体关掉）
     if let t = config.translation, t.enabled {
         if t.provider == .openai, URL(string: t.baseURL) == nil {

@@ -82,7 +82,7 @@ final class ConfigAuditTests: XCTestCase {
 
     func testNewCaptionsSectionKeysAreKnown() {
         // 新段 [captions] 的键（enabled / maxWidth…）是真键，不该被点名
-        let issues = audit(#"{"captions": {"enabled": true, "maxWidth": 600}}"#)
+        let issues = audit(#"{"captions": {"enabled": true}}"#)
         XCTAssertTrue(issues.isEmpty, "实际: \(issues.map(\.path))")
     }
 

@@ -19,8 +19,8 @@ actor Daemon {
     private var quickActions: QuickActionsService?
     /// 播报字幕浮窗（配置开启才创建）
     private var captionPanel: CaptionPanel?
-    /// 屏幕上的那块 iVox 浮窗：字幕、译文都是往它里面放内容的「使用方」
-    private var overlay: IvoxOverlay?
+    /// 屏幕上的那块 iVox 浮窗（公共���务）：字幕、译文都把要显示的文字交给它
+    private var overlay: OverlayService?
     private let mediaController: MediaController
     private var wechat: WeChatPlatform?
     private var claudeAsk: ClaudeAskService?
@@ -113,14 +113,17 @@ actor Daemon {
             startMediaHTTPServer()
         }
         startModelLoading()
-        let overlay = await MainActor.run { IvoxOverlay(config: config.resolvedOverlay) }
+        let overlay = await MainActor.run { OverlayService(config: config.resolvedOverlay) }
         self.overlay = overlay
+        // 背景音乐让路由浮窗服务管：浮层在屏上（或 iVox 正在出声）就停，浮层消失后立刻恢复
+        await queue.setSignalSink { signal in
+            Task { @MainActor in overlay.handle(signal) }
+        }
         // 屏幕清单打出来：以后想改钉哪块屏，从这里抄 UUID（配置 overlay.screen）
         let screens = await MainActor.run { ScreenIdentity.inventory() }
         Log.info("屏幕清单: \(screens)")
         await setUpHotKeys()
         await setUpCaption()
-        await setUpSodaVolume()
         // 探一次注入设备在不在：屏幕锁这条能力全靠它，不探就没法在 status 里说真话
         Task { await HidInjector.shared.probe() }
 
@@ -328,7 +331,7 @@ actor Daemon {
         Log.info("热键已装配（划词翻译 \(speak)；QuickActions 五项；手动打断三档：跳整摞 / 掀桌 / 读下一页）")
     }
 
-    /// 播报字幕（配置开启才装）：把队列广播的「正在念的这句」显示到浮窗的字幕层。
+    /// 播报字幕（配置开启才装）：把队列广播的「正在念的这句」交给浮窗服务显示。
     /// 队列在后台 actor、AppKit 必须在主线程——跨过去由闭包里的 `Task { @MainActor in }` 承担。
     private func setUpCaption() async {
         guard config.resolvedCaptions.resolvedEnabled else {
@@ -337,23 +340,13 @@ actor Daemon {
         }
         guard let overlay else { return }
         let panel = await MainActor.run {
-            CaptionPanel(config: config.resolvedCaptions, slot: overlay.slot(.caption))
+            CaptionPanel(service: overlay)
         }   // 面板是 @MainActor 类型，构造要在主线程
         captionPanel = panel
         await queue.setCaptionSink { text in
             Task { @MainActor in panel.update(text) }
         }
         Log.info("播报字幕: 已开启")
-    }
-
-    /// 播报期间给汽水音乐让路：播报开始降几格音量、播完升回去。
-    /// 队列只管发「要开始播了 / 播完了」两个时刻，具体怎么让是这里的事（见 `SodaVolumeDucker`）。
-    private func setUpSodaVolume() async {
-        let ducker = SodaVolumeDucker()
-        await queue.setSignalSink { signal in
-            Task { await ducker.handle(signal) }
-        }
-        Log.info("汽水音乐音量: 已接上（播报时降音量，播完升回）")
     }
 
     private func startMediaHTTPServer() {
