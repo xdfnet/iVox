@@ -112,8 +112,6 @@ public struct OverlayConfig: Codable, Sendable {
     public var maxWidth: Double
     /// 内容总高度上限＝可见高的比例（超出截最后一行）
     public var maxHeightRatio: Double
-    /// 内容空了之后，等多久浮层才消失（秒）
-    public var lingerSeconds: Double
 
     /// 缺字段用默认值：TOML 里只写要改的那一项也能加载
     public init(from decoder: Decoder) throws {
@@ -126,13 +124,11 @@ public struct OverlayConfig: Codable, Sendable {
         self.fontSize = try c.decodeIfPresent(Double.self, forKey: .fontSize) ?? Self.default.fontSize
         self.maxWidth = try c.decodeIfPresent(Double.self, forKey: .maxWidth) ?? Self.default.maxWidth
         self.maxHeightRatio = try c.decodeIfPresent(Double.self, forKey: .maxHeightRatio) ?? Self.default.maxHeightRatio
-        self.lingerSeconds = try c.decodeIfPresent(Double.self, forKey: .lingerSeconds) ?? Self.default.lingerSeconds
     }
 
     public init(screen: String = "", inset: Double = 18, gap: Double = 8,
                 padding: Double = 14, cornerRadius: Double = 10,
-                fontSize: Double = 16, maxWidth: Double = 600, maxHeightRatio: Double = 0.3,
-                lingerSeconds: Double = 3) {
+                fontSize: Double = 16, maxWidth: Double = 600, maxHeightRatio: Double = 0.3) {
         self.screen = screen
         self.inset = inset
         self.gap = gap
@@ -141,7 +137,6 @@ public struct OverlayConfig: Codable, Sendable {
         self.fontSize = fontSize
         self.maxWidth = maxWidth
         self.maxHeightRatio = maxHeightRatio
-        self.lingerSeconds = lingerSeconds
     }
 
     /// 默认值真源（全仓只此一处）。
@@ -152,8 +147,6 @@ public struct OverlayConfig: Codable, Sendable {
         let trimmed = screen.trimmingCharacters(in: .whitespacesAndNewlines)
         return trimmed.isEmpty ? nil : trimmed
     }
-    /// 消失等待：负数当 0（立刻收）
-    public var resolvedLingerSeconds: Double { max(0, lingerSeconds) }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
 
@@ -166,7 +159,6 @@ public struct OverlayConfig: Codable, Sendable {
         case fontSize
         case maxWidth
         case maxHeightRatio
-        case lingerSeconds
     }
 }
 
@@ -683,7 +675,6 @@ public func validate(_ config: Config) throws {
     if overlay.maxHeightRatio <= 0 || overlay.maxHeightRatio > 1 {
         throw ConfigError.invalidConfig("overlay.maxHeightRatio 必须在 0~1 之间")
     }
-    if overlay.lingerSeconds < 0 { throw ConfigError.invalidConfig("overlay.lingerSeconds 不能为负") }
     // 字幕只有开关，没有别的要校的
     let captions = config.resolvedCaptions
     // 翻译配置缺失或未启用都不算错（划词翻译可整体关掉）

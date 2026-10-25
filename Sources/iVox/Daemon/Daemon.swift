@@ -115,10 +115,6 @@ actor Daemon {
         startModelLoading()
         let overlay = await MainActor.run { OverlayService(config: config.resolvedOverlay) }
         self.overlay = overlay
-        // 背景音乐让路由浮窗服务管：浮层在屏上（或 iVox 正在出声）就停，浮层消失后立刻恢复
-        await queue.setSignalSink { signal in
-            Task { @MainActor in overlay.handle(signal) }
-        }
         // 屏幕清单打出来：以后想改钉哪块屏，从这里抄 UUID（配置 overlay.screen）
         let screens = await MainActor.run { ScreenIdentity.inventory() }
         Log.info("屏幕清单: \(screens)")

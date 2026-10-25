@@ -71,6 +71,7 @@ public enum ConfigAudit {
     /// 只是留在那儿装样子——留着它还容易被当成「还有效」而误调。
     public static let obsoleteKeys: [String: String] = [
         "captions.position": "浮窗统一贴底，落点不再可配（把这行删掉即可）",
+        "overlay.lingerSeconds": "内容空了就立刻收窗，不再等（把这行删掉即可）",
     ]
 
     /// 某段的已知键（动态段返回空集——不检查内层）。

@@ -34,26 +34,25 @@ actor SodaVolumeDucker {
     /// 已经让过路了吗（降了但还没升回去）。
     private var ducked = false
 
-    /// iVox 占用的起落 → 让路/恢复。
-    func handle(_ signal: PlaybackSignal) async {
-        switch signal {
-        case .started:
-            // 已经让过路了就不再让：打断后重起管道、Opt+Z 译文插队都会再发一次 .started，
-            // 重复降会变成降 10 格（真降到更靠后，越听越小声）。
-            guard !ducked else { return }
-            guard Self.isSodaRunning() else {
-                Log.info("汽水音乐音量: 未运行，不动音量（这些键会打到前台 App）")
-                return
-            }
-            ducked = true
-            Log.info("汽水音乐音量: 让路，降 \(Self.steps) 格")
-            await send(keys: Self.volumeDownKeys)
-        case .ended:
-            guard ducked else { return }
-            ducked = false
-            Log.info("汽水音乐音量: 恢复，升 \(Self.steps) 格")
-            await send(keys: Self.volumeUpKeys)
+    /// 让路：降几格。**已经让过就不再让**——浮层反复显隐会连着调，
+    /// 降两次就成 10 格（真降到更靠后，越听越小声）。
+    func duck() async {
+        guard !ducked else { return }
+        guard Self.isSodaRunning() else {
+            Log.info("汽水音乐音量: 未运行，不动音量（这些键会打到前台 App）")
+            return
         }
+        ducked = true
+        Log.info("汽水音乐音量: 让路，降 \(Self.steps) 格")
+        await send(keys: Self.volumeDownKeys)
+    }
+
+    /// 恢复：升回去。没让过就不动（免得多升几格）。
+    func restore() async {
+        guard ducked else { return }
+        ducked = false
+        Log.info("汽水音乐音量: 恢复，升 \(Self.steps) 格")
+        await send(keys: Self.volumeUpKeys)
     }
 
     /// 发一批按键：连按 `steps` 次，每次间隔 `stepInterval`。

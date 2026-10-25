@@ -100,6 +100,14 @@ final class ConfigAuditTests: XCTestCase {
         XCTAssertTrue(ConfigAudit.describe(issues).contains("overlay.inset"))
     }
 
+    func testObsoleteLingerSecondsIsReportedAsObsolete() {
+        // overlay.lingerSeconds 这个能力已经没了（内容空了就立刻收窗）——要明确说「作废」
+        let issues = audit(#"{"overlay": {"lingerSeconds": 3}}"#)
+        XCTAssertEqual(issues.map(\.path), ["overlay.lingerSeconds"])
+        XCTAssertNotNil(issues.first?.note)
+        XCTAssertTrue(ConfigAudit.describe(issues).contains("已作废"))
+    }
+
     func testObsoleteCaptionPositionIsReportedAsObsolete() {
         // captions.position 这个能力已经没了（浮窗统一贴底）——要明确说「作废」，
         // 不能让它混进「没人认领」里（那会让人以为是键名写错了）

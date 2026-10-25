@@ -131,7 +131,7 @@ translate = "opt+z"     # 改完跑 ivox restart 生效
 |------|------|
 | `speechInput.enabled` | 语音输入开关 |
 | `captions.enabled` | 播报字幕开关 |
-| `overlay.screen` / `overlay.inset` 等 | 浮窗（字幕与译文合成的那一块）钉在哪块屏（填 UUID）、距边点数、字号、宽度上限、圆角、消失前等几秒 |
+| `overlay.screen` / `overlay.inset` 等 | 浮窗（字幕与译文合成的那一块）钉在哪块屏（填 UUID）、距边点数、字号、宽度上限、圆角 |
 | `translation.provider` | 划词翻译服务：`google`（默认，免配置）/ `openai`（OpenAI 兼容） |
 | `translation.speechEnabled` | 划词翻译后是否朗读译文 |
 | `translation.proxyURL` | 直连不通时的兜底代理，如 `http://192.168.100.6:10808`（只在直连失败后才用） |

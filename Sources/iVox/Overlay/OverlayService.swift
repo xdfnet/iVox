@@ -35,19 +35,13 @@ final class OverlayService {
     }
 
     private var channels: [Channel: [Line]] = [:]
-    /// 最后一次有内容时的行（linger 期间继续显示它，浮层不一下子消失）
-    private var lastLines: [Line] = []
-    /// 「没内容之后等多久才消失」的计时器
-    private var lingerTask: Task<Void, Never>?
     private var panel: NSPanel?
     /// 整窗锚定的那块屏：显示期间不换屏（跟着鼠标走会让浮窗在人动鼠标时来回跳）。
     /// nil = 还没显示。
     private var anchorScreen: NSScreen?
     /// 认不到钉的屏时只告警一次，别刷屏。
     private var didWarnMissingScreen = false
-    /// iVox 正在出声（播报中）——也占着注意力，背景音乐一样要让路
-    private var isSpeaking = false
-    /// 浮层在不在屏上（音乐让路的判据之一）
+    /// 浮层在不在屏上——**音乐让路的唯一判据**
     private var isWindowVisible = false
     /// 音乐已经让过路了吗（降了但还没升回来）
     private var musicDucked = false
@@ -75,72 +69,31 @@ final class OverlayService {
         relayout()
     }
 
-    /// iVox 的一次出声起落：出声时背景音乐让路，安静了再收回。
-    func handle(_ signal: PlaybackSignal) {
-        switch signal {
-        case .started: isSpeaking = true
-        case .ended: isSpeaking = false
-        }
-        updateMusic()
-    }
-
     // MARK: - 内部
 
     /// 重排：把各来源的内容排成几行、装进**一块载体**、落到位。
     ///
-    /// 内容全空时**不立刻消失**：先等一会儿（`lingerSeconds`），等到了才收窗——
-    /// 这段等待归服务自己管，也正是它让背景音乐不会在两句之间来回抖。
+    /// **内容一空就收窗**，不留残余：早先留了「等 3 秒再收」的机制（`lingerSeconds`），
+    /// 想着让背景音乐别在两句之间抖——实际是**把上一个问题的形状搬了个地方**：
+    /// 用户按了 Ctrl+2 掀桌，字幕还挂着最后那句 3 秒、音乐也压着 3 秒不回来，
+    /// 「字幕收不干净、恢复太慢」正是这么来的。空了就收，干净。
     private func relayout() {
-        let lines = visibleLines()
-        if lines.isEmpty {
-            if lingerTask == nil { scheduleLinger() }
-            render(lastLines)
-            return
-        }
-        cancelLinger()
-        lastLines = lines
-        render(lines)
+        render(visibleLines())
     }
 
-    /// 内容空了之后，等一会儿再收窗。
-    private func scheduleLinger() {
-        let seconds = config.resolvedLingerSeconds
-        guard seconds > 0 else {
-            finishLinger()
-            return
-        }
-        lingerTask = Task { @MainActor [weak self] in
-            try? await Task.sleep(for: .seconds(seconds))
-            guard !Task.isCancelled else { return }
-            self?.finishLinger()
-        }
-    }
-
-    private func cancelLinger() {
-        lingerTask?.cancel()
-        lingerTask = nil
-    }
-
-    /// 等待到点：收窗，背景音乐开始恢复。
-    private func finishLinger() {
-        lingerTask = nil
-        lastLines = []
-        panel?.orderOut(nil)
-        anchorScreen = nil
-        isWindowVisible = false
-        updateMusic()
-    }
-
-    /// 背景音乐让路：**浮层在屏上**（或 iVox 正在出声）时停，浮层消失后立刻开始恢复。
+    /// 背景音乐让路：**只跟浮层走**——浮层在屏上就降 5 格，浮层一消失就升回来。
+    ///
+    /// 早先还掺了「iVox 正在出声」这半个判据（播报起落信号），飞哥否了：
+    /// 让路与否只该看**屏幕上有没有东西占着**。声音归声音、屏幕归屏幕，
+    /// 两条线不搅在一起（字幕关掉时，播报也不该压着音乐）。
     ///
     /// 「停」用的是现成的音量让路（`SodaVolumeDucker`）——真暂停做不到：汽水音乐丢弃
     /// 合成键，而媒体会话可能打到别的 App。改数值不切播放状态，抖不起来。
     private func updateMusic() {
-        let occupied = isSpeaking || isWindowVisible
+        let occupied = isWindowVisible
         guard occupied != musicDucked else { return }
         musicDucked = occupied
-        let signal: PlaybackSignal = occupied ? .started : .ended
-        Task { await ducker.handle(signal) }
+        Task { await (occupied ? ducker.duck() : ducker.restore()) }
     }
 
     /// 要显示哪几行：**同一句话不显示两遍**。
@@ -195,11 +148,11 @@ final class OverlayService {
         return result.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
-    /// 画出这几行。
+    /// 画出这几行。**没有内容 = 收窗**（顺带把音乐放回来）。
     private func render(_ lines: [Line]) {
         guard !lines.isEmpty else {
-            // 没有内容可画：窗口留着（等 linger），但先不画任何东西
             panel?.orderOut(nil)
+            anchorScreen = nil
             isWindowVisible = false
             updateMusic()
             return
