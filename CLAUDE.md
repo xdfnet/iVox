@@ -127,6 +127,9 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
 - **两摞的分界**：换摞时插 0.6 秒静音（`AudioPlayer.writeSilence`）+ 字幕顶部亮一条细线
   （1.5 秒后撤）。「换了一摞」按**助理自编的摞号**判（`session.stackID(forSeq:)`），
   外部 turn_id 不参与。加急段（Opt+Z 译文插队）**不插静音**——用户要它立刻响
+- **ESP32 注入器的 token 路径**：仓改名过（esp32-hid-lab → esp32-lab），
+  路径写死会让「压音量」全程静默失效。`HidInjector` 按**候选列表**找 token，
+  `HID_TOKEN_FILE` 可覆盖，失败时报错**列出找过的路径**（别再只写死一个）
 - **合成引擎有两个实现，装点在 `Daemon.init`**：`any TTSProviding` 默认是 `TSPRemote`（跨进程到
   誊清员 `ivox tts --serve`）；设环境变量 `IVOX_TTS=local` 退回进程内 `TTSEngine`，仅供调试期对照。
   **为什么默认远程**：MLX 的 Metal 命令编码器析构重复释放 GPU 命令队列 → SIGTRAP，上游未修、

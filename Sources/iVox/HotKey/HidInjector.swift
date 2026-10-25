@@ -12,8 +12,9 @@ import iVoxKit
 
 /// HID 注入失败的原因（分得比「发送失败」细，便于排查时看日志就知道卡在哪）。
 enum HidError: LocalizedError, Sendable {
-    /// 没有接口 token：设备端会回 401，先说明是自己这边的配置问题
-    case tokenMissing
+    /// 没有接口 token：设备端会回 401，先说明是自己这边的配置问题。
+    /// 带**找过的路径**——仓改名/搬家后一眼看出是哪次改名害的。
+    case tokenMissing(searched: [String])
     /// 设备连不上（离线 / 地址不对 / 路由不通）
     case deviceUnreachable(String)
     /// 设备回了非 200（401 token 不对、429 队列满…）
@@ -21,7 +22,8 @@ enum HidError: LocalizedError, Sendable {
 
     var errorDescription: String? {
         switch self {
-        case .tokenMissing: return "缺少设备接口 token"
+        case .tokenMissing(let searched):
+            return "缺少设备接口 token（找过：\(searched.joined(separator: "、"))）"
         case .deviceUnreachable(let detail): return "设备不可达（\(detail)）"
         case .httpStatus(let code): return "设备返回 HTTP \(code)"
         }
@@ -38,9 +40,16 @@ actor HidInjector {
     private static let host = "192.168.100.3"
     private static let port = 80
 
-    /// 接口 token：环境变量优先，否则读 esp32-hid-lab 仓里那一份——
+    /// 接口 token：环境变量 `HID_TOKEN` 优先，否则读 lab 仓里那一份——
     /// 那就是烧进板子里的同一个值（单一真源，不抄第二份）。
-    private static let tokenFilePath = "/Users/admin/iCode/esp32-hid-lab/main/api_token"
+    ///
+    /// **路径不写死一个**：仓改名是常事（esp32-hid-lab → esp32-lab 就发生过，
+    /// 2026-10-25 因为路径失效，汽水音乐压音量全程没发出去，日志只说「缺少 token」）。
+    /// 现在按候选列表找，`HID_TOKEN_FILE` 可覆盖；都找不到时报错会**列出找过的路径**。
+    private static let tokenFileCandidates = [
+        "/Users/admin/iCode/esp32-lab/firmware/s3-hid/main/api_token",
+        "/Users/admin/iCode/esp32-hid-lab/main/api_token",
+    ]
 
     /// 发送链：新来的排在上一批后面，保证顺序。
     private var chain: Task<Result<Void, HidError>, Never>?
@@ -163,16 +172,30 @@ actor HidInjector {
         return url
     }
 
-    /// 接口 token：环境变量优先，否则读 esp32-hid-lab 仓里那一份。
+    /// 接口 token：环境变量优先，否则读 lab 仓里那一份。
     private static func apiToken() throws -> String {
         if let token = ProcessInfo.processInfo.environment["HID_TOKEN"], !token.isEmpty {
             return token
         }
-        guard let text = try? String(contentsOf: URL(fileURLWithPath: tokenFilePath), encoding: .utf8) else {
-            throw HidError.tokenMissing
+        var searched: [String] = []
+        var paths: [String] = []
+        if let override = ProcessInfo.processInfo.environment["HID_TOKEN_FILE"], !override.isEmpty {
+            paths.append(override)
+        }
+        paths.append(contentsOf: tokenFileCandidates)
+        for path in paths {
+            searched.append(path)
+            if let token = readToken(at: path) { return token }
+        }
+        throw HidError.tokenMissing(searched: searched)
+    }
+
+    /// 读一个 token 文件（空文件当没有）。
+    private static func readToken(at path: String) -> String? {
+        guard let text = try? String(contentsOf: URL(fileURLWithPath: path), encoding: .utf8) else {
+            return nil
         }
         let token = text.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !token.isEmpty else { throw HidError.tokenMissing }
-        return token
+        return token.isEmpty ? nil : token
     }
 }
