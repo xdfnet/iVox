@@ -38,6 +38,7 @@ struct SkipCommand: ParsableCommand {
         guard SocketClient.isRunning(path: socketPath) else { return }
         // 尾随 \n 是必需的路由依据：handle 先按首行换行切出 header，
         // 缺了它整条请求会被当成传统整段播报体送进 handleTTS（会被原样念出来）
-        try? SocketClient.send("{type:skip,mode:\(mode)}\n", to: socketPath)
+        // by：自报身份，让 daemon 的打断归因能答出「谁打断的」（见 ConnectionHandler.handleSkip）
+        try? SocketClient.send("{type:skip,mode:\(mode),by:ivox-skip}\n", to: socketPath)
     }
 }

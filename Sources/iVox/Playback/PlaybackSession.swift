@@ -114,7 +114,31 @@ actor PlaybackSession {
     private var turnStack: [String] = []
 
     /// 墓碑：被用户显式作废（跳整摞 / 掀桌 / 取消轮次）的摞，后续增量一律丢弃。
-    private var deadTurns: [String] = []
+    ///
+    /// **连「谁作废的」一起记**：晚到的增量撞上墓碑时，日志要能当场回答
+    /// 「这一摞是被谁、按什么键放弃的」——否则只剩一句「已被放弃」，事后无从查起
+    /// （2026-10-26 飞哥反馈：那摞被打断却查不到谁打断了）。
+    private var deadTurns: [DeadTurn] = []
+
+    /// 一块墓碑：这个摞被作废时的**归因**（谁、按什么、什么时候）。
+    ///
+    /// 归因由打断方给（`PlaybackQueue` 落定档位，调用方给入口），
+    /// 这一层只负责**存下来、以后能答得出**。
+    private struct DeadTurn: Sendable {
+        let id: String
+        let origin: InterruptOrigin
+        let at: Date
+    }
+
+    /// 墓碑时刻的短写法（`20:15:33`）。**只给人看**，不作判断，故不求跨时区精确。
+    ///
+    /// 每次现造 formatter：`DateFormatter` 不是 `Sendable`，存成 `static let` 过不了
+    /// Swift 6 的并发检查；而这条路径只在「迟到的增量撞上墓碑」时才走，造一次不心疼。
+    private static func clockText(_ date: Date) -> String {
+        let f = DateFormatter()
+        f.dateFormat = "HH:mm:ss"
+        return f.string(from: date)
+    }
 
     /// **端说过「说完了」的摞**：客户端显式收尾（Claude 的 Stop / pi 的 `{end}`）那一记。
     ///
@@ -315,8 +339,8 @@ actor PlaybackSession {
         guard !jobs.isEmpty else { return nil }
         // 墓碑仍然按外部号拒：增量就是拿外部号来的，问的是「这个号还能不能再来」，
         // 不是「这是哪一摞」。前者按外部号查是对的，后者必须自编号。
-        if let note, deadTurns.contains(note) {
-            Log.info("丢弃：turn=\(note) 那一摞已被放弃，它后续来的字不再开口（墓碑）")
+        if let note, let grave = deadTurns.first(where: { $0.id == note }) {
+            Log.info("丢弃：turn=\(note) 那一摞已被放弃（\(grave.origin) 于 \(Self.clockText(grave.at)) 立碑），它后续来的字不再开口（墓碑）")
             return nil
         }
         let fresh = newPage(jobs, pageNote: pageNote)
@@ -349,8 +373,8 @@ actor PlaybackSession {
     func appendToStack(_ stack: Int, _ jobs: [PlaybackBlock],
                        note: String?, pageNote: String? = nil) -> StackAccept {
         guard !jobs.isEmpty else { return .appended }
-        if let note, deadTurns.contains(note) {
-            Log.info("丢弃：turn=\(note) 那一摞已被放弃，它后续来的字不再开口（墓碑）")
+        if let note, let grave = deadTurns.first(where: { $0.id == note }) {
+            Log.info("丢弃：turn=\(note) 那一摞已被放弃（\(grave.origin) 于 \(Self.clockText(grave.at)) 立碑），它后续来的字不再开口（墓碑）")
             return .dead
         }
         guard let idx = segmentIndex(localID: stack) else {
@@ -440,7 +464,7 @@ actor PlaybackSession {
     /// 流式轮开始（pi 首帧）：登记这一轮。已作废的旧轮忽略。
     @discardableResult
     func beginTurn(_ id: String) -> Bool {
-        guard !deadTurns.contains(id) else { return false }
+        guard !deadTurns.contains(where: { $0.id == id }) else { return false }
         if !turnStack.contains(id) { turnStack.append(id) }
         signal()
         return true
@@ -478,9 +502,9 @@ actor PlaybackSession {
 
     /// 用户取消这一轮（pi 空流 `{cancel}`）：丢掉该轮内容并立墓碑，其后续增量一律不开口。
     @discardableResult
-    func cancelTurn(_ id: String) -> Bool {
+    func cancelTurn(_ id: String, origin: InterruptOrigin) -> Bool {
         let dropped = sweepSegments(matching: id, in: &segments)
-        bury(id)
+        bury(id, origin)
         if let i = turnStack.firstIndex(of: id) { turnStack.remove(at: i) }
         signal()
         return dropped > 0
@@ -503,7 +527,7 @@ actor PlaybackSession {
     ///
     /// - Returns: (资料室自编的摞号，外部 turn_id（仅用于日志对照，无分组为 nil）, 丢掉的块数)。`nil` = 当时没有内容在播。
     @discardableResult
-    func takeHeadStack() -> (localID: Int, turnID: String?, dropped: Int)? {
+    func takeHeadStack(origin: InterruptOrigin) -> (localID: Int, turnID: String?, dropped: Int)? {
         guard let head = headStackTarget() else { return nil }
         let seg = segments[head.index]
         let dropped = seg.blockCount
@@ -516,7 +540,7 @@ actor PlaybackSession {
         segments.removeFirst(head.index + 1)
         // 只给正在听的那摞立墓碑：它才是用户明确放弃的。**只有外部 turn_id 能立墓碑**——
         // 无编号的稿子一次性送完、不会再有后续增量，没东西可拦。
-        if let id = head.turnID { bury(id) }
+        if let id = head.turnID { bury(id, origin) }
         return (seg.localID, seg.turnID, dropped)
     }
 
@@ -594,12 +618,12 @@ actor PlaybackSession {
     /// 还没有对应的段，只按段立碑就会漏掉它们——打断之后它们陆续送来的字会照常播出来
     ///（2026-10-17 `E7` 实测：清空队列时 pending=0，墓碑一个没立，打断后同一轮照样开口）。
     @discardableResult
-    func discardAll() -> [String] {
+    func discardAll(origin: InterruptOrigin) -> [String] {
         var ids = turnStack
         ids += segments.compactMap(\.turnID)
         turnStack.removeAll()
         segments.removeAll()
-        ids.forEach { bury($0) }
+        ids.forEach { bury($0, origin) }
         signal()
         return ids
     }
@@ -633,9 +657,13 @@ actor PlaybackSession {
     /// （2026-10-23 实测：20:20 说话 → 20:23 同一摞的新页撞碑消失，891 字 / 15 块一句没出声）。
     ///
     /// 墓碑按**外部 turn_id** 记（增量就是拿外部号来的，问的是「这个号还能不能再来」）。
-    private func bury(_ id: String) {
-        deadTurns.removeAll { $0 == id }
-        deadTurns.append(id)
+    ///
+    /// **连「谁作废的、什么时候」一起记**：晚到的增量撞上墓碑时，日志要能当场回答
+    /// 「这一摞是被谁、按什么键放弃的」——否则只剩一句「已被放弃」，事后无从查起
+    /// （2026-10-26 飞哥反馈：那摞被打断却查不到谁打断了）。
+    private func bury(_ id: String, _ origin: InterruptOrigin) {
+        deadTurns.removeAll { $0.id == id }
+        deadTurns.append(DeadTurn(id: id, origin: origin, at: Date()))
         if deadTurns.count > Self.recentTurnCapacity { deadTurns.removeFirst() }
     }
 

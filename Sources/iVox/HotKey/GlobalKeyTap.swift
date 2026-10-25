@@ -25,8 +25,12 @@ import iVoxKit
 final class GlobalKeyTap: @unchecked Sendable {
     /// 右⌘(0x36) / 右⌃(0x3E) 状态变化。在 tap 线程同步调用，**必须立刻返回**。
     var onModifier: (@Sendable (_ keyCode: UInt16, _ isDown: Bool) -> Void)?
-    /// 命中的组合热键 + 触发时的鼠标位置。在 tap 线程同步调用，**必须立刻返回**。
-    var onHotKey: (@Sendable (_ hotKey: HotKeyAction, _ mouseLocation: CGPoint) -> Void)?
+    /// 命中的组合热键 + **实际生效的键位**（如 "ctrl+2"）+ 触发时的鼠标位置。
+    /// 在 tap 线程同步调用，**必须立刻返回**。
+    ///
+    /// 带上键位是因为键位**可配**：打断归因要报的是「谁按的什么键」，
+    /// 写死默认键位就是句假话。
+    var onHotKey: (@Sendable (_ hotKey: HotKeyAction, _ chord: String, _ mouseLocation: CGPoint) -> Void)?
 
     private var thread: Thread?
     private var eventTap: CFMachPort?
@@ -197,7 +201,7 @@ final class GlobalKeyTap: @unchecked Sendable {
             // 这样 Cmd+Shift+D、CapsLock 开着按 Opt+Z 都不会误触
             let flags = event.flags.intersection(Self.modifierMask)
             // [临时探针 2026-10-19] Esc 是「幽灵翻页」事故的争议键：翻页日志只写
-            // 「打断来源=skip-page」，看不出是物理按键还是别的进程合成的 CGEvent。
+            // 「打断来源=掀页·键盘 ctrl+1」，看不出是物理按键还是别的进程合成的 CGEvent。
             // 这里在匹配之前把每个 Esc 的真实 flags 与命中与否落盘，等复现一次即可定案。
             // 排查完请连同「热键触发补日志」一起决定去留。
             if keyCode == 0x35 {
@@ -224,7 +228,7 @@ final class GlobalKeyTap: @unchecked Sendable {
                 return true   // 冷却中：仍然吃掉，别漏给目标 app；但不重复执行
             }
             lastFireAt[binding.action] = now
-            onHotKey?(binding.action, event.location)
+            onHotKey?(binding.action, binding.display, event.location)
             return true
 
         default:

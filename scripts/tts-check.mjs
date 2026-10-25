@@ -178,14 +178,14 @@ async function speakNow(source, text) {
 // 掐 + 掀某一档：mode=page | stack | all，逐字对应 Ctrl+1 / Ctrl+2 / Ctrl+3。
 async function skip(mode) {
   const s = await conn();
-  s.end(`{type:skip,mode:${mode},tag:${runId}}\n`);
+  s.end(`{type:skip,mode:${mode},tag:${runId},by:tts-check}\n`);
 }
 
 // 全场打断：停当前 + 清空排队（同 Ctrl+3），命令是 `ivox skip --all`。
 // 历史的 `ivox quiet`（发 `{type:stop}`）已随该帧一起退役，改用 `{type:skip,mode:all}`。
 async function skipAll() {
   const s = await conn();
-  s.end(`{type:skip,mode:all,tag:${runId}}\n`);
+  s.end(`{type:skip,mode:all,tag:${runId},by:tts-check}\n`);
 }
 
 // 流式连接句柄。登记到 openSocks，用例结束统一清理，避免连接泄漏压垮 daemon。

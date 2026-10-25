@@ -46,41 +46,14 @@ private struct AudioChunk: Sendable {
     let seq: UInt
 }
 
-/// 打断来源：与 `PlaybackJob.source`（这段播报是谁发的）是一对账的标识——
-/// 前者回答「谁在说」，这个回答「这次打断是谁干的」。打断权**只归用户物理快捷键**
-/// （Opt+Z 译文、Ctrl+1 掀页 / Ctrl+2 掀摞 / Ctrl+3 全掀）；agent 流式轮只排队、不打断。
+/// 打断归因（档位 × 入口）见 `InterruptOrigin.swift`。
+///
+/// 与 `PlaybackJob.source`（这段播报是谁发的）是一对账的标识——前者回答「谁在说」，
+/// 这个回答「这次打断是谁干的、动了哪一档」。打断权**只归用户物理快捷键**
+/// （Ctrl+1 掀页 / Ctrl+2 掀摞 / Ctrl+3 全掀）；agent 流式轮只排队、不打断。
 ///
 /// **右⌘说话不在这里**：那是「你停一下」（`pausePlayback()`：设备停渲染、内容一条不删），
-/// 不是「你别说了」（本枚举这三档：内容丢弃、这些摞的将来也不再来）。
-enum InterruptSource: Sendable, CustomStringConvertible {
-    /// Opt+Z 划词翻译（用户主动朗读，speakUserInitiated）
-    case dict
-    /// Ctrl+3 手动闭嘴（GlobalKeyTap 组合热键）：用户不想说话、只想安静，静音播报即可。
-    /// **不碰背景音乐**——借还音乐是右⌘ 录音那条的事（见文件头）
-    case esc
-    /// Ctrl+2 掀摞：丢正在播的这一**摞**（一次回复，连同后来的页），从下一摞接着播。
-    /// 与 `.esc` 的分工——那个全场闭嘴，这个只掀当前、后面的照播。
-    case skip
-    /// Ctrl+1 掀页：丢掉当前这一**页**剩下的块，从下一页接着念。
-    /// 手动打断三档里的「轻」（`.skip` = 中：掀整摞；`.esc` = 掀桌：全掀）。
-    ///
-    /// ⚠️ 键位对照以 `GlobalKeyTap.bindings` 与 `Daemon.setUpHotKeys()` 为准：
-    /// Ctrl+1 掀页 · Ctrl+2 掀摞 · Ctrl+3 全掀。本枚举曾把前两者写反，
-    /// 文档跟着抄错了两份（`requirements.md` / `queue.md`），照错注释抄会再漂回去。
-    case skipPage
-    /// 守护进程退出（shutdown），系统级清场，不是用户主动打断
-    case shutdown
-
-    var description: String {
-        switch self {
-        case .dict: return "dict"
-        case .esc: return "esc"
-        case .skip: return "skip"
-        case .skipPage: return "skip-page"
-        case .shutdown: return "shutdown"
-        }
-    }
-}
+/// 不是「你别说了」（这三档：内容丢弃、这些摞的将来也不再来）。
 
 actor PlaybackQueue {
     /// 身份层：段→页→块的容器与全部身份记账（墓碑、盖印、空闲宽限）。
@@ -93,9 +66,15 @@ actor PlaybackQueue {
     /// `currentTask` 的代号，用于身份校验：仅当代号仍指向自己时才允许清空/接管。
     private var currentTaskSeq: UInt = 0
     private var generation: UInt = 0
-    /// 最近一次打断的来源：底层取消日志（TTS 合成已取消）据此对上「是谁打断的」。
+    /// 打断归因：**按管道代号记**，不记「最近一次」。
+    ///
+    /// 为什么不能只留一个单槽：一次打断作废的是**当时在跑的那条管道**，
+    /// 单槽会被后一次打断覆盖——于是先被掐的那条管道的合成日志会写成后一次打断的人
+    /// （2026-10-26 修：查「谁打断的」查错人，比查不到更坏）。
+    /// 管道自己的日志回头查它自己的代号，故不会认错人。
+    ///
     /// 不用 actor 并发考虑——打断本身串行，写入与 processNext 读它都在本 actor 上。
-    private var lastInterrupt: InterruptSource? = nil
+    private var interruptOriginBySeq: [UInt: InterruptOrigin] = [:]
     /// 空闲宽限的计时任务。**它不属于任何管道**——「还有话没说完」是身份层的事，
     /// 管道不起的时候也得有人在计时（2026-10-17 `P3`：块被掀光但摞没收尾时，
     /// 宽限寄生在管道循环里就永远没人跑，收尾挂死 47 秒）。
@@ -146,10 +125,13 @@ actor PlaybackQueue {
 
     func shutdown() {
         Log.info("PlaybackQueue 退出")
-        lastInterrupt = .shutdown   // 退出会取消在跑合成，打上标识免得读成上一次打断的残留
+        // 退出会取消在跑合成：给那条管道打上「退出清场」的归因，
+        // 免得它的合成日志读成上一次打断的残留。
+        let origin = InterruptOrigin(.shutdown, .system)
+        noteInterrupt(origin)
         pipelineSeq &+= 1      // 让在跑管道的 producer/consumer 退出
         currentTask?.cancel()
-        Task { await session.discardAll() }
+        Task { await session.discardAll(origin: origin) }
         player.cancelPendingPlayback()
         player.stop()
         // 退出时的**安全网**，与"谁借的"无关：播报已不碰音乐（暂停/恢复只归语音输入），
@@ -207,10 +189,15 @@ actor PlaybackQueue {
         await pumpOrSettle()
     }
 
-    /// 流式轮次被取消（pi 空流 `{cancel}`）：丢弃本轮内容，自取消不占打断来源。
-    func cancelTurn(_ id: String) async {
-        Log.info("用户取消轮次 \(id)：丢弃本轮未播内容，自取消不占打断来源")
-        await session.cancelTurn(id)
+    /// 流式轮次被取消（接入方发 `{cancel}`）：丢弃本轮内容。
+    ///
+    /// 与三档手动打断的区别：它**不掐在播**（等在播的念完）、也不动别的摞，
+    /// 只是把**这一摞**作废并立墓碑。墓碑上记着是谁取消的（`trigger`），
+    /// 于是这摞后续迟到的字被丢弃时，日志能说出「是谁不要它的」。
+    func cancelTurn(_ id: String, _ trigger: InterruptTrigger) async {
+        let origin = InterruptOrigin(.cancelTurn, trigger)
+        Log.info("取消本轮（来源=\(origin)）：丢弃本轮未播内容 \(id)")
+        await session.cancelTurn(id, origin: origin)
         await pumpOrSettle()   // 还有待播则补起管道，否则收尾（统一收敛点）
     }
 
@@ -319,9 +306,12 @@ actor PlaybackQueue {
     ///
     /// **这是「你别说了」**：内容丢、这些摞的将来也不再来。
     /// 「你停一下」（右⌘说话时让设备闭嘴、内容留着）是 `pausePlayback()`，走另一条路。
-    func cancelAll(origin: InterruptSource) async {
+    ///
+    /// **档位（全掀）在这里落定**，调用方只负责说「谁干的」（`trigger`）——
+    /// 档位由「调用哪个方法」决定，一处写死，别的层只带入口下来。
+    func cancelAll(_ trigger: InterruptTrigger) async {
+        let origin = InterruptOrigin(.skipAll, trigger)
         Log.info("打断（来源=\(origin)）：作废全部流式轮次")
-        lastInterrupt = origin
         await bargeIn(origin)   // bargeIn 内部丢弃 Session 全部内容，并给当前存在的摞立墓碑
     }
 
@@ -352,7 +342,8 @@ actor PlaybackQueue {
     /// **且必须在掐之前就摘走**（`takeHeadPage` 即摘走）：掐在播要 await 旧管道退净，
     /// 那期间游标会 commit 掉正在响的最后一块、越到下一页，再取靶心就晚了
     /// （2026-10-17 18:52 实测：摞级现场，页级同一个偏差）。
-    func skipCurrentPage(_ origin: InterruptSource) async {
+    func skipCurrentPage(_ trigger: InterruptTrigger) async {
+        let origin = InterruptOrigin(.skipPage, trigger)
         let taken = await session.takeHeadPage()   // 起点此刻定死，掐不掐都拿它
         await preemptCurrent(origin)
         hideCaption()   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
@@ -372,8 +363,9 @@ actor PlaybackQueue {
     ///
     /// 同样**掐之前先摘走**（理由见 `skipCurrentPage`）——旧实现正是在 await 之后才取起点，
     /// 游标一越过边界就把用户想听的那一摞掀了。
-    func skipCurrentBucket(_ origin: InterruptSource) async {
-        let taken = await session.takeHeadStack()   // 起点此刻定死
+    func skipCurrentBucket(_ trigger: InterruptTrigger) async {
+        let origin = InterruptOrigin(.skipStack, trigger)
+        let taken = await session.takeHeadStack(origin: origin)   // 起点此刻定死；墓碑记着是谁掀的
         await preemptCurrent(origin)
         hideCaption()   // 被掀掉的那一摞立刻从字幕撤下；下一摞开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再前移
@@ -526,23 +518,37 @@ actor PlaybackQueue {
     /// 不在此清 currentTask——由旧 processNext 自然结束时自清；调用方若要立刻起新管道，
     /// 必须 `await awaitCurrentPipelineFinished()`（线性化点），否则新旧两个 consumer 会并发
     /// write 同一个 player、争夺单一背压 continuation 槽，造成 continuation 泄漏/竞态。
-    private func preemptCurrent(_ origin: InterruptSource?) async {
-        // nil = 自取消（用户放弃自己那轮），不是从别人手里抢喇叭，不占打断来源。
-        let label = origin?.description ?? "自取消"
-        lastInterrupt = origin
+    private func preemptCurrent(_ origin: InterruptOrigin) async {
+        noteInterrupt(origin)   // 归因挂在**被作废的那条管道**上：它自己的日志回头查自己的代号
         pipelineSeq &+= 1      // 作废在跑管道：其 producer/consumer 靠代号不等立即停止
         currentTask?.cancel()
         await session.signal()  // 挂在 Session 里的宽限等待立刻作废（掐了就不必再宽限）
-        await engine.cancelActiveSynthesis(reason: label)   // 显式作废旧纪元排队合成，不依赖任务取消传播
+        await engine.cancelActiveSynthesis(reason: origin.description)   // 显式作废旧纪元排队合成，不依赖任务取消传播
         player.cancelPendingPlayback()
     }
 
-    /// 掀桌：掐掉在播 + 清空全部排队内容（右⌘ 说话 / Ctrl+3 闭嘴）。
-    private func bargeIn(_ origin: InterruptSource?) async {
-        let label = origin?.description ?? "自取消"
+    /// 记下「这条管道是被谁掐的」。
+    ///
+    /// 挂在 `currentTaskSeq`（**正在跑的那条**）上，且**先到先得**：
+    /// 一次打断的 `cancel()` 是异步生效的，紧跟着的第二次打断还会看到同一条管道——
+    /// 那时若覆盖，归因就成了「后一次的人」，而真正掐死它的是前一次。
+    private func noteInterrupt(_ origin: InterruptOrigin) {
+        guard currentTask != nil else { return }
+        if interruptOriginBySeq[currentTaskSeq] == nil {
+            interruptOriginBySeq[currentTaskSeq] = origin
+        }
+    }
+
+    /// 这条管道是**被谁**掐的。查不到就是「不是打断掐的」，不猜。
+    private func interruptOriginText(for seq: UInt) -> String {
+        interruptOriginBySeq[seq]?.description ?? "非打断"
+    }
+
+    /// 掀桌：掐掉在播 + 清空全部排队内容（Ctrl+3 闭嘴）。
+    private func bargeIn(_ origin: InterruptOrigin) async {
         let n = await session.pendingCount
-        Log.info("打断（来源=\(label)）：取消在播、清空队列(pending=\(n))、作废管道 seq\(pipelineSeq&+1))；后续增量一并作废")
-        await session.discardAll()   // 清容器 + 给属主的摞立墓碑（它们后续的增量也别来了）
+        Log.info("打断（来源=\(origin)）：取消在播、清空队列(pending=\(n))、作废管道 seq\(pipelineSeq&+1))；后续增量一并作废")
+        await session.discardAll(origin: origin)   // 清容器 + 给属主的摞立墓碑（它们后续的增量也别来了）
         hideCaption()   // 掀桌：字幕立刻收（掀摞不走这里——它们的字幕由下一句广播接续）
         await preemptCurrent(origin)
     }
@@ -643,7 +649,7 @@ actor PlaybackQueue {
                     }
                     try Task.checkCancellation()
                 } catch is CancellationError {
-                    Log.info("TTS 合成已取消 [\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "自取消")）")
+                    Log.info("TTS 合成已取消 [\(job.source)-\(batchID)]（打断来源=\(interruptOriginText(for: seq))）")
                     throw CancellationError()
                 } catch {
                     // 身份标识必须带全：这是「播到一半没了」最该留线索的一行，
@@ -659,7 +665,7 @@ actor PlaybackQueue {
                 if pipelineSeq != seq {
                     // MLX 不响应中途取消：打断后被掐的这句仍跑完，但已作废。别让它显示成
                     // 普通「完成」（打断后紧邻的完成会被人误读成「没掐住」）。
-                    Log.info("TTS 合成作废（MLX 不响应中途取消，这句跑完才停）[\(job.source)-\(batchID)]（打断来源=\(lastInterrupt?.description ?? "自取消")） \(elapsed)s")
+                    Log.info("TTS 合成作废（MLX 不响应中途取消，这句跑完才停）[\(job.source)-\(batchID)]（打断来源=\(interruptOriginText(for: seq))） \(elapsed)s")
                 } else if claimed {
                     Log.info("TTS 合成完成 [\(job.source)-\(batchID)] seq=\(job.seq) \(elapsed)s")
                 }
@@ -700,6 +706,7 @@ actor PlaybackQueue {
         // 只在**自己还是当前管道**时撤：被顶替的旧管道不能把新管道刚报的那句擦掉。
         if currentTaskSeq == seq { hideCaption() }
         if currentTaskSeq == seq { currentTask = nil }   // 已被新管道顶替则不清
+        interruptOriginBySeq.removeValue(forKey: seq)   // 这条管道的归因用完了（它的日志已打过）
         await Task.yield()
         // 收尾窗口兜底：drain 等待尾音期间新入队的内容，旧管道正在收尾、currentTask 尚非 nil，
         // 入队路径不肯起新管道——这里须回头收敛一次，否则新内容永久躺着

@@ -12,6 +12,10 @@ final class PlaybackSessionStoryTests: XCTestCase {
 
     // MARK: - 夹具
 
+    /// 打断归因。测试只关心「被放弃的摞记下了是谁放弃的」这件事成立，
+    /// 不关心具体是谁——故用固定的一份归因（档位掀摞、入口「测试」）。
+    private let testOrigin = InterruptOrigin(.skipStack, .request("测试"))
+
     /// 造一块材料。**块上没有任何外部编号**（2026-10-18 起：块的身份只有助理发的 `seq`），
     /// 摞线索走 `deliver` 的 `group`、页线索走 `deliver` 的 `page`。
     private func block(_ text: String, source: String = "claude") -> PlaybackBlock {
@@ -96,7 +100,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         await seed(s, stacks: [(id: "gB", pages: [["B1"]])])
         await advanceAll(s)
 
-        let taken = await s.takeHeadStack()?.turnID
+        let taken = await s.takeHeadStack(origin: testOrigin)?.turnID
         XCTAssertEqual(taken, "gB", "空摞不是「正在听的那摞」，该跳过")
     }
 
@@ -104,7 +108,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
     func testAbandonedStackNeverSpeaksAgain() async {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["A1"]]), (id: "gB", pages: [["B1"]])])
-        _ = await s.takeHeadStack()
+        _ = await s.takeHeadStack(origin: testOrigin)
         let late = await deliver(s, group: "gA", page: "gA-p0", blocks: [block("A2")])
         XCTAssertEqual(late, .dead, "被放弃的摞，它后续送来的字不该再开口")
     }
@@ -115,7 +119,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         let s = PlaybackSession()
         await seed(s, stacks: [(id: "gA", pages: [["A1"]]), (id: "gB", pages: [["B1"]])])
         await advanceAll(s)
-        _ = await s.takeHeadStack()                    // 放弃 gA
+        _ = await s.takeHeadStack(origin: testOrigin)                    // 放弃 gA
         let ok = await deliver(s, group: "gB", page: "gB-p1", blocks: [block("B2")])
         XCTAssertEqual(ok, .appended, "gB 没被放弃，它后续送来的页必须还能入队")
     }
@@ -160,7 +164,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         await seed(s, stacks: [(id: "gA", pages: [["A1"]])])
         await advanceAll(s)
 
-        _ = await s.discardAll()                       // 麦克风唯一做的事：全掀
+        _ = await s.discardAll(origin: testOrigin)                       // 麦克风唯一做的事：全掀
         let pending = await s.hasPending
         let head = await headStackID(s)
         XCTAssertFalse(pending, "麦克风让路后不该留下任何纸")
@@ -177,7 +181,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
                                (id: "gB", pages: [["B1", "B2"]])])
         // 译文在播报员那边念，容器不受影响：起点仍是 gA。
 
-        let taken = await s.takeHeadStack()?.turnID
+        let taken = await s.takeHeadStack(origin: testOrigin)?.turnID
         let after = await headStackID(s)
         XCTAssertEqual(taken, "gA", "起点被译文挪走了 —— 桌上压根没有译文那一摞")
         XCTAssertEqual(after, "gB", "掀完 gA 自然落到 gB")
@@ -208,7 +212,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
                                (id: "gC", pages: [["C1"]])])
         await advance(s, 2)   // 备好越过 gA 的两块；gA 的尾音还在响，gB 还没被摸
 
-        let taken = await s.takeHeadStack()
+        let taken = await s.takeHeadStack(origin: testOrigin)
         let after = await headStackID(s)
         XCTAssertEqual(taken?.turnID, "gA", "起点被进度带偏了：你在听 gA，掀掉的却是别的摞")
         XCTAssertEqual(after, "gB", "掀完自然落到下一摞")
@@ -230,7 +234,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         let atEnd = await headStackID(s)
         XCTAssertEqual(atEnd, "gA", "备好推到哪都不该改变起点")
 
-        let taken = await s.takeHeadStack()?.turnID
+        let taken = await s.takeHeadStack(origin: testOrigin)?.turnID
         let next = await headStackID(s)
         XCTAssertEqual(taken, "gA")
         XCTAssertEqual(next, "gB")
@@ -268,7 +272,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         await s.noteConsumed(2)      // 用户在听块 1，仍在 gA
 
         let head = await headStackID(s)
-        let taken = await s.takeHeadStack()?.turnID
+        let taken = await s.takeHeadStack(origin: testOrigin)?.turnID
         XCTAssertEqual(head, "gA")
         XCTAssertEqual(taken, "gA", "备好推到末尾也不能把起点带偏")
     }
@@ -284,10 +288,10 @@ final class PlaybackSessionStoryTests: XCTestCase {
                                (id: "gC", pages: [["C1"]])])
         await advanceAll(s)
 
-        let a = await s.takeHeadStack()?.turnID
-        let b = await s.takeHeadStack()?.turnID
-        let c = await s.takeHeadStack()?.turnID
-        let d = await s.takeHeadStack()
+        let a = await s.takeHeadStack(origin: testOrigin)?.turnID
+        let b = await s.takeHeadStack(origin: testOrigin)?.turnID
+        let c = await s.takeHeadStack(origin: testOrigin)?.turnID
+        let d = await s.takeHeadStack(origin: testOrigin)
         let head = await headStackID(s)
         XCTAssertEqual(a, "gA")
         XCTAssertEqual(b, "gB")
@@ -369,11 +373,11 @@ final class PlaybackSessionStoryTests: XCTestCase {
         let s = PlaybackSession()
         _ = await s.appendPlain([block("甲的第一句", source: "pi")])
         _ = await s.appendPlain([block("乙的第一句", source: "pi")])
-        let first = await s.takeHeadStack()
+        let first = await s.takeHeadStack(origin: testOrigin)
         XCTAssertEqual(first?.dropped, 1, "掀第一摞只该丢它自己的块，不该把后到的一起带走")
-        let second = await s.takeHeadStack()
+        let second = await s.takeHeadStack(origin: testOrigin)
         XCTAssertEqual(second?.dropped, 1, "第二摞还在原地等着（无编号不等于同一摞）")
-        let third = await s.takeHeadStack()
+        let third = await s.takeHeadStack(origin: testOrigin)
         XCTAssertNil(third, "两摞都掀完了")
     }
 
@@ -455,7 +459,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         _ = await deliver(s, group: "gPi", page: "p2", blocks: [block("X1", source: "pi")])
         _ = await deliver(s, group: "gClaude", page: "p3", blocks: [block("C2", source: "claude")])
 
-        let buried = await s.discardAll()
+        let buried = await s.discardAll(origin: testOrigin)
 
         let piLater = await deliver(s, group: "gPi", page: "p4", blocks: [block("X2", source: "pi")])
         let claudeLater = await deliver(s, group: "gClaude", page: "p5", blocks: [block("C3", source: "claude")])
@@ -472,7 +476,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         _ = await deliver(s, group: "gPi", page: "p2", blocks: [block("X1", source: "pi")])
         await advanceAll(s)
 
-        _ = await s.discardAll()
+        _ = await s.discardAll(origin: testOrigin)
 
         let pending = await s.hasPending
         let head = await headStackID(s)
@@ -488,7 +492,7 @@ final class PlaybackSessionStoryTests: XCTestCase {
         _ = await s.beginTurn("gPi")
         _ = await s.beginTurn("gClaude")
 
-        _ = await s.discardAll()
+        _ = await s.discardAll(origin: testOrigin)
 
         let piLater = await deliver(s, group: "gPi", page: "q1", blocks: [block("P1", source: "pi")])
         let claudeLater = await deliver(s, group: "gClaude", page: "q2", blocks: [block("C1", source: "claude")])
@@ -583,11 +587,11 @@ final class PlaybackSessionStoryTests: XCTestCase {
         await seed(s, stacks: [(id: "gA", pages: [["A1"]]),
                                (id: "gB", pages: [["B1"]])])
         await advanceAll(s)
-        _ = await s.takeHeadStack()
+        _ = await s.takeHeadStack(origin: testOrigin)
         await seed(s, stacks: [(id: "gC", pages: [["C1"]])])
         await advanceAll(s)
-        _ = await s.takeHeadStack()
-        _ = await s.takeHeadStack()
+        _ = await s.takeHeadStack(origin: testOrigin)
+        _ = await s.takeHeadStack(origin: testOrigin)
 
         let head = await headStackID(s)
         let pending = await s.hasPending
@@ -603,14 +607,14 @@ final class PlaybackSessionStoryTests: XCTestCase {
     /// 反过来，**右⌘说话不是这一档**：那是「你停一下」，走 `PlaybackQueue.pausePlayback()`
     /// （设备停渲染、内容一条不删），根本不进 `discardAll`。
     /// 早先它误用了「全掀」，于是被清场顺手埋了碑，Claude 这一摞后续送来的页撞碑消失——
-    /// 2026-10-23 实测丢过 891 字 / 15 块。防复发靠结构：`InterruptSource` 里已没有
-    /// `.speech`，说话路径在**编译期**就进不了「全掀」。
+    /// 2026-10-23 实测丢过 891 字 / 15 块。防复发靠结构：打断归因（`InterruptOrigin`）
+    /// 里没有「说话」这一档，说话路径在**编译期**就进不了「全掀」。
     func testShutUpBuriesTheStackItAbandoned() async {
         let s = PlaybackSession()
         _ = await deliver(s, group: "gA", page: "p1", blocks: [block("A1", source: "claude")])
         await advanceAll(s)
 
-        _ = await s.discardAll()                     // Ctrl+2 全掀：放弃内容
+        _ = await s.discardAll(origin: testOrigin)                     // Ctrl+2 全掀：放弃内容
 
         let later = await deliver(s, group: "gA", page: "p2", blocks: [block("A2", source: "claude")])
         XCTAssertEqual(later, .dead, "被放弃的摞，它后续送来的页不该再开口")

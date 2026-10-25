@@ -206,7 +206,8 @@ actor ConnectionHandler: SocketConnectionHandler {
                 }
                 if frame.hasPrefix("{cancel") {
                     Log.info("流式取消: turn=\(turn)")
-                    chain.hop { await self.queue.cancelTurn(turn) }
+                    // 归因记「是哪个接入方取消的」——`source` 是这条流自己报的身份。
+                    chain.hop { await self.queue.cancelTurn(turn, .request(source)) }
                     return false
                 }
                 // 翻页：扩展在每条 assistant message 开始时发。此后 flush 出来的块都归这一页
@@ -346,6 +347,12 @@ actor ConnectionHandler: SocketConnectionHandler {
     /// 跳过请求 `{type:skip,mode:page|stack|all}`：手动打断三档的命令行入口（`ivox skip`
     /// 及其 `--stack` / `--all`），落到的就是 Ctrl+1 / Ctrl+2 / Ctrl+3 分派的那几个方法。
     /// 三档都**只碰播报、不碰背景音乐**（音乐只归语音输入），故与热键逐字同路径。
+    ///
+    /// `by`：**请求方自报**的身份（如 "ivox-skip"），记进打断归因——
+    /// 「谁打断的」要答得出来，就得有个人报名。
+    /// 为什么不查内核里的对端 pid：`ivox skip` 这种发完就退的短命进程，
+    /// 等我们读到帧时它早没了（实测 `getsockopt(LOCAL_PEERPID)` 返回 -1），
+    /// 查出来是残值更糟。自报是唯一稳的渠道。
     private nonisolated func handleSkip(fd: Int32, header: String) {
         defer { Darwin.close(fd) }
         let kv = parseMetaKV(header)
@@ -353,15 +360,18 @@ actor ConnectionHandler: SocketConnectionHandler {
         // tag：自检脚本发打断时带上自己的 runId，好把自己的信号从"外部干扰"里择出去——
         // 否则它会被自己的检测抓成噪音，整条用例直接 skip（等于白挂）。
         let tag = kv["tag"].map { " tag=\($0)" } ?? ""
-        Log.info("跳过请求: mode=\(mode)\(tag)")
+        let who = kv["by"] ?? "未署名"
+        let by = kv["by"].map { " by=\($0)" } ?? ""
+        Log.info("跳过请求: mode=\(mode)\(tag)\(by)")
+        let trigger = InterruptTrigger.request(who)
         Task {
             switch mode {
             case "all":
-                await queue.cancelAll(origin: .esc)
+                await queue.cancelAll(trigger)
             case "stack":
-                await queue.skipCurrentBucket(.skip)
+                await queue.skipCurrentBucket(trigger)
             default:
-                await queue.skipCurrentPage(.skipPage)
+                await queue.skipCurrentPage(trigger)
             }
         }
     }

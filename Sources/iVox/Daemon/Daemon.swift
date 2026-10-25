@@ -297,7 +297,7 @@ actor Daemon {
         translationCoordinator = coordinator
         quickActions = quickActionsService
 
-        keyTap.onHotKey = { hotKey, location in
+        keyTap.onHotKey = { hotKey, chord, location in
             Task { @MainActor in
                 switch hotKey {
                 case .translate:
@@ -309,13 +309,14 @@ actor Daemon {
                 case .skipAll:
                     // 手动打断三档之「掀桌」：Ctrl+3 用户不想说话，只静音播报。
                     // **不碰背景音乐**——播报不再借音乐，这里也就没有"还"要补（见 PlaybackQueue 文件头）。
-                    await self.queue.cancelAll(origin: .esc)
+                    // 归因带**实际生效的键位**（键位可配，写死 "Ctrl+3" 就是句假话）。
+                    await self.queue.cancelAll(.hotkey(chord))
                 case .skipBucket:
                     // 手动打断三档之「中」：丢正在播的这一轮（连同其后分块），从下一桶接着播。
-                    await self.queue.skipCurrentBucket(.skip)
+                    await self.queue.skipCurrentBucket(.hotkey(chord))
                 case .skipPage:
                     // 手动打断三档之「轻」：Ctrl+1 丢正在播的这一页，同一轮剩下的照常念。
-                    await self.queue.skipCurrentPage(.skipPage)
+                    await self.queue.skipCurrentPage(.hotkey(chord))
                 }
             }
         }

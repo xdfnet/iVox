@@ -230,12 +230,14 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 请求头，无 body：
 
 ```
-{type:skip,mode:page}    # 掐 + 掀页（同 Ctrl+1）：掐断在播的，丢掉这一页剩下的块
-{type:skip,mode:stack}   # 掐 + 掀摞（同 Ctrl+2）：掐断在播的，丢掉这一摞全部段并立墓碑拦后续增量
-{type:skip,mode:all}     # 掐 + 全掀（同 Ctrl+3）：停当前 + 清空排队
+{type:skip,mode:page,by:ivox-skip}    # 掐 + 掀页（同 Ctrl+1）：掐断在播的，丢掉这一页剩下的块
+{type:skip,mode:stack,by:ivox-skip}   # 掐 + 掀摞（同 Ctrl+2）：掐断在播的，丢掉这一摞全部段并立墓碑拦后续增量
+{type:skip,mode:all,by:ivox-skip}     # 掐 + 全掀（同 Ctrl+3）：停当前 + 清空排队
 ```
 
 无回复。`mode` 缺省按 `page`。**头的尾随 `\n` 是必需的路由依据**——没有它，服务端会把整条请求当传统整段播报体交给 `handleTTS`（`{type:stop}` 正踩在这条边界上：它现在发无换行裸串，走的就是 handleTTS 分支）。
+
+**`by`：请求方自报的身份**（可选，缺省记「未署名」），记进打断归因（`掀摞·请求方 ivox-skip`）——「谁打断的」要答得出来，就得有个人报名。**为什么不查内核里的对端 pid**：`ivox skip` 这种发完就退的短命进程，等服务端读到帧时它早没了（实测 `getsockopt(LOCAL_PEERPID)` 返回 -1），查出来是残值更糟。自报是唯一稳的渠道。
 
 给热键一个命令行对应物（`ivox skip --page` / `--stack` / `--all`），供自检脚本、压测、远程排查使用；热键路径本身不经过这里。三个 mode 落到的是 `PlaybackQueue.skipCurrentPage` / `skipCurrentBucket` / `cancelAll`，与热键完全同一条代码路径。三档都**只碰播报、不碰背景音乐**（音乐只归语音输入）。
 
