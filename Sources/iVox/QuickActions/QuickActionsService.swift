@@ -67,12 +67,15 @@ final class QuickActionsService {
         // 的行为就是留着窗口，这里对齐它。
         var args = ["--working-directory=\(dir)", "--wait-after-command=true"]
         if let command {
-            // 用 `--command=shell:<cmd>`（Ghostty 官方写法）而非 `-e`：**`-e` 每次都会弹 macOS 的
+            // 用 `--initial-command=shell:<cmd>`（Ghostty 官方写法）而非 `-e`：**`-e` 每次都会弹 macOS 的
             // 「Allow Ghostty to execute "/bin/zsh"?」确认框**（Ghostty 的安全机制，
             // 目前没有配置项能关，issue #8648 仍在讨论），`--command` 不走那条通道。
             // 实测 1.3.1：`shell:` 后的命令在**真 tty**（/dev/ttyNN）里跑，cwd 即
             // `--working-directory`。
-            args.append("--command=shell:\(command)")
+            // ⚠️ **必须用 `initial-command` 而不是 `command`**：后者对**每一个**新终端面都生效，
+            // 于是 Cmd+E 分屏（`new_split:left`）新出的那个面会**再跑一遍 claude**——用户要的是
+            // 「分屏出来是普通终端」。`initial-command` 只作用于**第一个**面，分屏因此拿默认 shell。
+            args.append("--initial-command=shell:\(command)")
         }
         let config = NSWorkspace.OpenConfiguration()
         config.arguments = args

@@ -317,9 +317,10 @@ Daemon (actor)
 
 - `Opt+Q` 在 Finder 当前目录开终端；`Opt+A`/`Opt+X`/`Opt+S` 开终端并执行 `claude`/`codex`/`pi`；`Opt+C` 把选中项路径写进剪贴板
 - `Opt+Q`（不带命令）**总是新开窗口**（2026-10-25 改）：早先有「Ghostty 已经在跑就只聚焦、不开新窗口」的分支（怕连按五下开五个终端），但它不切目录——用户选了文件夹按 Opt+Q 却只看到老窗口被叫到前面，等于「没反应」。这一档的语义就是「在哪儿选就在哪儿开」。带命令的三个同理，都走新实例（见下条实测坑②，这条不能破）
-- 开终端走 **Ghostty**（`--working-directory` + `--command=shell:` 是它的原生 CLI 参数）：一条 LaunchServices 调用就够，**不需要**临时 `.command` 文件，也不沾 Terminal 的 Automation 授权
+- 开终端走 **Ghostty**（`--working-directory` + `--initial-command=shell:` 是它的原生 CLI 参数）：一条 LaunchServices 调用就够，**不需要**临时 `.command` 文件，也不沾 Terminal 的 Automation 授权
 - 三个实测坑：① 参数必须经 `NSWorkspace.OpenConfiguration.arguments`（数组）下发——命令行 `open --args` 只有**整体加引号**时才保住含空格参数的边界（2026-10-25 实测：不加引号是被**本机 shell** 拆掉的，不是 `open` 拆的）；② **必须配 `createsNewApplicationInstance`**，复用已运行的 Ghostty 实例时参数会被**静默忽略**（命令根本不跑）；③ **不用 `-e`**——它每次弹 macOS 的「Allow Ghostty to execute」确认框，Ghostty 目前无配置项可关
-- 命令写作 `--command=shell:<cmd>`（Ghostty 官方写法，`shell:` 后面是一整条命令、不再套 `bash -c`）。实测 1.3.1：它在**真 tty**（`/dev/ttyNN`）里跑，cwd 即 `--working-directory`。另配 `--wait-after-command=true` 让命令退出后**保留窗口**（Ghostty 默认关窗，与原先 Terminal 的行为不一致，退出 claude 时会看不到最后的输出）
+- 命令写作 `--initial-command=shell:<cmd>`（Ghostty 官方写法，`shell:` 后面是一整条命令、不再套 `bash -c`）。实测 1.3.1：它在**真 tty**（`/dev/ttyNN`）里跑，cwd 即 `--working-directory`。另配 `--wait-after-command=true` 让命令退出后**保留窗口**（Ghostty 默认关窗，与原先 Terminal 的行为不一致，退出 claude 时会看不到最后的输出）
+- ⚠️ **必须用 `initial-command` 而不是 `command`**：两者行为相同，但 `command` 对**每一个**新终端面都生效——于是 Cmd+E 分屏（`new_split:left`，见 patch-ghostty 配方）新出的那个面会**再跑一遍 claude**，用户要的是「分屏出来是普通终端」。`initial-command` 只作用于**第一个**面，分屏因此拿默认 shell
 - ⚠️ **PATH 必须由 daemon 显式传给 Ghostty**（`NSWorkspace.OpenConfiguration.environment`）：daemon 由 launchd 启动，继承的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`；而 Ghostty 在 macOS 上经 `/usr/bin/login` + `--noprofile --norc` 启动 shell，**明令不读 profile**，`~/.zprofile` 那条加 PATH 的规则对它无效 → `claude` 报 `not found`。
   - 补的目录清单在 `AppPaths.userBinDirs`（唯一真源，按 `HOME` 展开、不写死用户名）：`~/.local/bin`（claude）与 Homebrew 的 bin（codex/pi，`/opt/homebrew/bin` 或 `/usr/local/bin` 按实际存在的那个取）
   - ⚠️ 别改成「套 `zsh -lc` 让 Ghostty 里的 shell 自己读 profile」：绕路，且 `codex`/`pi` 是 `#!/usr/bin/env node` 的脚本，`env node` 照样要在 PATH 里找 node

@@ -2,6 +2,12 @@
 
 ## 未发布 — 2026-10-25
 
+- **Cmd+E 分屏不再重复拉起 claude** — 飞哥反馈：Opt+A 开了 Claude 后按 Cmd+E 分屏，左侧新出的面**又是一个 Claude**。
+  - 根因：用的是 `--command=`，它对**每一个**新终端面都生效，分屏新建的面照样跑命令
+  - 改用 `--initial-command=`（只作用于**第一个**面），分屏因此拿默认 shell——正是想要的「分屏出来是普通终端」
+  - 顺带把这条区别写进代码注释与 `docs/architecture.md`：`command` 与 `initial-command` 行为相同，
+    差别只在**作用范围**（全部新面 vs 仅第一个面）
+
 - **开终端的 PATH 由 daemon 显式传给 Ghostty** — 修 `Opt+A/X/S` 弹出窗口却报
   `exec: claude: not found`（2026-10-25 飞哥实测反馈）
   - 根因：daemon 由 launchd 启动，继承的 PATH 只有 `/usr/bin:/bin:/usr/sbin:/sbin`；
