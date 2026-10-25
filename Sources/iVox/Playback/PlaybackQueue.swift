@@ -110,6 +110,10 @@ actor PlaybackQueue {
     ///（宁可早一点判"这摞说完"，也不能再出现"永远判不完"）。
     private static let maxSilenceWaitSeconds: Double = 10
 
+    /// **两摞之间的换气**（秒）：插一小段静音，让「换了一轮」听得出来。
+    /// 0.6 秒是「能分辨但不打断」的量级——再长就让人以为卡住了。
+    private static let stackGapSeconds: Double = 0.6
+
     /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播**歌词式的一帧**
     ///（这一页的句子 + 念到第几句），收起广播 nil。
     /// 在**本 actor 上**被调用，实现方自己切回主线程再碰 UI。
@@ -158,7 +162,7 @@ actor PlaybackQueue {
     /// 音频侧报「这句开始响」（带着块号）→ 问身份层要「这一页的句子 + 第几句」→ 给字幕。
     private func emitCaption(_ seq: UInt) async {
         guard let ctx = await session.captionContext(forSeq: seq) else { return }
-        onCaption?(CaptionFrame(lines: ctx.lines, index: ctx.index))
+        onCaption?(CaptionFrame(lines: ctx.lines, index: ctx.index, stack: ctx.stack))
     }
 
     /// 队列中等待播放的条数（/health 用）
@@ -539,6 +543,8 @@ actor PlaybackQueue {
 
         let producer = Task {
             defer { pcmContinuation.finish() }
+            // 上一块属于哪一摞：变了就是换了一轮 → 插一段静音（换气）
+            var lastStackID: Int?
             while !Task.isCancelled {
                 if pipelineSeq != seq { return }   // 已被掐断作废：立即退出，不再合成
                 guard let cursor = await session.nextCursor() else {
@@ -557,6 +563,16 @@ actor PlaybackQueue {
                 do {
                     try await waitUntilEngineReady()
                     try Task.checkCancellation()
+
+                    // **换摞留个空隙**：两摞连着读分不清哪是一轮的开头（用户反馈）。
+                    // 换摞时插一小段静音——像换段换气。加急段（Opt+Z 译文插队）**不插**：
+                    // 用户主动要它立刻响，让它等半秒是添乱。
+                    if !cursor.isFront, let stack = await session.stackID(forSeq: cursor.seq),
+                       let last = lastStackID, stack != last {
+                        Log.debug("换摞: 插 \(Int(Self.stackGapSeconds * 1000)) 毫秒静音（摞 \(last) → \(stack)）")
+                        await player.writeSilence(seconds: Self.stackGapSeconds)
+                    }
+                    if !cursor.isFront { lastStackID = await session.stackID(forSeq: cursor.seq) }
 
                     // 预取门控：已排队音频足够多就先别开下一句，等设备消费到低水位。
                     try await player.awaitPrefetchCapacity()

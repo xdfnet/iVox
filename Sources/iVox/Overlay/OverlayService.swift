@@ -36,17 +36,27 @@ final class OverlayService {
         /// nil = 整行一个颜色（按 `style`）。
         let highlight: Range<Int>?
 
-        init(text: String, style: Style = .normal, highlight: Range<Int>? = nil) {
+        /// **分界线**：不是文字，是一条细线（换摞时提示「这是一轮新的」）。
+        /// 为 true 时 `text` 忽略。
+        let isRule: Bool
+
+        init(text: String, style: Style = .normal, highlight: Range<Int>? = nil,
+             isRule: Bool = false) {
             self.text = text
             self.style = style
             self.highlight = highlight
+            self.isRule = isRule
         }
     }
 
     /// 屏上只有这两个颜色（翻译那双色）：主色 = 正文白，次色 = 半透明白。
-    /// **字幕的卡拉OK高亮也用它们**——不另立一套颜色。
+    /// **字幕的卡拉OK高亮、分界线也用它们**——不另立一套颜色。
     private static let primaryColor = NSColor.white
     private static let secondaryColor = NSColor.white.withAlphaComponent(0.55)
+    /// 分界线：细横线，粗细 1 点（Retina 上是 2 像素）
+    private static let ruleHeight: CGFloat = 1
+    /// 分界线的颜色：仍是那两色里的次色（不另立颜色）
+    fileprivate static let ruleColor = NSColor.white.withAlphaComponent(0.35)
 
     private var channels: [Channel: [Line]] = [:]
     private var panel: NSPanel?
@@ -57,10 +67,10 @@ final class OverlayService {
     private var didWarnMissingScreen = false
     /// 浮层在不在屏上——**音乐让路的唯一判据**
     private var isWindowVisible = false
-    /// 上一轮画出来的文字与 label：卡拉OK式字幕每 100ms 推进一步高亮，
+    /// 上一轮画出来的行（键 + 视图）：卡拉OK式字幕每 100ms 推进一步高亮，
     /// 整块重建视图会闪——文字没变就只换颜色。
-    private var renderedTexts: [String] = []
-    private var renderedLabels: [NSTextField] = []
+    private var renderedKeys: [String] = []
+    private var renderedViews: [NSView] = []
     /// 音乐已经让过路了吗（降了但还没升回来）
     private var musicDucked = false
     private let ducker: SodaVolumeDucker
@@ -147,6 +157,8 @@ final class OverlayService {
 
         var result: [Line] = translation
         for line in caption {
+            // 分界线没有文字，不参与去重（否则会被当成空内容丢掉）
+            if line.isRule { result.append(line); continue }
             let text = normalize(line.text)
             guard !text.isEmpty else { continue }
             let isEcho = translatedText.contains { other in
@@ -179,8 +191,11 @@ final class OverlayService {
 
         // **文字没变就只改颜色**：卡拉OK式字幕的高亮每 100ms 推进一步，
         // 整块重建视图会闪（连着闪十几下）。只换颜色不动尺寸 → 视觉上只有字在变亮。
-        if renderedTexts == lines.map(\.text), renderedLabels.count == lines.count {
-            for (label, line) in zip(renderedLabels, lines) { apply(line, to: label) }
+        let keys = lines.map { ($0.isRule ? "R" : "T") + $0.text }
+        if keys == renderedKeys, renderedViews.count == lines.count {
+            for (view, line) in zip(renderedViews, lines) {
+                if let label = view as? NSTextField { apply(line, to: label) }
+            }
             return
         }
 
@@ -190,8 +205,15 @@ final class OverlayService {
 
         // 逐行量尺寸：宽度上限 = 浮窗宽度上限，且别超出屏宽（载体还有内边距）
         let widthLimit = min(CGFloat(config.maxWidth), visible.width - 80 - padding * 2)
+        var views: [NSView] = []
         var labels: [NSTextField] = []
         for line in lines {
+            if line.isRule {
+                // 分界线：一条细横线，宽度稍后按内容宽定，垂直居中于它的行位
+                let rule = RuleView(frame: NSRect(x: 0, y: 0, width: 0, height: Self.ruleHeight))
+                views.append(rule)
+                continue
+            }
             let label = makeLabel(line.text, style: line.style)
             apply(line, to: label)
             label.sizeToFit()
@@ -199,23 +221,31 @@ final class OverlayService {
                 label.preferredMaxLayoutWidth = widthLimit
                 label.sizeToFit()
             }
+            views.append(label)
             labels.append(label)
         }
 
         // 总高超出上限 → 截**最后一行**（译文那一行；原文是你选的，通常短，留着）
         let heightLimit = visible.height * CGFloat(config.maxHeightRatio) - padding * 2
-        let gaps = gap * CGFloat(max(0, labels.count - 1))
-        var totalHeight = labels.reduce(0) { $0 + $1.frame.height } + gaps
+        let gaps = gap * CGFloat(max(0, views.count - 1))
+        var totalHeight = views.reduce(0) { $0 + $1.frame.height } + gaps
         if totalHeight > heightLimit, let last = labels.last, let font = last.font {
             let lineHeight = font.ascender - font.descender + font.leading
             let room = heightLimit - gaps
             last.maximumNumberOfLines = max(1, Int(room / lineHeight))
             last.lineBreakMode = .byTruncatingTail
             last.sizeToFit()
-            totalHeight = labels.reduce(0) { $0 + $1.frame.height } + gaps
+            totalHeight = views.reduce(0) { $0 + $1.frame.height } + gaps
         }
 
         let contentWidth = labels.map { $0.frame.width }.max() ?? 0
+        // 分界线的宽度：内容宽的一小段，居中
+        let ruleWidth = max(30, contentWidth * 0.28)
+        for view in views {
+            if let rule = view as? RuleView {
+                rule.frame = NSRect(x: 0, y: 0, width: ruleWidth, height: Self.ruleHeight)
+            }
+        }
         let carrierSize = NSSize(width: contentWidth + padding * 2,
                                  height: totalHeight + padding * 2)
 
@@ -232,10 +262,17 @@ final class OverlayService {
         carrier.autoresizesSubviews = false
 
         var y = carrierSize.height - padding
-        for label in labels {
-            y -= label.frame.height
-            carrier.addSubview(label)
-            label.setFrameOrigin(NSPoint(x: (carrierSize.width - label.frame.width) / 2, y: y))
+        for view in views {
+            let rowHeight = view.frame.height
+            y -= rowHeight
+            carrier.addSubview(view)
+            if let rule = view as? RuleView {
+                // 线在它的行位里居中（上下各留一点空隙）
+                rule.setFrameOrigin(NSPoint(x: (contentWidth - rule.frame.width) / 2,
+                                           y: y + (rowHeight - rule.frame.height) / 2))
+            } else {
+                view.setFrameOrigin(NSPoint(x: (carrierSize.width - view.frame.width) / 2, y: y))
+            }
             y -= gap
         }
 
@@ -249,8 +286,8 @@ final class OverlayService {
         panel.setFrameOrigin(Self.origin(inset: CGFloat(config.inset),
                                          visible: visible,
                                          size: carrierSize))
-        renderedTexts = lines.map(\.text)
-        renderedLabels = labels
+        renderedKeys = keys
+        renderedViews = views
 
         panel.orderFrontRegardless()
         isWindowVisible = true
@@ -351,4 +388,15 @@ final class OverlayService {
         self.panel = panel
         return panel
     }
+}
+
+/// 分界线视图：一条细横线（宽度是内容宽的一小段，垂直居中于它的行位）。
+private final class RuleView: NSView {
+    override init(frame frameRect: NSRect) {
+        super.init(frame: frameRect)
+        wantsLayer = true
+        layer?.backgroundColor = OverlayService.ruleColor.cgColor
+    }
+
+    required init?(coder: NSCoder) { fatalError("init(coder:) 未实现") }
 }

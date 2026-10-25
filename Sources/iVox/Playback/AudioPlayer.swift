@@ -88,6 +88,16 @@ final class AudioPlayer: @unchecked Sendable {
         scheduleStallWatchdog()
     }
 
+    /// 排一段静音（**换气**：两摞之间留个空隙，听着像换了一段）。
+    ///
+    /// 走 write 的同一条路：背压、世代校验、prime 唤醒全都一样。
+    /// 全是零字节且不带 seq → 不报字幕、不报发声点——它不是内容，只是一段停顿。
+    func writeSilence(seconds: Double) async {
+        let frames = Int(format.sampleRate * seconds)
+        guard frames > 0 else { return }
+        await write(Data(count: frames * 2))
+    }
+
     /// 写入一块 PCM。排队音频超高水位时挂起，等设备消费到低水位再返回（背压）。
     /// 被取消时由 cancelPendingPlayback 恢复挂起，调用方靠 Task.checkCancellation 退出。
     /// - Parameter startsSentence: 非 nil 表示这是**某句的第一块**，值是这句的文本；

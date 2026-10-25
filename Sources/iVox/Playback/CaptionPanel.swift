@@ -31,10 +31,18 @@ final class CaptionPanel {
     private var charsPerSecond: Double = 4.5
     /// 推进高亮的定时器（每 100ms 一步）
     private var ticker: Task<Void, Never>?
+    /// 当前这一帧属于哪一摞：变了就是「换了一轮」
+    private var stackID: Int?
+    /// 分界线是否亮着（换摞时亮一下，提示「这是一轮新的」）
+    private var ruleVisible = false
+    /// 撤掉分界线的定时器
+    private var ruleTask: Task<Void, Never>?
 
     /// 歌词窗口：当前句前后各带几句（多了占屏、少了没上下文）
     private static let contextBefore = 1
     private static let contextAfter = 1
+    /// 分界线亮多久（秒）：够看清「换了一轮」，又不至于一直挂在那儿
+    private static let ruleSeconds: Double = 1.5
     /// 高亮推进的节奏
     private static let tickInterval = Duration.milliseconds(100)
 
@@ -47,6 +55,8 @@ final class CaptionPanel {
         guard let frame, !frame.lines.isEmpty else {
             guard !lines.isEmpty else { return }
             lines = []
+            stackID = nil
+            ruleVisible = false
             stopTicker()
             service.hide(.caption)
             Log.debug("播报字幕: 收起")
@@ -59,6 +69,16 @@ final class CaptionPanel {
             index = frame.index
             startedAt = Date()
         }
+        // **换了一轮**（摞号变了）→ 亮一下分界线：两摞连着读时，
+        // 屏上给个「这里开始是新一轮」的记号。第一次不算换（那只是开场）。
+        if let stack = stackID {
+            if stack != frame.stack {
+                Log.debug("换摞: 字幕亮分界线（摞 \(stack) → \(frame.stack)）")
+                ruleVisible = true
+                scheduleRuleRemoval()
+            }
+        }
+        stackID = frame.stack
         render()
         startTicker()
     }
@@ -82,6 +102,10 @@ final class CaptionPanel {
         let lo = max(0, index - Self.contextBefore)
         let hi = min(lines.count - 1, index + Self.contextAfter)
         var out: [OverlayService.Line] = []
+        if ruleVisible {
+            // 分界线放在最上面：窗口里全是这一轮的内容，线就是「从这儿开始」
+            out.append(.init(text: "", style: .dim, isRule: true))
+        }
         for i in lo...hi {
             if i == index {
                 let text = lines[i]
@@ -93,6 +117,17 @@ final class CaptionPanel {
             }
         }
         service.show(.caption, lines: out)
+    }
+
+    /// 分界线亮一会儿就撤（撤 = 重发一帧不带线）。
+    private func scheduleRuleRemoval() {
+        ruleTask?.cancel()
+        ruleTask = Task { @MainActor [weak self] in
+            try? await Task.sleep(for: .seconds(Self.ruleSeconds))
+            guard !Task.isCancelled, let self else { return }
+            self.ruleVisible = false
+            self.render()
+        }
     }
 
     /// 推进高亮的定时器：每 100ms 往前走一个字左右。
