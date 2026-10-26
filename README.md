@@ -19,7 +19,7 @@
 
 | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f5e3.svg"><br>**自动播报** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f39b.svg"><br>**媒体控制** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f399.svg"><br>**语音输入** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4d6.svg"><br>**划词翻译** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/26a1.svg"><br>**快速操作** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4ac.svg"><br>**微信桥接** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f512.svg"><br>**屏幕锁** |
 |---|---|---|---|---|---|---|
-| AI 回复边生成边念，跳过代码与噪音；可开屏幕字幕（贴底跟随声音）；手动打断三档：`Ctrl+1` 掀页 · `Ctrl+2` 掀摞 · `Ctrl+3` 全掀 | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 按住说话，松开识别粘贴，浮窗实时显示波形 | 选中即译，屏幕下方浮窗出译文（原文+译文）并可朗读 | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制 Finder 选中路径 | 微信消息直通常驻 Claude，回复以文字转发回微信（**不念**） | 一个滑块：右滑锁屏、左滑解锁（走 HID 真键） |
+| AI 回复边生成边念，跳过代码与噪音；可开屏幕字幕（贴底跟随声音）；手动打断三档：`Ctrl+1` 掀页 · `Ctrl+2` 掀摞 · `Ctrl+3` 全掀 | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 按住说话，松开识别粘贴，浮窗实时显示波形 | 选中即译，屏幕下方浮窗出译文（原文+译文）并可朗读 | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制 Finder 选中路径 | 微信消息直通常驻 Claude，回复以文字转发回微信（**默认不念**，`wechat.speak=true` 可开） | 一个滑块：右滑锁屏、左滑解锁（走 HID 真键） |
 | 装好即用 | 打开 `127.0.0.1:8888`，手机同局域网用 `http://<本机IP>:8888` | 右 ⌘ / 右 ⌃ | `Opt+Z` | `Opt+Q` · `Opt+A` · `Opt+X` · `Opt+S` · `Opt+C` | `ivox wechat setup` | `ivox lock` / `ivox unlock` |
 
 ---
@@ -67,8 +67,9 @@ curl -s 127.0.0.1:8888/health
 # {"status":"ok","version":"6.0.0","model":"Qwen3-TTS-…","engine":"ready","queued":0,"playing":false}
 ```
 
-**微信**：配置后微信消息自动注入 Claude Code，AI 回复以**文字**转发回微信，不经 TTS 播报——
+**微信**：配置后微信消息自动注入 Claude Code，AI 回复以**文字**转发回微信，默认不经 TTS 播报——
 聊天窗口里已经有文字了，再念一遍是打扰（裁决见 `docs/playback/purpose.md`）。
+要在本机一起念，把配置 `[wechat] speak` 改成 `true` 再 `ivox restart`（默认 `false`）。
 
 ```bash
 ivox wechat setup              # 扫码登录微信机器人的 ilink bot
@@ -137,6 +138,7 @@ translate = "opt+z"     # 改完跑 ivox restart 生效
 | `translation.proxyURL` | 直连不通时的兜底代理，如 `http://192.168.100.6:10808`（只在直连失败后才用） |
 | `hotkeys` | 热键（键位写法见下）；首次安装会写全量默认键位 |
 | `wechat.token` / `wechat.allowFrom` | 微信 ilink bot token / 允许发消息的那个用户 |
+| `wechat.speak` | 微信回复要不要在本机念出来（默认 `false`＝不念） |
 | `sourceVoices` | 按接入方分别选音色；其中 `default` 键就是**默认音色**（没有来源时用它） |
 | `voices` | **只放你自建或覆盖的音色**；内置的四个在代码里（`ivox voice list` 会标出哪个是内置） |
 

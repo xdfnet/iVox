@@ -55,7 +55,7 @@
 | | 做什么 | 与队列的关系 |
 |---|---|---|
 | **麦克风**（按住右⌘ / 右⌃） | 录音 → 语音转文字 → 文字落到光标所在的输入框 | **只调 `cancelAll(.speech)`**。用户的讲话是给 AI 的，不是让播报员复述一遍——所以一个字都不往队列递。全项目没有任何以 `speech` 入队的调用点，这是结构事实，不是约定 |
-| **微信** | `sendMessage` / `sendTyping` / 长轮询 `pollLoop` | 只发消息和「正在输入」，**不发声**。聊天窗口里已经有文字了，再念一遍是打扰（[目的层](purpose.md) 早已裁定） |
+| **微信** | `sendMessage` / `sendTyping` / 长轮询 `pollLoop` | 回复本身只发消息和「正在输入」，**默认不发声**。聊天窗口里已经有文字了，再念一遍是打扰（[目的层](purpose.md) 早已裁定）。⚠️ 但它 spawn 的 claude **照样触发 Claude Code 那套 hook**（hook 配在 user 级 settings.json，谁启动 claude 都吃），hook 把来源标成 `wechat` 传回来，**由 daemon 按 `[wechat] speak` 裁决**（默认 false＝不念）——「不念」是配置决定的，不是碰巧 |
 
 **形态 C 是一整个类别。** 任何工具只要能配一个 stop hook、payload 里带
 `last_assistant_message`，就能以「整段一次」的方式接进来——这是最低门槛的接法。

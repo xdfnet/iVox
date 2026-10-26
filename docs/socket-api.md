@@ -27,7 +27,7 @@
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `source` | 否 | 来源标识，默认 `default` |
+| `source` | 否 | 来源标识，默认 `default`。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
 | `voice` | 否 | 音色 ID，默认按 `config.json` 中 `sourceVoices` 映射 |
 | `group` | 否 | 分组号 = **一摞**（一次回复）：同一摞分多次发时带上同一个值（Claude 传 `turn_id`），服务端把它们并进**同一摞**；掀摞/掀桌时按它拦住"这一摞的后续批次"。**不必发结束标记**——下一条 `group` 到来时，服务端自动把上一个盖上 |
 | `end` | 否 | 出现即表示**这是该分组的最后一批**，收尾该摞（段可前移）。漏发它这段会一直开着，直到下一个分组到来才被兜底收尾 |
@@ -168,7 +168,7 @@ payload.append(wavData)
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `type` | 是 | 固定 `tts` |
-| `source` | 否 | 来源标识，默认 `default` |
+| `source` | 否 | 来源标识，默认 `default`。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
 | `voice` | 否 | 音色 ID，默认按 `config.json` 中 `sourceVoices` 映射 |
 
 **响应格式**：48kHz、16-bit PCM、mono，流式分块；文本为空或合成失败也以 `end` 帧结尾
