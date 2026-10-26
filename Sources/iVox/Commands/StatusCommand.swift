@@ -31,6 +31,28 @@ struct StatusCommand: ParsableCommand {
         }
 
         renderConfig()
+        renderInstance(socketPath: socketPath)
+    }
+
+    // MARK: 实例（谁在跑）
+
+    /// **谁是唯一的那一份**：pid、socket、锁。
+    /// 「是不是开重了」从此一条命令就有答案，不用再翻进程表
+    /// （2026-10-26：前台手起的一份 + launchd 托管的一份并存过）。
+    private func renderInstance(socketPath: String) {
+        print()
+        print("实例")
+        let running = SocketClient.isRunning(path: socketPath)
+        print("  状态        \(running ? "运行中" : "未运行")")
+        print("  socket      \(socketPath)")
+        let lockPath = AppPaths.lockPath(for: socketPath)
+        let (pid, held) = InstanceLock.holder(path: lockPath)
+        if held {
+            print("  锁          已持有（\(lockPath)）")
+            print("  daemon pid  \(pid.map(String.init) ?? "未知")")
+        } else {
+            print("  锁          空闲（没有实例在跑）")
+        }
     }
 
     // MARK: 本地配置静态体检（守护进程未运行也能查）

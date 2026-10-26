@@ -6,10 +6,50 @@ import Foundation
 /// 常用路径（HOME 优先取环境变量，HOME 未设时退回 NSHomeDirectory，避免波浪号展开失败）
 public enum AppPaths {
     public static var configDir: String { expandTilde("~/.config/ivox") }
-    public static var socketPath: String { configDir + "/ivox.sock" }
+    /// 主 daemon 的 socket。**可被 `IVOX_SOCKET` 覆盖**：调试实例用它跟正式那份
+    /// 彻底分家（socket、锁、誊清员各走各的，见 `InstanceLock`），
+    /// 从根上不存在「两个 daemon 抢同一个 socket」。
+    public static var socketPath: String {
+        if let override = ProcessInfo.processInfo.environment["IVOX_SOCKET"], !override.isEmpty {
+            return expandTilde(override)
+        }
+        return configDir + "/ivox.sock"
+    }
+    /// 这是不是一份**隔离实例**（`IVOX_SOCKET` 指了别的路径）。
+    ///
+    /// 隔离实例**不装热键、不开语音输入**——那两样要的是全局资源：
+    /// 热键 tap 会跟正式那份抢同一个右⌘/Ctrl 键，麦克风会抢录音设备；
+    /// 更要紧的是 **macOS 的权限归属算在「谁启动它」名下**，从 Claude Code 或终端
+    /// 手起的实例一律挂到启动者名下 → 每起一次就弹一次权限框
+    /// （2026-10-26 实测：launchd 托管那份直接放行，手起的那几份弹了十几次）。
+    /// 不装热键/语音，它就**一项权限都不申请**，弹框自然没有。
+    public static var isIsolatedInstance: Bool {
+        guard let override = ProcessInfo.processInfo.environment["IVOX_SOCKET"], !override.isEmpty else {
+            return false
+        }
+        return true
+    }
     /// 誊清员进程的 socket。独立于主 daemon —— 它跑 MLX 合成，是唯一会崩的一层，
     /// 崩了不该带走主进程里的队列与字条。
-    public static var ttsSocketPath: String { configDir + "/ivox-tts.sock" }
+    ///
+    /// **由主 socket 派生**（同目录、基名去掉 .sock 加 -tts.sock）：默认主 socket 是
+    /// `ivox.sock` → 誊清员是 `ivox-tts.sock`（与从前一致）；隔离实例
+    /// （`ivox-debug.sock`）则是 `ivox-debug-tts.sock`——名字随实例走，
+    /// 两份实例不会抢同一个誊清员。
+    public static var ttsSocketPath: String { ttsSocketPath(for: socketPath) }
+    public static func ttsSocketPath(for socket: String) -> String {
+        let url = URL(fileURLWithPath: socket)
+        let base = url.deletingPathExtension().lastPathComponent
+        return url.deletingLastPathComponent().appendingPathComponent("\(base)-tts.sock").path
+    }
+    /// 实例锁文件：跟主 socket 同目录同名（.sock → .lock）。
+    /// **同一把 socket = 同一把锁**——第二份进程在进程级就被拦住。
+    public static var lockPath: String { lockPath(for: socketPath) }
+    public static func lockPath(for socket: String) -> String {
+        let url = URL(fileURLWithPath: socket)
+        let base = url.deletingPathExtension().lastPathComponent
+        return url.deletingLastPathComponent().appendingPathComponent("\(base).lock").path
+    }
     /// 日志文件名只有这一处定义。三个进程各写各的，「哪个文件里有现场就是哪个角色的错」
     /// （见 CLAUDE.md）——所以文件名与位置必须是单一真源，散开写迟早漂。
     public static var daemonLogPath: String { configDir + "/daemon.log" }

@@ -220,6 +220,32 @@ The binary at `~/.local/bin/ivox` is what hook scripts and `ivox on/off` invoke.
 
 `~/.local/bin/ivox` 是 hook 脚本调用的二进制，由 `ivox on/off` 控制启停（LaunchAgent 托管）。部署后项目目录可删除。
 
+### 实例独占锁：一个 socket 只允许一个 daemon
+
+daemon 启动第一件事是抢 `~/.config/ivox/ivox.lock`（`InstanceLock`，flock），
+**抢不到就自己退出**并说清「已有一个在跑（pid=…）」。
+
+**为什么 socket 挡不住**：第二份 daemon 会 unlink 掉 socket 再 bind，先跑的那份还活着
+（**还占着全局热键、麦克风**），却再也收不到命令——机器上看着「就一个 daemon」，实际是两个
+（2026-10-26 实测：前台手起的一份 + launchd 托管的一份并存过）。锁加在**进程级**才拦得住。
+
+调试要跑第二份时，**必须显式隔离**：
+
+```bash
+IVOX_SOCKET=/tmp/ivox-debug.sock IVOX_LOG_FILE=/tmp/ivox-debug.log ~/.local/bin/ivox serve
+```
+
+socket、锁、誊清员 socket 全部由主 socket 派生（`ivox-debug.sock` / `ivox-debug.lock` /
+`ivox-debug-tts.sock`），各走各的。**隔离实例不装热键、不开语音输入、不起 Web 控制台**
+——那三样都是全局资源（抢同一个右⌘、抢麦克风、抢 8888 端口），装上就是「两份并存」的老毛病。
+
+⚠️ **macOS 的权限归属算在「谁启动它」名下，不由二进制自己决定**：从 Claude Code 或终端
+手起的实例一律挂到启动者（`com.anthropic.claude-code`）名下 → **每起一次就弹一次权限框**
+（2026-10-26 实测弹了十几次；launchd 托管那份直接放行，不弹）。隔离实例因为不装热键/
+语音输入，**一项权限都不申请**，也就没有框。要测热键就测 launchd 托管那份。
+
+`ivox status` 的「实例」段会报出 socket、锁、daemon pid——「是不是开重了」一条命令就有答案。
+
 ## 测试
 
 ```bash

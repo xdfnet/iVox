@@ -257,7 +257,13 @@ actor Daemon {
             await asrEngine.warmup(language: lang)
 
         if config.speechInput?.enabled ?? SpeechInputConfig.default.enabled {
-            speechInput?.start()
+            // 隔离实例不开语音输入：麦克风是**独占设备**，两份实例一起开会互相抢；
+            // 而且它要「麦克风」授权，手起的实例同样会被算到启动者名下 → 弹框。
+            if AppPaths.isIsolatedInstance {
+                Log.info("隔离实例：不开语音输入（麦克风是独占设备，且会引出权限框）")
+            } else {
+                speechInput?.start()
+            }
         }
         // 键盘事件层**不在这里**启动：等 setUpHotKeys() 把处理器装好再开 tap，
         // 否则启动瞬间到达的按键会撞上「tap 已开、handler 还是 nil」的窗口。
@@ -291,6 +297,14 @@ actor Daemon {
     /// 装配热键：键盘事件层收到组合键后，按**能力归属**分派给各自的服务。
     /// 划词翻译与 Finder 快捷是两个独立能力域，这里只做分发，不把逻辑揉在一起。
     private func setUpHotKeys() async {
+        // 隔离实例不装热键：热键是**全局资源**（一个 tap 监听全系统键盘），
+        // 两份实例各装一个就会抢同一个右⌘；而且 tap 要「辅助功能」授权，
+        // 从命令行手起的实例会被 macOS 算到启动者名下 → 每起一次弹一次框
+        // （2026-10-26 实测，见 AppPaths.isIsolatedInstance 的注释）。
+        if AppPaths.isIsolatedInstance {
+            Log.info("隔离实例（IVOX_SOCKET=\(AppPaths.socketPath)）：不装热键——热键是全局资源，装了会跟正式那份抢")
+            return
+        }
         guard let overlay else { return }
         let coordinator = await MainActor.run {
             TranslationCoordinator(config: config, queue: queue, overlay: overlay)
@@ -349,6 +363,12 @@ actor Daemon {
     }
 
     private func startMediaHTTPServer() {
+        // 隔离实例不起 Web 控制台：端口是全局资源，跟正式那份必然撞
+        // （撞了只会得到一句 "Address already in use"，是噪音不是信息）。
+        if AppPaths.isIsolatedInstance {
+            Log.info("隔离实例：不起 Web 控制台（端口跟正式那份撞）")
+            return
+        }
         let port = UInt16(MediaControlConfig.default.httpServerPort)
         let httpServer = MediaHTTPServer(port: port) { [weak self] in
             await self?.makeHealthSnapshot()

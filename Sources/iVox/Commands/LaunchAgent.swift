@@ -81,6 +81,14 @@ struct OnCommand: ParsableCommand {
                 if !SocketClient.isRunning(path: socket) { break }
                 Thread.sleep(forTimeInterval: 0.25)
             }
+            // 停不掉就别往下走：托管的那份会因为抢不到实例锁而反复退出，
+            // 而 socket 又是那份野 daemon 的——表面「起来了」，实际机器上跑着两个。
+            let (pid, held) = InstanceLock.holder(path: AppPaths.lockPath(for: socket))
+            if held {
+                print("错误: 停不掉另一个守护进程（pid=\(pid.map(String.init) ?? "未知")），已放弃启动")
+                print("手动处理：kill 掉那个 pid，或把它的 socket 换到别处（IVOX_SOCKET）")
+                throw ExitCode.failure
+            }
         }
         // 2) 写 LaunchAgent plist（RunAtLoad 登录自启 + KeepAlive 崩溃自动重启），
         //    serve 用绝对路径，规避 launchd 受限 PATH

@@ -507,6 +507,7 @@ ConnectionHandler.extractVoicePrefix():
 ~/.config/ivox/crash.log / crash.count     # 主进程崩溃现场与累计次数
 ~/.config/ivox/ivox.sock                    # 主进程 socket
 ~/.config/ivox/ivox-tts.sock                # 誊清员 socket
+~/.config/ivox/ivox.lock                    # 实例独占锁（同一 socket 只允许一个 daemon）
 ```
 
 日志为什么分家（2026-10-19 决定）：拆成子进程后若还共用一份文件，从「pi 没出声」

@@ -17,6 +17,29 @@ struct ServeCommand: AsyncParsableCommand {
         setenv("TRANSFORMERS_OFFLINE", "1", 1)
 
         let socketPath = AppPaths.socketPath
+        // **实例独占锁**：这台机器上同一把 socket 只允许一个 daemon。
+        // 抢不到就自己退出——第二份 daemon 会 unlink 掉 socket 把先跑的那份变成
+        // 哑巴（它还占着全局热键和麦克风），这种「看着一个、其实两个」最难查
+        // （2026-10-26 实测过）。锁由内核持有，进程退出自动释放。
+        let lock: InstanceLock.Holder
+        do {
+            lock = try InstanceLock.acquire(path: AppPaths.lockPath)
+            Log.info("实例锁已获取: \(lock.path)（pid=\(lock.pid)）")
+        } catch let error as InstanceLock.AcquireError {
+            switch error {
+            case .held(let pid, let path):
+                let who = pid.map { "pid=\($0)" } ?? "持有者未知"
+                print("错误: 已有一个守护进程在跑（\(who)，锁 \(path)）")
+                print("别再起第二个：先把它停掉（ivox off），或用 IVOX_SOCKET 指定别的 socket 做隔离调试")
+            case .failed(let message):
+                print("错误: \(message)")
+            }
+            throw ExitCode.failure
+        }
+        // 锁由 InstanceLock 内部持有（进程活多久就持有多久），这里只留个凭证
+        // 免得它被当成没用的变量丢掉
+        _ = lock
+
         if SocketClient.isRunning(path: socketPath) {
             print("错误: 守护进程已在运行，使用 ivox off 停止后再启动前台进程")
             throw ExitCode.failure
