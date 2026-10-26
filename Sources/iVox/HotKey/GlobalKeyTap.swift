@@ -200,23 +200,6 @@ final class GlobalKeyTap: @unchecked Sendable {
             // 只看四个标准修饰键位，忽略 AlphaShift / Fn / NumericPad 等杂项，
             // 这样 Cmd+Shift+D、CapsLock 开着按 Opt+Z 都不会误触
             let flags = event.flags.intersection(Self.modifierMask)
-            // [临时探针 2026-10-19] Esc 是「幽灵翻页」事故的争议键：翻页日志只写
-            // 「打断来源=掀页·键盘 ctrl+1」，看不出是物理按键还是别的进程合成的 CGEvent。
-            // 这里在匹配之前把每个 Esc 的真实 flags 与命中与否落盘，等复现一次即可定案。
-            // 排查完请连同「热键触发补日志」一起决定去留。
-            if keyCode == 0x35 {
-                // [取证探针] Esc 带着哪些修饰位、是**哪个进程**发出来的。
-                // 2026-10-26「幽灵翻页」定案：系统仍认为 Ctrl 按着（修饰键的松键事件丢了），
-                // tap 看到 Ctrl+Esc → 把正在播的那一页整个掀掉。Esc 已不作热键（改用数字键），
-                // 这行留着当取证工具：下次再遇到修饰键残留，能直接看出是谁发的。
-                let raw = event.flags.rawValue
-                let stdFlags = event.flags.intersection(Self.modifierMask)
-                let pid = event.getIntegerValueField(.eventSourceUnixProcessID)
-                Log.info("[探针] Esc keyDown: rawFlags=0x\(String(raw, radix: 16)) "
-                       + "stdFlags=0x\(String(stdFlags.rawValue, radix: 16)) "
-                       + "sourcePid=\(pid) "
-                       + "tapUptime=\(String(format: "%.2f", ProcessInfo.processInfo.systemUptime))")
-            }
             guard let binding = bindings.first(where: {
                 $0.keyCode == keyCode && $0.modifiers == flags
             }) else { return false }
@@ -301,10 +284,16 @@ final class GlobalKeyTap: @unchecked Sendable {
             }
             do {
                 let chord = try HotKeySpec.parseChord(value)
-                // **Ctrl+Esc 已作废**：Esc 是别的 app 的「中断」键，修饰键的松键事件
-                // 偶尔会丢，系统仍认为 Ctrl 按着 → tap 看到 Ctrl+Esc → 把正在播的
-                // 那一页整个掀掉（2026-10-26 实测连掀 4 次，听感是「刚念一个字就被切走」）。
+                // **Ctrl+Esc 已作废**：Esc 是别的 app 的「中断」键，撞上就误伤。
                 // 掀页改用数字键（Ctrl+1/2/3），这里把老配置里的 Ctrl+Esc 直接退回默认。
+                //
+                // ⚠️ **当初那「连掀 4 次」的真凶不是 macOS**（当时判断是「修饰键的松键
+                // 事件丢了，系统仍认为 Ctrl 按着」——2026-10-26 定案，实测推翻了）：
+                // 是**测试用的 ESP32 板子把 "2" 发成了 Esc**——它的 `/key` 端点按
+                // `HID_KEY_0 + (c-'0')` 算数字键，而数字键并不连续（'1'..'9' 在
+                // 0x1E..0x26，'0' 在 0x27），于是 '2' 落到了 0x29 = Esc。板子端已修
+                // （esp32-lab：数字键表与打字路径共用一张，见 `hid_usage_for_char`），
+                // Esc 这一档**仍然作废**：它跟别的 app 的中断键撞，本来就不该当热键。
                 if chord.keyName == "esc" && chord.modifiers == [.control] {
                     Log.warn("热键配置: \(action.rawValue) 的键位「\(value)」已作废"
                             + "（Ctrl+Esc 会与别的 app 的中断键撞），改用默认 "

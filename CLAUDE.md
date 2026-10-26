@@ -71,7 +71,7 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
 Tests/iVoxTests/       — 测试（18 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests、OverlayServiceTests、TSPRemoteSlowSynthesisTests 例外，@testable import iVox；TestSocketServer 是共用假 socket server）
 
 docs/                  — README.md（索引 + 分类规则）· architecture.md · hook-chain.md · socket-api.md · native-bridge.md（微信链路实测依据）；playback/ 放播报五层：paper.md（比喻，**建立直觉但不裁决**）· purpose.md（取舍，**有分歧听它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研
-scripts/               — 装机与部署：runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）
+scripts/               — 装机与部署：runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）· hotkey.py（用 ESP32 真键盘按热键，测热键用）
                         接入资产（各外部 agent 的对接层，安装时由 install-hooks.sh cp，不编进二进制）：
                         · hook.sh（Claude Code 的播报 hook：msgdisplay 送整页 / end 送收尾暗号）
                         · pi/ivox.ts（pi coding agent 流式扩展）
@@ -229,7 +229,19 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests
 xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLeadInGetsNoPseudoPeriod
 ```
 
-测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config / Translation / **PlaybackSessionStory**（测摞的分段与墓碑归属）/ **OverlayService**（测浮窗落点几何与去重判据）。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
+测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config / Translation / **PlaybackSessionStory**（测摞的分段与墓碑归属）/ **OverlayService**（测浮窗落点几何与去重判据）/ **InterruptOrigin**（打断归因的措辞契约）。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
+
+**测热键用 `scripts/hotkey.py`**（不是 osascript）：热键走 CGEvent tap，而**合成来源的键盘事件会被 app 丢弃**（汽水音乐就丢），
+所以要真按就得出真键盘——ESP32 那块板子通过 USB 把自己枚举成 HID 键盘，按下去的是**真硬件事件**。
+键位从 `~/.config/ivox/config.toml` 的 `[hotkeys]` 段读（用户改过的那份，脚本不另抄默认键位）：
+
+```bash
+/Users/admin/iCode/services/.venv/bin/python scripts/hotkey.py             # 列出所有热键：动作 → 键位
+/Users/admin/iCode/services/.venv/bin/python scripts/hotkey.py skipBucket  # 按下「跳整摞」那个键
+```
+
+按完看 `~/.config/ivox/daemon.log` 里的归因（`掀摞·键盘 ctrl+2`）。
+⚠️ 脚本**会真的按键**，测试时手别放键盘上，被按下的键会打到当前前台的 App。
 
 ```bash
 make check-tts                      # 播报黑盒自检：压真实 daemon，21 个用例（需先 ivox on，模型就绪）
