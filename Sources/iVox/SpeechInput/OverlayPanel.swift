@@ -7,6 +7,9 @@ import SwiftUI
 
 enum OverlayState: Sendable {
     case listening
+    /// 模型刚被空闲卸载，正在重新加载（加载只影响「文字什么时候出来」，
+    /// 不影响「能不能说」——按下就已经在录了）
+    case loadingModel
     case transcribing
     case done
     case error(String)
@@ -95,6 +98,7 @@ private final class OverlayPresentation: @unchecked Sendable {
 
     var isProcessing: Bool {
         if case .transcribing = state { return true }
+        if case .loadingModel = state { return true }
         return false
     }
 
@@ -192,6 +196,8 @@ private struct OverlayContentView: View {
         case .listening:
             let amplitude = min(1, 0.20 + sqrt(presentation.rawRMS) * 2.2)
             return max(4, envelope * shimmer(t: t, phase: phase) * amplitude * 30)
+        case .loadingModel:
+            return max(4, envelope * shimmer(t: t, phase: phase * 0.7) * 16)
         case .transcribing:
             return max(4, envelope * shimmer(t: t, phase: phase * 0.88) * 23)
         case .done:
@@ -215,6 +221,8 @@ private struct OverlayContentView: View {
         switch presentation.state {
         case .listening:
             return .white
+        case .loadingModel:
+            return Color(red: 0.72, green: 0.74, blue: 0.80).opacity(0.85)
         case .transcribing:
             return Color(red: 0.45, green: 0.86, blue: 1)
         case .done:
@@ -228,6 +236,8 @@ private struct OverlayContentView: View {
         switch presentation.state {
         case .listening:
             return .white.opacity(0.82)
+        case .loadingModel:
+            return Color(red: 0.72, green: 0.74, blue: 0.80).opacity(0.9)
         case .transcribing:
             return Color(red: 0.60, green: 0.90, blue: 1)
         case .done:
@@ -242,6 +252,8 @@ private struct OverlayContentView: View {
         case .listening:
             // 描述"用户该做什么"，而不是"我在干什么"——按下去最想知道的是"能说了吗"
             return "可以说了"
+        case .loadingModel:
+            return "加载模型…"
         case .transcribing:
             return "识别中…"
         case .done:
@@ -255,6 +267,8 @@ private struct OverlayContentView: View {
         switch presentation.state {
         case .listening:
             return "可以说了"
+        case .loadingModel:
+            return "正在加载语音识别模型"
         case .transcribing:
             return "识别中"
         case .done:
@@ -276,6 +290,8 @@ private struct OverlayContentView: View {
         switch presentation.state {
         case .listening:
             Image(systemName: "mic.fill")
+        case .loadingModel:
+            Image(systemName: "arrow.down.circle")
         case .transcribing:
             Image(systemName: "waveform")
         case .done:

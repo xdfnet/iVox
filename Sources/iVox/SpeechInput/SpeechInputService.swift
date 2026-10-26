@@ -121,6 +121,12 @@ final class SpeechInputService: @unchecked Sendable {
         guard canStart, let (recorder, url) = startRecording() else { return }
         stateQueue.sync { state = .recording(recorder: recorder, audioURL: url) }
         Task {
+            // **模型可能刚被空闲卸载**：这时就把加载起起来，和录音并行——
+            // 用户按下就能说话（录音不依赖模型），模型只决定「文字什么时候出来」。
+            Task { [asrEngine] in
+                do { try await asrEngine.ensureLoaded(language: config.language) }
+                catch { Log.error("语音输入: ASR 模型加载失败 \(error)") }
+            }
             // **暂停播报，不是打断**：用户说话要麦克风干净（正在播的声音会串进去、识别就乱），
             // 但用户没说「别说了」——飞哥的原话是「手动 = 你别说了，我说话 = 你停一下」。
             // 所以这里只让设备停渲染，**已排队的音频与队列里的内容一条不删**，说完接着播。
@@ -252,10 +258,16 @@ final class SpeechInputService: @unchecked Sendable {
         catch { dismissOverlay(); return }
 
         Log.info("语音输入: ASR 请求 \(audioURL.lastPathComponent) \(wavData.count) bytes")
-        showOverlay(.transcribing)
         Task {
             defer { Self.cleanupRecordings(recordDir: self.recordDir) }
             do {
+                // 模型还没就绪（刚卸载过、或这是进程启动后第一次识别）→ 先加载再转写，
+                // 浮窗如实告诉用户在等什么。
+                if !(await asrEngine.isLoaded) {
+                    showOverlay(.loadingModel)
+                    try await asrEngine.ensureLoaded(language: config.language)
+                }
+                showOverlay(.transcribing)
                 let text = try await asrEngine.transcribe(audioData: wavData, language: config.language)
                 guard !text.isEmpty else {
                     Log.info("语音输入: 识别结果为空")

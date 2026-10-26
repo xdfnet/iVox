@@ -253,23 +253,17 @@ actor Daemon {
         shutdownContinuation = nil
     }
 
-    /// 后台加载 TTS 和 ASR 模型（异步），并启动语音输入服务。
+    /// 后台加载 TTS 模型（异步），并启动语音输入服务。
+    /// **ASR 不在这里加载**：它改成「按需加载 + 空闲卸载」（权重 2.5G，常驻太奢侈），
+    /// 第一次按下语音键时才加载，且与录音并行——用户照样立刻能说话。
     private func startModelLoading() {
-        Task { [engine, asrEngine, config, speechInput] in
+        Task { [engine, config, speechInput] in
             do {
                 try await engine.loadModel()
                 await engine.warmup(voiceID: config.defaultVoice)
             } catch {
                 Log.error("TTS 模型加载失败: \(error)")
             }
-
-            if !(await asrEngine.isLoaded) {
-                do { try await asrEngine.load() }
-                catch { Log.error("ASR 模型加载失败: \(error)") }
-            }
-
-            let lang = config.speechInput?.language ?? SpeechInputConfig.default.language
-            await asrEngine.warmup(language: lang)
 
         if config.speechInput?.enabled ?? SpeechInputConfig.default.enabled {
             // 隔离实例不开语音输入：麦克风是**独占设备**，两份实例一起开会互相抢；
