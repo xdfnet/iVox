@@ -216,11 +216,7 @@ final class OverlayService {
             }
             let label = makeLabel(line.text, style: line.style)
             apply(line, to: label)
-            label.sizeToFit()
-            if label.frame.width > widthLimit {
-                label.preferredMaxLayoutWidth = widthLimit
-                label.sizeToFit()
-            }
+            Self.measure(label, limit: widthLimit)
             views.append(label)
             labels.append(label)
         }
@@ -232,9 +228,11 @@ final class OverlayService {
         if totalHeight > heightLimit, let last = labels.last, let font = last.font {
             let lineHeight = font.ascender - font.descender + font.leading
             let room = heightLimit - gaps
-            last.maximumNumberOfLines = max(1, Int(room / lineHeight))
-            last.lineBreakMode = .byTruncatingTail
-            last.sizeToFit()
+            let maxLines = max(1, Int(room / lineHeight))
+            last.maximumNumberOfLines = maxLines
+            // 截尾模式（`.byTruncatingTail`）**不换行**，会把整段压成一行（实测），
+            // 所以留着换行模式、只用「最多几行」来收高度。
+            Self.measure(last, limit: widthLimit)
             totalHeight = views.reduce(0) { $0 + $1.frame.height } + gaps
         }
 
@@ -304,6 +302,27 @@ final class OverlayService {
         label.lineBreakMode = .byWordWrapping
         label.maximumNumberOfLines = 0
         return label
+    }
+
+    /// 量一个 label 的尺寸：**超过宽度上限就按上限换行**。
+    ///
+    /// 为什么不用 `sizeToFit()`：对 label 型的 `NSTextField`，它**按整条文本给宽高，
+    /// 不换行**——哪怕设了 `preferredMaxLayoutWidth` 也不换（2026-10-26 实测：
+    /// 400 点上限、文本 1500 点宽，量出来还是 1526×19，一行铺到底）。
+    /// 于是长译文变成一条几千点宽的单行，整块浮窗跟着撑出屏幕。
+    /// **换行要问 cell**：`cellSize(forBounds:)` 才认宽度上限，短文本仍按自然宽。
+    ///
+    /// 纯函数（不碰实例状态），便于单测。
+    static func measure(_ label: NSTextField, limit: CGFloat) {
+        guard let cell = label.cell as? NSTextFieldCell else {
+            label.sizeToFit()
+            return
+        }
+        cell.wraps = true
+        label.preferredMaxLayoutWidth = limit
+        let size = cell.cellSize(forBounds: NSRect(x: 0, y: 0, width: limit,
+                                                    height: CGFloat.greatestFiniteMagnitude))
+        label.setFrameSize(size)
     }
 
     /// 把一行的文字与颜色装进 label：整行一种色，或卡拉OK式（区间白、其余半透明白）。
