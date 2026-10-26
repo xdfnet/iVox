@@ -110,7 +110,9 @@ actor PlaybackQueue {
         self.engine = engine
         self.player = AudioPlayer()
         self.media = mediaController
-        self.session = PlaybackSession(idleGraceSeconds: idleGraceSeconds)
+        // 队列落盘：daemon 挂了之后靠它把没播完的内容捞回来（开不了就只在内存里）
+        self.session = PlaybackSession(idleGraceSeconds: idleGraceSeconds,
+                                        store: PlaybackStore.makeDefault())
         // 字幕跟**播放**走（不是合成）：句首块被设备读出时才报，与声音对齐。
         // 回调在播放器的 serialQueue 上，跳回本 actor 再转发（onCaption 是本 actor 状态）。
         player.onSentenceStarted = { [weak self] text, seq in
@@ -142,6 +144,15 @@ actor PlaybackQueue {
     /// 注入播报字幕接收端（`nil` = 关闭字幕）。
     /// 时机来自**播放侧**（`AudioPlayer.onSentenceStarted`：句首块被设备读出），不是合成侧——
     /// 合成领先播放一两句，从那儿取会让字幕比声音早。
+    /// 把上次没播完的内容捞回来（daemon 起来时做一次，在接单之前）。
+    func restorePersisted() async {
+        await session.restoreIfNeeded()
+        // **恢复出来的内容得有人开管道**：管道是「入队」与「收尾」时起的，
+        // 恢复这条路不经过它们——不显式起一次，内容就躺在队列里没人念
+        //（2026-10-26 实测踩到：恢复日志打了、health 里 queued=2，就是不播）。
+        await pumpOrSettle()
+    }
+
     func setCaptionSink(_ sink: (@Sendable (CaptionFrame?) -> Void)?) {
         onCaption = sink
     }

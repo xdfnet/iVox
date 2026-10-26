@@ -84,9 +84,30 @@ actor PlaybackSession {
     /// 由外部配置 `playback.idleGraceSeconds` 喂进来（默认值见 `PlaybackConfig`），改完 `ivox restart` 生效。
     private let idleGraceSeconds: Double
 
-    /// - Parameter idleGraceSeconds: 空闲宽限秒数；不传用 `PlaybackConfig` 的默认。
-    init(idleGraceSeconds: Double = PlaybackConfig.defaultIdleGraceSeconds) {
+    /// 队列的落盘副本（可选）：**daemon 挂了，靠它把没播完的内容捞回来**。
+    /// 为 nil 时队列只在内存里（测试与不需要持久化的场合）。
+    private let store: PlaybackStore?
+    /// 恢复只做一次（恢复完的内容不该被再恢复一遍）。
+    private var didRestore = false
+
+    /// - Parameters:
+    ///   - idleGraceSeconds: 空闲宽限秒数；不传用 `PlaybackConfig` 的默认。
+    ///   - store: 落盘仓库；传了就自动把上次没播完的内容捞回队列。
+    init(idleGraceSeconds: Double = PlaybackConfig.defaultIdleGraceSeconds,
+         store: PlaybackStore? = nil) {
         self.idleGraceSeconds = idleGraceSeconds
+        self.store = store
+    }
+
+    /// 恢复上次没播完的内容（daemon 起来时做一次，做过就跳过）。
+    ///
+    /// 放在 actor 的方法里而不是 init：init 是同步的、且非隔离的，
+    /// 碰不了容器状态（`restoreFrom` 要发号、要建段）。
+    func restoreIfNeeded() {
+        guard !didRestore else { return }
+        didRestore = true
+        guard let store else { return }
+        restoreFrom(store)
     }
     /// 「按外部号记着的近期摞」容量上限：墓碑（拦被作废摞的后续增量）与收尾记录
     /// （端说过「说完了」的摞）共用一个额度——都是「最近这些」才可能再被提到，用完丢最老的。
@@ -166,6 +187,70 @@ actor PlaybackSession {
     /// 已排定宽限计时的等待者（防止重复计时器把同一个 waiter 摘两次）。
     private var timedOut: Set<ObjectIdentifier> = []
 
+    // MARK: - 落盘（队列的耐久副本）
+
+    /// 存一页。**写盘失败只记警告**：落盘是副本，坏了也不该挡住播报。
+    private func persist(page: PlaybackPage, in segment: PlaybackSegment) {
+        guard let store else { return }
+        let blocks = page.blocks.map {
+            StoredBlock(seq: $0.seq, text: $0.text, voiceID: $0.voiceID, source: $0.source)
+        }
+        store.savePage(StoredPage(stack: segment.localID, page: page.localID,
+                                  turnID: segment.turnID, pageExternal: page.externalID,
+                                  blocks: blocks))
+    }
+
+    /// 把容器里现有的内容整份写回去（恢复之后要重写：块号换了）。
+    private func persistAll() {
+        guard let store else { return }
+        for segment in segments {
+            for page in segment.pages { persist(page: page, in: segment) }
+        }
+    }
+
+    /// **daemon 起来时把上次没播完的内容捞回来**。
+    ///
+    /// 按落盘的摞号分组恢复（不按 turn_id——无编号的稿一次入队就是独立一摞，
+    /// 按 turn_id 并会把它们焊成一摞，掀一次全丢）。恢复出来的摞一律「已收尾」：
+    /// 它们的端早就说完了，不该再把队列吊着不放。
+    private func restoreFrom(_ store: PlaybackStore) {
+        let pages = store.loadPages()
+        guard !pages.isEmpty else { return }
+        var byStack: [Int: [StoredPage]] = [:]
+        var order: [Int] = []
+        for page in pages {
+            if byStack[page.stack] == nil {
+                order.append(page.stack)
+                byStack[page.stack] = []
+            }
+            byStack[page.stack]?.append(page)
+        }
+        for stackID in order {
+            let stored = byStack[stackID] ?? []
+            var segPages: [PlaybackPage] = []
+            var turnID: String?
+            for sp in stored {
+                let jobs = sp.blocks.map {
+                    PlaybackBlock(seq: 0, text: $0.text, voiceID: $0.voiceID, source: $0.source)
+                }
+                segPages.append(PlaybackPage(localID: nextPageLocalID(),
+                                             externalID: sp.pageExternal,
+                                             blocks: stamp(jobs)))
+                if turnID == nil { turnID = sp.turnID }
+            }
+            let source = stored.first?.blocks.first?.source ?? "claude"
+            segments.append(makeSegment(turnID: turnID, source: source, sealed: true, pages: segPages))
+        }
+        // 恢复后的块号是新的（新进程从 1 重新发号），落盘表跟着换一份
+        store.clear()
+        persistAll()
+        Log.info("队列恢复：上次没播完的 \(pages.reduce(0) { $0 + $1.blocks.count }) 块已重新排队（\(segments.count) 摞）")
+        // **叫醒消费层**：它可能正等在「没有新内容」上（甚至已经判过「队列已空」）。
+        // 不 signal，恢复出来的内容会一直躺在队列里没人念（2026-10-26 实测踩到：
+        // 恢复日志打了、内容也在，就是不播）。
+        signal()
+    }
+
     // MARK: - 容器查询
 
     /// 还有没有没播的块。
@@ -231,6 +316,8 @@ actor PlaybackSession {
         if cursor.seq > cursorSeq {
             cursorSeq = cursor.seq
         }
+        // 已交给合成的块不再需要留着：真挂了下次也不会重念它
+        store?.deleteUpTo(seq: cursor.seq)
     }
 
     /// 当前正在播的那一页（掀页的语义：「用户感知到的当前页」）。
@@ -395,11 +482,13 @@ actor PlaybackSession {
             // 又来货了：揭掉空闲宽限封的印（宽限只是猜「说完了」，不是判死）
             if reopen { segments[idx].sealed = false }
             lastFiling = SegmentFiling(stack: stack, turnID: note, pages: [merged.localID])
+            persist(page: merged, in: segments[idx])
         } else {
             let page = PlaybackPage(localID: nextPageLocalID(), externalID: pageNote, blocks: blocks)
             segments[idx].pages.append(page)
             if reopen { segments[idx].sealed = false }
             lastFiling = SegmentFiling(stack: stack, turnID: note, pages: [page.localID])
+            persist(page: page, in: segments[idx])
         }
         signal()
         return .appended
@@ -427,6 +516,7 @@ actor PlaybackSession {
         let fresh = newPage(jobs, pageNote: nil)
         let seg = makeSegment(turnID: nil, source: src, sealed: true, pages: fresh)
         segments.append(seg)
+        if let first = fresh.first { persist(page: first, in: seg) }
         lastFiling = SegmentFiling(stack: seg.localID, turnID: nil, pages: fresh.map(\.localID))
         signal()
         return seg.localID
@@ -503,7 +593,9 @@ actor PlaybackSession {
     /// 用户取消这一轮（pi 空流 `{cancel}`）：丢掉该轮内容并立墓碑，其后续增量一律不开口。
     @discardableResult
     func cancelTurn(_ id: String, origin: InterruptOrigin) -> Bool {
+        let cancelledStacks = segments.filter { $0.turnID == id }.map(\.localID)
         let dropped = sweepSegments(matching: id, in: &segments)
+        for stack in cancelledStacks { store?.deleteStack(stack) }
         bury(id, origin)
         if let i = turnStack.firstIndex(of: id) { turnStack.remove(at: i) }
         signal()
@@ -537,7 +629,9 @@ actor PlaybackSession {
         //
         // 顺手把它前面那些「已播完、一块没剩」的段一并清掉：它们从没被用户作废，
         // **不立墓碑**，纯粹是历史垃圾（`segments` 只增不减，不清就会越堆越多）。
+        let removedStacks = segments[0...head.index].map(\.localID)
         segments.removeFirst(head.index + 1)
+        for stack in removedStacks { store?.deleteStack(stack) }
         // 只给正在听的那摞立墓碑：它才是用户明确放弃的。**只有外部 turn_id 能立墓碑**——
         // 无编号的稿子一次性送完、不会再有后续增量，没东西可拦。
         if let id = head.turnID { bury(id, origin) }
@@ -564,7 +658,9 @@ actor PlaybackSession {
             return nil
         }
         let page = segments[hit.seg].pages[hit.page]
+        let removedPages = segments[hit.seg].pages[0...hit.page].map(\.localID)
         segments[hit.seg].pages.removeFirst(hit.page + 1)
+        for pageID in removedPages { store?.deletePage(stack: segments[hit.seg].localID, page: pageID) }
         if segments[hit.seg].isEmpty { segments.remove(at: hit.seg) }
         return (page.localID, page.blocks.count)
     }
@@ -623,6 +719,7 @@ actor PlaybackSession {
         ids += segments.compactMap(\.turnID)
         turnStack.removeAll()
         segments.removeAll()
+        store?.deleteAll()
         ids.forEach { bury($0, origin) }
         signal()
         return ids

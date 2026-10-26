@@ -99,6 +99,10 @@ actor Daemon {
             }
         }
 
+        // 先把上次没播完的内容捞回来（daemon 挂了不丢排队的东西）——
+        // 必须在开始接单之前做完，否则新来的内容会排在旧内容前面。
+        await queue.restorePersisted()
+
         let handler = ConnectionHandler(
             queue: queue, config: config, asrEngine: asrEngine, engine: engine,
             statusProvider: { [weak self] in

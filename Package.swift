@@ -17,6 +17,8 @@ let package = Package(
             dependencies: [
                 .product(name: "Markdown", package: "swift-markdown"),
             ],
+            // 队列落盘用系统自带的 SQLite（不引新依赖）
+            linkerSettings: [.linkedLibrary("sqlite3")],
         ),
         .executableTarget(
             name: "iVox",

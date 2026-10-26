@@ -16,6 +16,9 @@ struct ServeCommand: AsyncParsableCommand {
         setenv("HF_HUB_OFFLINE", "1", 1)
         setenv("TRANSFORMERS_OFFLINE", "1", 1)
 
+        // 退出留证：退出的调用栈写进 daemon.log（不管从哪条路退的）
+        ExitTrace.install()
+
         let socketPath = AppPaths.socketPath
         // **实例独占锁**：这台机器上同一把 socket 只允许一个 daemon。
         // 抢不到就自己退出——第二份 daemon 会 unlink 掉 socket 把先跑的那份变成

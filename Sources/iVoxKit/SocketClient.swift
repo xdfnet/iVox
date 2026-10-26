@@ -54,6 +54,15 @@ public enum AppPaths {
     /// （见 CLAUDE.md）——所以文件名与位置必须是单一真源，散开写迟早漂。
     public static var daemonLogPath: String { configDir + "/daemon.log" }
     public static var ttsLogPath: String { configDir + "/tts.log" }
+    /// 队列的落盘库（SQLite）：daemon 挂了之后靠它把没播完的内容捞回来。
+    /// **跟 socket 走**（同目录、基名加 `-queue.db`）：隔离实例（`ivox-debug.sock`）
+    /// 落到 `ivox-debug-queue.db` —— 两份实例各写各的，不互相踩。
+    public static var queueStorePath: String { queueStorePath(for: socketPath) }
+    public static func queueStorePath(for socket: String) -> String {
+        let url = URL(fileURLWithPath: socket)
+        let base = url.deletingPathExtension().lastPathComponent
+        return url.deletingLastPathComponent().appendingPathComponent("\(base)-queue.db").path
+    }
     public static var binDir: String { expandTilde("~/.local/bin") }
     /// 用户自装工具所在的目录（`claude` 在 `~/.local/bin`，`codex`/`pi` 在 Homebrew 的 bin）。
     ///

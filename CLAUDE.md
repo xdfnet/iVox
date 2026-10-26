@@ -220,6 +220,21 @@ The binary at `~/.local/bin/ivox` is what hook scripts and `ivox on/off` invoke.
 
 `~/.local/bin/ivox` 是 hook 脚本调用的二进制，由 `ivox on/off` 控制启停（LaunchAgent 托管）。部署后项目目录可删除。
 
+### 队列落盘：daemon 挂了，排队的东西还在
+
+**内存只是工作副本，真源在磁盘**：`~/.config/ivox/ivox-queue.db`（SQLite，系统自带
+libsqlite3）。里面**只存还没播出去的块**；daemon 起来时（**接单之前**）把它们重新排队。
+
+- 写点：入队（存那一页）、播完（删已交给合成的块）、被掀（掀页/掀摞/全掀/取消轮次 → 删）
+- 恢复出来的内容要**显式开管道**才有人念（`restorePersisted` 里补一次 `pumpOrSettle`）——
+  管道是「入队/收尾」时起的，恢复不经过它们
+- 队列库路径**跟 socket 走**（`ivox-queue.db` / `ivox-debug-queue.db`），隔离实例各写各的
+- 写盘失败只记警告，不挡播报
+
+**为什么必须有**：`ivox on` / `make update` 走 `launchctl kickstart -k`，那是 **SIGKILL**
+（旧 daemon 瞬间死、抓不到、atexit 也不跑）——**每次部署都会杀一次 daemon**。
+队列只在内存里，就等于每次部署都丢一次排队。
+
 ### 实例独占锁：一个 socket 只允许一个 daemon
 
 daemon 启动第一件事是抢 `~/.config/ivox/ivox.lock`（`InstanceLock`，flock），
