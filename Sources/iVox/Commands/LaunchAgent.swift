@@ -76,16 +76,19 @@ struct OnCommand: ParsableCommand {
         //    托管中的 job 不用动——下面 kickstart 会重启它。
         let socket = AppPaths.socketPath
         if SocketClient.isRunning(path: socket), !LaunchAgent.isJobLoaded {
-            _ = try? SocketClient.send("__IVOX_STOP__", to: socket)
+            // **发 SIGTERM，不发魔法字符串**：信号走的是正经退出路径
+            // （有日志、有清理、有退出栈）；pid 从实例锁里读（锁还锁着 = 那个进程还活着）。
+            let (pid, sent) = InstanceLock.terminateHolder(path: AppPaths.lockPath(for: socket))
+            if sent { print("已请求野守护进程退出（pid=\(pid)）") }
             for _ in 0..<40 {
                 if !SocketClient.isRunning(path: socket) { break }
                 Thread.sleep(forTimeInterval: 0.25)
             }
             // 停不掉就别往下走：托管的那份会因为抢不到实例锁而反复退出，
             // 而 socket 又是那份野 daemon 的——表面「起来了」，实际机器上跑着两个。
-            let (pid, held) = InstanceLock.holder(path: AppPaths.lockPath(for: socket))
+            let (stillPid, held) = InstanceLock.holder(path: AppPaths.lockPath(for: socket))
             if held {
-                print("错误: 停不掉另一个守护进程（pid=\(pid.map(String.init) ?? "未知")），已放弃启动")
+                print("错误: 停不掉另一个守护进程（pid=\(stillPid.map(String.init) ?? "未知")），已放弃启动")
                 print("手动处理：kill 掉那个 pid，或把它的 socket 换到别处（IVOX_SOCKET）")
                 throw ExitCode.failure
             }

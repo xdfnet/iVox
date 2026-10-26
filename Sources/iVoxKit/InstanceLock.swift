@@ -86,6 +86,24 @@ public enum InstanceLock {
         return (nil, false)
     }
 
+    /// **停掉当前锁的持有者**（发 SIGTERM）。
+    ///
+    /// 为什么用信号而不是魔法字符串：信号走的是**正经的退出路径**
+    /// （有日志、有清理、有退出栈），而魔法字符串那种「一句话就 exit(0)」
+    /// 一天能被人弄没好几次、还不留痕（2026-10-26 已删）。
+    ///
+    /// pid 从锁文件里读，而**锁由内核持有**：持有者一死锁就放了，文件里的 pid 变陈旧——
+    /// 所以「锁还锁着」就等于「那个 pid 还活着」，不会打错人。
+    ///
+    /// - Returns: (持有者 pid，是否成功发出了信号)
+    @discardableResult
+    public static func terminateHolder(path: String) -> (pid: Int32, sent: Bool) {
+        let (pid, held) = holder(path: path)
+        guard held, let pid, pid > 0 else { return (pid ?? -1, false) }
+        guard kill(pid, SIGTERM) == 0 else { return (pid, false) }
+        return (pid, true)
+    }
+
     /// 锁文件里记的 pid（读不到就是 nil）
     private static func readPid(_ path: String) -> Int32? {
         guard let text = try? String(contentsOfFile: path, encoding: .utf8) else { return nil }

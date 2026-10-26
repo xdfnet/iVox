@@ -287,19 +287,11 @@ actor ConnectionHandler: SocketConnectionHandler {
             return
         }
 
-        if text == "__IVOX_STOP__" {
-            // fd + 原文 hex：断了连接谁在发、发的什么，别只留下一句「退出」
-            //
-            // **对端 pid 也要记**：这条指令会让整个守护进程退出，而退出前没人问「谁让退的」，
-            // 事后只剩一句没头没尾的「进程没了」。pid 是唯一能指到人的线索
-            // （2026-10-26 实测：守护进程一天被这条指令弄没了三次，每次都查不出是谁）。
-            let pid = Self.peerPID(fd: fd)
-            Log.info("收到停止指令，守护进程退出（fd=\(fd) bytes=\(data.count) hex=\(Self.hex(data)) 对端pid=\(pid)）")
-            // ⚠️ **必须刷盘**：紧接着就 exit(0)，而日志是**异步写**的（Logger 排队后落盘）——
-            // 不刷的话这行永远等不到写出去，现场就丢了（这正是「查不出谁让退的」的原因）。
-            Log.flush()
-            exit(0)
-        }
+        // 曾经这里认一条魔法字符串（`__IVOX_STOP__`）就让整个守护进程 exit(0)——
+        // **已删**（2026-10-26）：一句话就能弄死服务、谁都能发，一天被它弄没了三次、
+        // 而且退出不留痕（那行日志是事后才补的，历史现场早没了）。
+        // 现在要停 daemon 走**正经信号**：读实例锁里的 pid，发 SIGTERM →
+        // 走的是信号那条退出路径（有日志、有清理、有退出栈）。
         
         let (source, voiceID, content, group, isFinal, page, isNow) = extractVoicePrefix(text, config: config)
         Log.info("请求解析: source=\(source) voice=\(voiceID) group=\(group ?? "-") final=\(isFinal) raw_chars=\(content.count)")
@@ -502,24 +494,6 @@ actor ConnectionHandler: SocketConnectionHandler {
                 _ = writeAll(StreamFrame.end, to: fd)
             }
         }
-    }
-
-    /// 循环写入直到全部写完，处理短写
-    /// 原始字节的十六进制（截前 40）：排查哨兵等特殊指令的来源时，看 hex 就能比对
-    private nonisolated static func hex(_ data: Data) -> String {
-        data.prefix(40).map { String(format: "%02x", $0) }.joined()
-    }
-
-    /// 这个连接的对端进程 pid（-1 = 查不到）。
-    ///
-    /// Unix domain socket 的对端 pid 只能问内核（`LOCAL_PEERPID`），**且对端已经退出就查不到了**
-    /// （实测 `ivox skip` 这种发完就退的短命进程，返回 -1）。所以它只在「对端还在」时有用——
-    /// 用来回答「这条指令是谁发的」，查不到就记 -1，不猜。
-    private nonisolated static func peerPID(fd: Int32) -> Int32 {
-        var pid: pid_t = 0
-        var len = socklen_t(MemoryLayout<pid_t>.size)
-        guard getsockopt(fd, SOL_LOCAL, LOCAL_PEERPID, &pid, &len) == 0 else { return -1 }
-        return pid
     }
 
     nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, group: String?, isFinal: Bool, page: String?, isNow: Bool) {

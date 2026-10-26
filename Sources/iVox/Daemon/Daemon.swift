@@ -221,6 +221,16 @@ actor Daemon {
     }
 
     /// 注册 POSIX 信号（SIGINT/SIGTERM）监听，收到后触发优雅 shutdown。
+    /// 信号源（SIGINT / SIGTERM）。**必须一直留着**——
+    /// `DispatchSource` 一旦被释放就等于**取消**，信号也就再也不会送达：
+    /// 于是 daemon 收 SIGTERM 纹丝不动，只能 `kill -9`（这个毛病从 2026-10-19
+    /// 就记在案里，一直没查着原因——今天查实了：它当时是个**局部变量**，
+    /// 函数一返回就没了）。
+    ///
+    /// 这条修好的意义：停 daemon 终于有了**正经办法**（发 SIGTERM，走有日志、
+    /// 有清理、有退出栈的退出路径），不必再靠「一句话就让整个进程 exit(0)」。
+    private var signalSources: [DispatchSourceSignal] = []
+
     private func installSignalSource(_ sig: Int32) {
         let source = DispatchSource.makeSignalSource(signal: sig, queue: DispatchQueue(label: "com.user.ivox.signals", qos: .userInitiated))
         source.setEventHandler { [weak self] in
@@ -232,6 +242,7 @@ actor Daemon {
         }
         signal(sig, SIG_IGN)
         source.activate()
+        signalSources.append(source)   // **留住它**：释放即取消（见上面那段注释）
     }
 
     /// 标记 shutdown 状态，唤醒 run() 中的 continuation 以退出主循环。

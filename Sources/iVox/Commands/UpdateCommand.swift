@@ -133,7 +133,8 @@ struct UpdateCommand: AsyncParsableCommand {
         let wasRunning = SocketClient.isRunning(path: socketPath)
         if wasRunning {
             print("停止守护进程…")
-            try? SocketClient.send("__IVOX_STOP__", to: socketPath)
+            // 发 SIGTERM（正经退出路径）：pid 从实例锁里读——锁还锁着 = 那个进程还活着
+            _ = InstanceLock.terminateHolder(path: AppPaths.lockPath(for: socketPath))
             if !Self.waitForStop(path: socketPath) {
                 print("错误: 守护进程未退出，请手动执行 pkill -f 'ivox serve' 后重试")
                 throw ExitCode.failure
