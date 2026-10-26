@@ -222,6 +222,8 @@ actor Daemon {
         source.setEventHandler { [weak self] in
             guard let self else { return }
             Log.info("收到信号 \(sig)，开始退出")
+            // 同上：这行是「为什么退的」唯一的自证，退出前必须落盘（异步写会丢）
+            Log.flush()
             Task { await self.initiateShutdown() }
         }
         signal(sig, SIG_IGN)
@@ -424,6 +426,10 @@ actor Daemon {
         // 它自己 `while true` 常驻，会一路抱着 GPU 跑到下次开机。
         await (engine as? TSPRemote)?.stopChild()
         Log.info("守护进程已退出")
+        // ⚠️ **退出前必须刷盘**：日志是**异步写**的（Logger 排队后落盘），而这里紧接着
+        // exit(0)——不刷的话「为什么退的」这几行永远等不到写出去，现场就丢了
+        //（2026-10-26 实测：守护进程一天没了三次，日志里连一句「收到信号」都没有）。
+        Log.flush()
         exit(0)
     }
 }
