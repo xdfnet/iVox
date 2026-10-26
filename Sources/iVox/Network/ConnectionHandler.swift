@@ -295,6 +295,14 @@ actor ConnectionHandler: SocketConnectionHandler {
         
         let (source, voiceID, content, group, isFinal, page, isNow) = extractVoicePrefix(text, config: config)
         Log.info("请求解析: source=\(source) voice=\(voiceID) group=\(group ?? "-") final=\(isFinal) raw_chars=\(content.count)")
+        // 微信链路的播报开关：默认**不念**（聊天窗口里已经有文字，再念是打扰）。
+        // 微信侧的 claude 由 daemon spawn，它照样吃 Claude Code 那套 hook（hook 配在
+        // user 级 settings.json，谁启动 claude 都吃），hook 把来源标成 wechat 传回来，
+        // 由这里按配置裁决——真源在 config.toml，hook 不猜（2026-10-26）。
+        if source == VoiceSource.wechat && !(config.wechat?.speak ?? false) {
+            Log.info("微信来源播报已关闭（wechat.speak=false），丢弃 \(content.count) 字")
+            return
+        }
         Log.debug("请求原始内容: source=\(source) raw=\(logPreview(content))")
         let cleaned = cleanText(content)
         // 分组请求、以及不带分组的收尾信号（Stop），即使清洗后为空也不能直接 return：

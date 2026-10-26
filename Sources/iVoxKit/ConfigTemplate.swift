@@ -99,6 +99,7 @@ longPollMS = 35000              # 长轮询间隔（毫秒）｜ 默认 35000 �
 baseURL = "https://ilinkai.weixin.qq.com"   # ilink 服务地址 ｜ 默认 同值 ｜ 任意 http(s)
 claudePath = "~/.local/bin/claude"          # claude 可执行文件 ｜ 默认 同值 ｜ 任意路径
 askTimeoutSeconds = 300         # 单条提问等待上限（秒）｜ 默认 300 ｜ 数字
+speak = false                   # 微信回复要不要在本机念出来 ｜ 默认 false（不念）｜ true / false
 
 # ── 自建音色（可选）─────────────────────────────────────
 # 只放你自建或覆盖的音色；内置的四个在代码里（`ivox voice list` 会标出哪个是内置）。

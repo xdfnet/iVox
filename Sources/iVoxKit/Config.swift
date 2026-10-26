@@ -247,6 +247,12 @@ public struct WeChatConfig: Codable, Sendable {
     public var dataDir: String
     public var claudePath: String?
     public var askTimeoutSeconds: Int?
+    /// 微信回复要不要在本机念出来。默认 **false**：聊天窗口里已经有文字，
+    /// 再念一遍是打扰（docs/playback/purpose.md 的裁决）。
+    /// 微信侧的 claude 是 daemon spawn 的，它照样触发 Claude Code 那套 hook
+    /// （hook 配在 user 级 settings.json，谁启动 claude 都吃）——所以这条由
+    /// daemon 在入队前按 `source == "wechat"` 裁决，不靠 hook 自己猜。
+    public var speak: Bool
 
     /// 缺字段用默认值：TOML 里只写 `token` 也能加载
     public init(from decoder: Decoder) throws {
@@ -259,12 +265,13 @@ public struct WeChatConfig: Codable, Sendable {
         self.dataDir = try c.decodeIfPresent(String.self, forKey: .dataDir) ?? ""
         self.claudePath = try c.decodeIfPresent(String.self, forKey: .claudePath) ?? WeChatConfig.defaultClaudePath
         self.askTimeoutSeconds = try c.decodeIfPresent(Int.self, forKey: .askTimeoutSeconds)
+        self.speak = try c.decodeIfPresent(Bool.self, forKey: .speak) ?? false
     }
 
     /// claude 可执行文件的默认位置（配置里不写就用它）
     public static let defaultClaudePath = "~/.local/bin/claude"
 
-    public init(token: String = "", baseURL: String = "https://ilinkai.weixin.qq.com", allowFrom: String = "", longPollMS: Int = 35000, dataDir: String = "", claudePath: String? = WeChatConfig.defaultClaudePath, askTimeoutSeconds: Int? = nil) {
+    public init(token: String = "", baseURL: String = "https://ilinkai.weixin.qq.com", allowFrom: String = "", longPollMS: Int = 35000, dataDir: String = "", claudePath: String? = WeChatConfig.defaultClaudePath, askTimeoutSeconds: Int? = nil, speak: Bool = false) {
         self.token = token
         self.baseURL = baseURL
         self.allowFrom = allowFrom
@@ -272,6 +279,7 @@ public struct WeChatConfig: Codable, Sendable {
         self.dataDir = dataDir
         self.claudePath = claudePath
         self.askTimeoutSeconds = askTimeoutSeconds
+        self.speak = speak
     }
 
     public var enabled: Bool { !token.isEmpty }
@@ -291,6 +299,7 @@ public struct WeChatConfig: Codable, Sendable {
         case dataDir
         case claudePath
         case askTimeoutSeconds
+        case speak
     }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
@@ -334,6 +343,9 @@ public enum ModelPaths {
 /// 也是 `sourceVoices` 里表示**默认音色**的那个键——一处定义，别各写各的。
 public enum VoiceSource {
     public static let `default` = "default"
+    /// 微信链路（daemon spawn 的那个 claude）的来源 id。它照样触发 Claude Code 那套
+    /// hook，hook 会把来源标成这个值传回来，由本仓按 `wechat.speak` 开关裁决要不要念。
+    public static let wechat = "wechat"
 }
 
 public struct Config: Codable, Sendable {

@@ -13,6 +13,24 @@
 # 起因：`make check-tts` 压的是真实 daemon，而真人对话的播报走同一个队列，会挤掉自检用例。
 [[ -f /tmp/ivox-hook-muted ]] && exit 0
 
+# 微信链路的 claude（daemon spawn 出来的那个）**照样会触发本 hook**——
+# hook 配在 user 级 settings.json，谁启动 claude 都吃。它的来源由环境变量标出：
+# ClaudeAskService spawn 时注入 IVOX_SOURCE=wechat，hook 进程继承该环境。
+# 这里**只标来源、不自己决定播不播**：微信要不要念由 daemon 按 config.toml 的
+# `wechat.speak` 裁决（真源在配置里，hook 不猜）。
+# 早先微信侧没出声是「碰巧」：hook 触发了，却因为 PATH 里没有 ~/.local/bin 找不到
+# ivox 而静默失败（2026-10-26 实测）——那是巧合不是机制，不能当规则。
+SOURCE="${IVOX_SOURCE:-$2}"
+# 给 python 段用：审计行要写来源。用 export 而不是 `VAR=x meta=$(...)` 前缀赋值——
+# 前缀环境对**纯赋值语句**里的命令替换不生效（实测 source= 写成空）。
+export IVOX_HOOK_SOURCE="$SOURCE"
+
+# **ivox 用绝对路径**：hook 是被 claude 拉起的，继承 claude 进程的环境。
+# 微信侧 claude 由 launchd 托管的 daemon spawn，PATH 只有 /usr/bin:/bin:/usr/sbin:/sbin，
+# 裸名 `ivox` 找不到 → 播报静默失效（2026-10-26 实测）。
+# hook 不该依赖「谁拉起它、那人有什么 PATH」，路径写死最稳。
+IVO="$HOME/.local/bin/ivox"
+
 # hook.log 的轮转：只增不减是没有上限的，而 daemon.log 有 5M 阈值——用久了这里会涨到几百 M。
 # 规则与 Logger.swift 的 rotateIfNeeded 一致（超阈值就把主文件改名成 .old，旧的被覆盖）。
 # 用 mv 覆盖而不是先 rm 再 mv：省一步，也不用在 hook 里做删除。
@@ -37,8 +55,8 @@ if [[ "$1" == "msgdisplay" ]]; then
   # python 只做「delta 提取 + 审计写 hook.log」两件事且要快；播报用后台 & 不阻塞。
   # python 依次吐三行：分组号（摞）、页号、delta。delta 放最后是因为它可能含换行。
   payload="$(cat)"
-  meta=$(printf '%s' "$payload" | python3 -c "
-import json, sys, re
+  IVOX_HOOK_SOURCE="$SOURCE" meta=$(printf '%s' "$payload" | python3 -c "
+import json, os, sys, re
 s = sys.stdin.read()
 d = json.loads(s) if s.strip() else {}
 delta = d.get('delta', '') or ''
@@ -51,7 +69,7 @@ from datetime import datetime
 home = Path.home()
 home.joinpath('.config/ivox/hook.log').open('a').write(
     '%s hook.sh msgdisplay source=%s turn=%s mid=%s index=%s final=%s delta=%s\n' % (
-    datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], '$2',
+    datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], os.environ.get('IVOX_HOOK_SOURCE',''),
     d.get('turn_id',''), d.get('message_id',''), d.get('index',''), final, delta[:40]))
 
 # **整页搬运**：MessageDisplay 会把一页拆成十几批增量送来，这里先攒着，
@@ -94,11 +112,11 @@ print(page)
   pg="$(printf '%s' "$meta" | sed -n 2p)"
   delta="$(printf '%s' "$meta" | tail -n +3)"
   if [[ -n "${delta// }" ]]; then
-    args=(speak --source "$2")
+    args=(speak --source "$SOURCE")
     [[ -n "$grp" ]] && args+=(--group "$grp")
     [[ -n "$pg" ]] && args+=(--page "$pg")
     # 后台 &：走 socket 短连 O(ms)，不阻塞本批渲染
-    ivox "${args[@]}" -- "$delta" 2>/dev/null &
+    "$IVO" "${args[@]}" -- "$delta" 2>/dev/null &
   fi
   echo '{"continue": true}'
   exit 0
@@ -141,7 +159,7 @@ try:
 except Exception:
     pass
 " 2>/dev/null)
-  args=(speak --source "$2")
+  args=(speak --source "$SOURCE")
   [[ -n "$grp" ]] && args+=(--group "$grp")
   # **延后 300ms 再发收尾信号**：Stop 与 MessageDisplay 是两次独立的钩子调用，谁先抵达 socket
   # 并不保证——实测 27 轮里 14 轮 Stop 比正文早到 10~20 毫秒。Stop 先到就把这一摞盖了印，
@@ -149,7 +167,7 @@ except Exception:
   # 字幕与汽水音量还会在中途收一次又起一次。
   # 延后一点让正文先落地，两条通路就按「先内容、后收尾」的顺序到。
   # 放在后台：钩子必须立刻返回（Claude Code 等它返回才继续），不能在这儿睡。
-  ( sleep 0.3; ivox "${args[@]}" --final -- "" 2>/dev/null ) &
+  ( sleep 0.3; "$IVO" "${args[@]}" --final -- "" 2>/dev/null ) &
   echo '{"continue": true}'
   exit 0
 fi
@@ -158,5 +176,5 @@ fi
 # 不会阻塞它），但**留一行痕**。旧版配置可能还挂着已删的 `speak`，那会静默地不播报——
 # 没有这行日志时，用户看到的现象与「hook 没触发」一模一样，既不念也查不出是谁的锅。
 rotate_hook_log
-echo "$(date '+%F %T') hook.sh 未知动作 action=$1 source=$2" >> "$HOME/.config/ivox/hook.log"
+echo "$(date '+%F %T') hook.sh 未知动作 action=$1 source=$SOURCE" >> "$HOME/.config/ivox/hook.log"
 exit 0

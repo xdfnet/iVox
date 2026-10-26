@@ -2,6 +2,20 @@
 
 ## 未发布 — 2026-10-26
 
+- **微信链路的播报变成一个开关：`[wechat] speak`，默认 false（不念）** — 顺带修掉一个
+  「哑掉的原因搞错了」的坑。
+  - **事实**：微信侧的 claude（daemon spawn 的那个）**照样会触发 Claude Code 那套 hook**——
+    hook 配在 user 级 `~/.claude/settings.json`，谁启动 claude 都吃。2026-10-26 实测到
+    hook.log 里有一行来自微信回复的 `msgdisplay`。
+  - **但它没出声**：hook.sh 里调 `ivox` 用的是裸名，而微信侧 claude 继承 daemon 的环境，
+    daemon 由 launchd 托管、`PATH=/usr/bin:/bin:/usr/sbin:/sbin`（没有 `~/.local/bin`）
+    → `command not found` 被 `2>/dev/null` 吞掉。**是碰巧没出声，不是设计上不出声**。
+  - **修法**：hook.sh 改用绝对路径 `~/.local/bin/ivox`（hook 不该依赖「谁拉起它、那人
+    有什么 PATH」）；spawn claude 时注入 `IVOX_SOURCE=wechat`，hook 据此标来源。
+  - **要不要念由 daemon 裁决**：`[wechat] speak` 默认 `false`（不念，延续
+    playback/purpose.md 的裁决）；改成 `true` 即微信回复也在本机播报。真源在 config.toml，
+    hook 不猜。
+
 - **`/new` 现在会回一句「已开启新会话」** — 微信发 `/new` 之前是**彻底静默**的：
   只把 claude 子进程杀掉、清掉 session_id 指针，然后一个 segment 都不发 →
   微信端表现为「正在输入」闪一下就灭、之后石沉大海，用户无从判断这条命令

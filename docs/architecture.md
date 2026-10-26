@@ -464,9 +464,20 @@ pi 扩展（`scripts/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在模�
    → WeChatPlatform.sendMessage() 发回微信
 ```
 
-**这条链路不发声**：回复以文字发回微信，不进 `PlaybackQueue`（裁决见
+**这条链路默认不发声**：回复以文字发回微信，不进 `PlaybackQueue`（裁决见
 [playback/purpose.md](playback/purpose.md)）——聊天窗口里已经有文字了，再念一遍是打扰。
-它也不经过 Claude Code 的 hook 体系（那是 Claude Code 会话才有的）。
+
+⚠️ 但它**照样会触发 Claude Code 的 hook 体系**：hook 配在 user 级
+`~/.claude/settings.json`，**谁启动 claude 都吃**，不止 Claude Code 自己的会话。微信侧的
+claude 是 daemon spawn 的，它拉起的 hook 与终端会话的 hook 是同一段脚本。差别只有两处：
+
+- **来源标记**：spawn 时注入 `IVOX_SOURCE=wechat`，hook 据此把来源标成 `wechat` 传回 daemon；
+- **路径**：hook 里调 `ivox` 用**绝对路径** `~/.local/bin/ivox`。早先写的是裸名 `ivox`，
+  而微信侧 claude 继承 daemon 的环境（launchd 给的 `PATH=/usr/bin:/bin:/usr/sbin:/sbin`），
+  找不到二进制 → 播报静默失效（2026-10-26 实测）。那是**巧合不是机制**，不能当规则。
+
+**要不要念由 daemon 按配置裁决**：`config.toml` 的 `[wechat] speak`，**默认 false**
+（`false` = 不念）。hook 只负责标来源，不自己决定播不播——真源在配置里。
 
 ## 文本过滤
 

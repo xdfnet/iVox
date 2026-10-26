@@ -110,7 +110,12 @@ actor ClaudeAskService {
         if !sessionID.isEmpty { args += ["--resume", sessionID] }
         p.arguments = args
         p.currentDirectoryURL = URL(fileURLWithPath: workDir)
-        p.environment = ProcessInfo.processInfo.environment
+        // 标出「这个 claude 是微信链路起的」：它照样触发 Claude Code 那套 hook
+        // （hook 配在 user 级 settings.json，谁启动 claude 都吃），hook 靠这个环境变量
+        // 把来源标成 wechat 传回 daemon，由 daemon 按 `wechat.speak` 开关裁决要不要念。
+        var env = ProcessInfo.processInfo.environment
+        env["IVOX_SOURCE"] = VoiceSource.wechat
+        p.environment = env
 
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
         p.standardInput = inPipe
