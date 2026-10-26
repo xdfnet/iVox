@@ -52,6 +52,9 @@ actor ClaudeAskService {
             await terminateProc()
             sessionID = ""
             saveState()
+            // 必须回一句：否则微信端「正在输入」闪一下就灭、之后石沉大海，
+            // 用户无从判断这条命令到底生效没（2026-10-26 实测踩到）。
+            onSegment("已开启新会话")
             return
         }
         try ensureProcess()

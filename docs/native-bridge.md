@@ -160,7 +160,7 @@ Daemon (actor)
         stdout 逐行读，忽略 system/assistant，取 result.result / session_id
         · 单常驻进程，stdin 长开
         · session_id 落盘，重启用 --resume
-        · /new：关进程 + 清 session_id，下次裸启
+        · /new：关进程 + 清 session_id，下次裸启，回一句「已开启新会话」
         · 闲置回收 + cleanup 信号清理，无孤儿 claude
 ```
 

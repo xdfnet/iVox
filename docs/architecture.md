@@ -134,7 +134,7 @@ Daemon (actor)
 - result 按 FIFO 匹配当前最早等待者（单 agent 串行）；`session_id` 落盘 `~/.config/ivox/wechat/bridge_state.json`，进程重启用 `--resume` 恢复历史。
 - agent 的工作目录固定为 `~/.config/ivox/wechat/workspace`，读写收敛在隔离目录。
 - Daemon `cleanup()` 中 `await claudeAsk.stop()` 关 stdin、等退出（60×50ms）、超时 terminate，避免孤儿与新旧进程并存。
-- 权限为最大权限 `--dangerously-skip-permissions`（全自动免确认）；发 `/new` terminate 当前进程、清 session_id 指针，下次裸启新会话。
+- 权限为最大权限 `--dangerously-skip-permissions`（全自动免确认）；发 `/new` terminate 当前进程、清 session_id 指针，下次裸启新会话，并回一句「已开启新会话」（不回的话微信端只看到「正在输入」闪一下就没了，无法判断是否生效）。
 - 协议实测细节见 [`native-bridge.md`](native-bridge.md)。
 
 ### SocketServer — Unix Domain Socket IPC
