@@ -13,7 +13,7 @@ final class ConfigTOMLTests: XCTestCase {
     [hotkeys]
     translate = "cmd+d"     # 我爱用 cmd+d
 
-    [sourceVoices]
+    [playback.sourceVoices]
     default = "taozi"
     claude = "taozi"
     pi = "wanwan"
@@ -59,19 +59,36 @@ final class ConfigTOMLTests: XCTestCase {
         XCTAssertTrue(updated.contains("# iVox 配置"))
     }
 
+    func testUpdatingValueKeepsTrailingCommentIntact() throws {
+        // 改一个带行尾注释的值：注释与它前面的空格都要原样留着
+        // （早先值范围把尾随空格一起吞了 → 改完变成 `enabled = true# 注释`）
+        let path = tempPath("comment")
+        let text = """
+        [playback]
+        enabled = true                  # 播报总开关 ｜ 默认 true ｜ true/false
+        """
+        try text.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        try updateConfigValues(at: path, ["playback.enabled": .boolean(false)])
+        let updated = try String(contentsOfFile: path, encoding: .utf8)
+        XCTAssertTrue(updated.contains("enabled = false                  # 播报总开关"),
+                      "改值不该动行尾注释与它的空格，实际：\(updated)")
+    }
+
     func testSavingWritesTOML() throws {
         let path = tempPath("save")
         defer { try? FileManager.default.removeItem(atPath: path) }
-        let config = Config(
+        let config = Config(playback: PlaybackConfig(
             sourceVoices: ["default": "taozi", "pi": "wanwan"],
             voices: [VoiceInfo(id: "v1", name: "测试")]
-        )
+        ))
         try saveConfig(config, to: path)
 
         let text = try String(contentsOfFile: path, encoding: .utf8)
-        XCTAssertTrue(text.contains("[sourceVoices]"))
+        XCTAssertTrue(text.contains("[playback.sourceVoices]"))
         XCTAssertTrue(text.contains("default = \"taozi\""))
-        XCTAssertTrue(text.contains("[[voices]]"))
+        XCTAssertTrue(text.contains("[[playback.voices]]"))
 
         // 写出来的东西读得回去
         let loaded = try loadConfig(from: path)

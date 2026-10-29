@@ -50,6 +50,7 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 ```bash
 ivox speak "你好"           # 手动播报
 ivox skip --page            # 掀页（Ctrl+1，可省）；--stack 掀摞（Ctrl+2）；--all 全掀（Ctrl+3）
+ivox playback off           # 单独关掉播报（正在念的停、排队清空）；on 打开；不带参数看状态
 ivox translate "hello"      # 划词翻译（--selection 取当前选中文本，--json 结构化输出）
 ivox voice list             # 列出音色
 ivox status                 # 版本、各功能健康状态、权限、模型/音色文件体检
@@ -76,7 +77,7 @@ ivox wechat setup              # 扫码登录微信机器人的 ilink bot
 ivox wechat status             # 查看配置状态
 ```
 
-音色匹配：`--voice` 指定 > `sourceVoices` 映射 > `sourceVoices.default`
+音色匹配：`--voice` 指定 > `playback.sourceVoices` 映射 > `playback.sourceVoices.default`
 
 | 音色 | 说明 |
 |------|------|
@@ -139,8 +140,9 @@ translate = "opt+z"     # 改完跑 ivox restart 生效
 | `hotkeys` | 热键（键位写法见下）；首次安装会写全量默认键位 |
 | `wechat.token` / `wechat.allowFrom` | 微信 ilink bot token / 允许发消息的那个用户 |
 | `wechat.speak` | 微信回复要不要在本机念出来（默认 `false`＝不念） |
-| `sourceVoices` | 按接入方分别选音色；其中 `default` 键就是**默认音色**（没有来源时用它） |
-| `voices` | **只放你自建或覆盖的音色**；内置的四个在代码里（`ivox voice list` 会标出哪个是内置） |
+| `playback.sourceVoices` | 按接入方分别选音色；其中 `default` 键就是**默认音色**（没有来源时用它） |
+| `playback.voices` | **只放你自建或覆盖的音色**（`[[playback.voices]]`）；内置的四个在代码里（`ivox voice list` 会标出哪个是内置） |
+| `playback.enabled` | 播报总开关（默认开）。关掉后内容一律丢弃、正在念的立刻闭嘴，其余能力照常；命令行 `ivox playback off` |
 
 **写错的键不会静默**：守护进程启动时会把「写了但没人认领」的键打进 `daemon.log`，
 还会猜你是不是想写别的名字（如 `allow_from` → 「是不是想写 allowFrom？」）；

@@ -4,12 +4,12 @@ import XCTest
 final class ConfigRoundTripTests: XCTestCase {
 
     func testSaveAndLoadRoundTrip() throws {
-        let original = Config(
+        let original = Config(playback: PlaybackConfig(
             sourceVoices: ["default": "v1", "s": "v1"],
             voices: [
                 VoiceInfo(id: "v1", name: "测试", description: "desc"),
             ]
-        )
+        ))
 
         let tmpPath = NSTemporaryDirectory() + "ivox-test-config.json"
 
@@ -25,16 +25,18 @@ final class ConfigRoundTripTests: XCTestCase {
     }
 
     func testVoiceAddAndRemoveRoundTrip() throws {
-        let original = Config(
+        let original = Config(playback: PlaybackConfig(
             sourceVoices: ["default": "a"],
             voices: [VoiceInfo(id: "a", name: "AA", description: nil)]
-        )
+        ))
         let tmpPath = NSTemporaryDirectory() + "ivox-test-voices.json"
         try saveConfig(original, to: tmpPath)
 
         // 用户自建音色写在外部配置层（config.json 的 voices 段）；内置音色在代码里
         var reloaded = try loadConfig(from: tmpPath)
-        reloaded.voices = (reloaded.voices ?? []) + [VoiceInfo(id: "b", name: "BB", description: "new")]
+        var playback = reloaded.playback ?? .default
+        playback.voices = (playback.voices ?? []) + [VoiceInfo(id: "b", name: "BB", description: "new")]
+        reloaded.playback = playback
         try saveConfig(reloaded, to: tmpPath)
 
         let final = try loadConfig(from: tmpPath)

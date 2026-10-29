@@ -78,7 +78,7 @@ struct VoiceAdd: ParsableCommand {
         if let refAudio { element["refAudio"] = .string(refAudio) }
         if let refText { element["refText"] = .string(refText) }
         if let description { element["description"] = .string(description) }
-        let updated = doc.appendingToArrayTable("voices", element: .table(element))
+        let updated = doc.appendingToArrayTable("playback.voices", element: .table(element))
         try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
 
         let displayName = name ?? id
@@ -103,7 +103,7 @@ struct VoiceRemove: ParsableCommand {
         guard let index = userVoices.firstIndex(where: { $0.id == id }) else {
             if VoiceCatalog.isBuiltin(id: id) {
                 print("错误: \(id) 是内置音色（在代码里），删不掉；"
-                      + "要改它请在 config.toml 的 voices 段写同名条目覆盖")
+                      + "要改它请在 config.toml 的 [[playback.voices]] 里写同名条目覆盖")
             } else {
                 print("错误: 音色 ID \(id) 不存在")
             }
@@ -114,16 +114,16 @@ struct VoiceRemove: ParsableCommand {
             return
         }
 
-        // 删掉 [[voices]] 里的这一条，并清掉 sourceVoices 里指向它的引用。
+        // 删掉 [[playback.voices]] 里的这一条，并清掉 sourceVoices 里指向它的引用。
         // 同样就地改，用户的注释留着。
         let text = try String(contentsOfFile: configPath, encoding: .utf8)
         let doc = try TOMLDocument.parse(text, order: ConfigAudit.sectionOrder)
         let references = config.sourceVoices
             .filter { $0.value == id }
-            .map { "sourceVoices.\($0.key)" }
+            .map { "playback.sourceVoices.\($0.key)" }
         let withoutRefs = doc.removingValues(forKeys: references)
         let doc2 = try TOMLDocument.parse(withoutRefs, order: ConfigAudit.sectionOrder)
-        let updated = doc2.removingFromArrayTable("voices", index: index)
+        let updated = doc2.removingFromArrayTable("playback.voices", index: index)
         try updated.write(toFile: configPath, atomically: true, encoding: .utf8)
 
         let voice = userVoices[index]

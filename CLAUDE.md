@@ -154,7 +154,9 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
   `MediaControlConfig.default`（Web 控制台开关与端口）；
   这些**不进用户配置**，外部再写会被审计点名（写了不生效）；② **外部配置**——
   `~/.config/ivox/config.toml`，**就这一个文件**，装凭据与用户会改的（开关/键位/端口/路径），
-  **键名一律驼峰**（`wechat` 段早先是蛇形，2026-10-21 统一）；③ **用户数据**——录音、微信
+  **键名一律驼峰**（`wechat` 段早先是蛇形，2026-10-21 统一）；**音色归在 `[playback]` 段里**
+  （`[playback.sourceVoices]` + `[[playback.voices]]`，2026-10-29 从顶层挪进来——音色只服务
+  播报；老位置照读不失效，加载时自动搬家）；③ **用户数据**——录音、微信
   context_token 等程序写出的东西。**写错的键不会静默**：`ConfigAudit` 在解码后对照各段已知键
   打日志，还能猜「是不是想写 allowFrom？」（已知键从各类型 `CodingKeys` 派生，不另抄清单）。
   **格式是 TOML**（`iVoxKit/TOML.swift` 自研解析/序列化，无外部依赖）：能写注释，配置能当说明书读；

@@ -97,6 +97,9 @@ actor PlaybackQueue {
     private var isSpeakingInterruption = false
     /// 最近一帧字幕：暂停/恢复时用它把字幕**接回去**（译文念完，字幕回到原来那一页）。
     private var lastCaptionFrame: CaptionFrame?
+    /// **播报总开关**：关掉后进来的内容一律丢弃、正在念的立刻闭嘴；
+    /// 守护进程与其余能力（热键、翻译、微信、Web 控制台）照常在跑。
+    private var enabled: Bool
 
     /// 播报字幕接收端（Daemon 在配置开启时注入）：每开始念一句广播**歌词式的一帧**
     ///（这一页的句子 + 念到第几句），收起广播 nil。
@@ -106,10 +109,12 @@ actor PlaybackQueue {
     private let engine: any TTSProviding
     private let media: MediaController
     init(engine: any TTSProviding, mediaController: MediaController,
-         idleGraceSeconds: Double = PlaybackConfig.defaultIdleGraceSeconds) {
+         idleGraceSeconds: Double = PlaybackConfig.defaultIdleGraceSeconds,
+         enabled: Bool = PlaybackConfig.defaultEnabled) {
         self.engine = engine
         self.player = AudioPlayer()
         self.media = mediaController
+        self.enabled = enabled
         // 队列落盘：daemon 挂了之后靠它把没播完的内容捞回来（开不了就只在内存里）
         self.session = PlaybackSession(idleGraceSeconds: idleGraceSeconds,
                                         store: PlaybackStore.makeDefault())
@@ -139,6 +144,37 @@ actor PlaybackQueue {
         // 退出时的**安全网**，与"谁借的"无关：播报已不碰音乐（暂停/恢复只归语音输入），
         // 这里只为兜住"任何原因留下的暂停"——例如正在录音时 daemon 重启，不还就再也出不来。
         Task { await media.resume() }
+    }
+
+    /// 播报总开关的当前状态（`ivox status` / `/health` 报它）。
+    var isEnabled: Bool { enabled }
+
+    /// 开/关播报能力。
+    ///
+    /// **关**：正在念的立刻闭嘴、排队的全清空、之后进来的内容一律丢弃
+    /// （不留着等开回来——攒着一大批突然开闸更难收拾）。
+    /// **开**：从下一条新内容开始照常念；刚才丢弃的内容不会补播。
+    func setEnabled(_ newValue: Bool) async {
+        guard newValue != enabled else { return }
+        enabled = newValue
+        if newValue {
+            Log.info("播报已开启")
+        } else {
+            // 清场走「全掀」那条路：掐在播 + 清队列 + 收字幕，一次到位。
+            await bargeIn(InterruptOrigin(.disablePlayback, .request("ivox-playback")))
+            Log.info("播报已关闭：正在念的停了，排队的清空，之后进来的内容丢弃")
+        }
+    }
+
+    /// **收件口的闸**：播报关着的时候，进来的内容一律丢弃。
+    /// 所有进队路径（整段 / 分组 / 续批 / 插队朗读）都过这一处，一处判完。
+    private func accept(_ jobs: [PlaybackJob]) -> Bool {
+        guard enabled else {
+            let chars = jobs.reduce(0) { $0 + $1.text.count }
+            Log.info("播报已关闭，丢弃 \(jobs.count) 块（\(chars) 字）")
+            return false
+        }
+        return true
     }
 
     /// 注入播报字幕接收端（`nil` = 关闭字幕）。
@@ -220,6 +256,7 @@ actor PlaybackQueue {
     @discardableResult
     func enqueue(_ newJobs: [PlaybackJob], turnID: String? = nil) async -> Int? {
         guard !newJobs.isEmpty else { return nil }
+        guard accept(newJobs) else { return nil }
         let stack: Int?
         if let turnID {
             // pi 的轮：每个 turn_id 自开一摞（后续帧由调用方拿摞号走 appendToStack 并入）
@@ -244,6 +281,9 @@ actor PlaybackQueue {
     func appendToStack(_ stack: Int, _ newJobs: [PlaybackJob],
                        group: String?, page: String? = nil) async -> PlaybackSession.StackAccept {
         guard !newJobs.isEmpty else { return .appended }
+        // 播报关着：内容丢弃，但**摞的对照关系照旧**（返回 .appended）——
+        // 否则调用方会以为这摞没了、另开一摞，等开回来时页就散了。
+        guard accept(newJobs) else { return .appended }
         let note = page ?? newJobs.first?.batchPageNote
         let verdict = await session.appendToStack(stack, newJobs.map(\.asBlock),
                                                   note: group, pageNote: note)
@@ -263,6 +303,7 @@ actor PlaybackQueue {
     /// 调用方拿它记住「外部 group ↔ 助理摞号」，后续同摞的页改走 `appendToStack`。
     @discardableResult
     func enqueueGrouped(_ newJobs: [PlaybackJob], group: String) async -> Int? {
+        guard accept(newJobs) else { return nil }
         guard let stack = await session.newStack(newJobs.map(\.asBlock), note: group,
                                                  pageNote: newJobs.first?.batchPageNote) else { return nil }
         await reportFiling()
@@ -397,6 +438,7 @@ actor PlaybackQueue {
     /// 做成**一个原子方法**而不在调用方 `掐 + 入队` 两步拼：actor 可重入，两步之间会插进别的消息。
     func speakUserInitiated(_ newJobs: [PlaybackJob]) async {
         guard !newJobs.isEmpty else { return }
+        guard accept(newJobs) else { return }
         guard !isSpeakingInterruption else {
             Log.info("用户主动开口（Opt+Z 划词译文）：上一个译文还在念，这次忽略")
             return

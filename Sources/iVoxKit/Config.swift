@@ -63,6 +63,21 @@ public struct PlaybackConfig: Codable, Sendable {
     /// 空闲宽限期（秒）：声音停下后再等这么久没新内容，才判「说完了」并收字幕/还音量
     public var idleGraceSeconds: Double?
 
+    /// **播报总开关**：关掉之后进来的内容一律丢弃、正在念的立刻闭嘴，
+    /// 但守护进程与其余能力（热键、划词翻译、微信、Web 控制台）照常在跑。
+    public var enabled: Bool?
+
+    /// 播报总开关的默认值（开）。
+    public static let defaultEnabled: Bool = true
+
+    /// **来源 → 音色 id 的映射**：哪个接入方（claude / pi / wechat…）的回复用哪个音色念。
+    /// 音色只服务播报，所以它住在这段里（2026-10-29 从顶层 `[sourceVoices]` 挪进来）。
+    public var sourceVoices: [String: String]?
+
+    /// 用户自建/覆盖的音色（可选）。内置音色在代码里，不进外部配置。
+    /// 同样住在这段里（`[[playback.voices]]`，2026-10-29 从顶层 `[[voices]]` 挪进来）。
+    public var voices: [VoiceInfo]?
+
     /// 空闲宽限的默认值（秒），也是全仓唯一一处写着这个数的地方。
     ///
     /// **为什么是 60 秒而不是 5 秒（2026-10-24 实测改）**：宽限是「端说完了没有」的**兜底**，
@@ -76,15 +91,21 @@ public struct PlaybackConfig: Codable, Sendable {
     /// 那是兜底的代价，认了。宽限只盖印不埋碑：内容后来再到来照样揭封续播。
     public static let defaultIdleGraceSeconds: Double = 60
 
-    public static let `default` = PlaybackConfig(idleGraceSeconds: defaultIdleGraceSeconds)
+    public static let `default` = PlaybackConfig(idleGraceSeconds: defaultIdleGraceSeconds,
+                                                 enabled: defaultEnabled)
 
     /// 未配置时的回退见 `defaultIdleGraceSeconds`
     public var resolvedIdleGraceSeconds: Double { idleGraceSeconds ?? Self.defaultIdleGraceSeconds }
+    /// 未配置时的回退见 `defaultEnabled`（没写就是开着播）
+    public var resolvedEnabled: Bool { enabled ?? Self.defaultEnabled }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
         case idleGraceSeconds
+        case enabled
+        case sourceVoices
+        case voices
     }
 
 }
@@ -356,10 +377,13 @@ public struct Config: Codable, Sendable {
     public var overlay: OverlayConfig? = nil
     /// 来源 → 音色 id 的映射。**`"default"` 键就是默认音色**（没有来源时用它），
     /// 所以不再单设一个 `defaultVoice` 字段——一处说清，别两处各写一遍。
-    public var sourceVoices: [String: String]
+    ///
+    /// 真源在 `[playback]` 段里（`[playback.sourceVoices]`）：音色只服务播报，
+    /// 挂在顶层像是它自己是个功能（2026-10-29 挪进来的）。
+    public var sourceVoices: [String: String] { resolvedPlayback.sourceVoices ?? [:] }
     /// **用户自建/覆盖的音色**（可选）。内置音色在代码里（`VoiceCatalog`），
     /// 不进外部配置；两者合并见 `resolvedVoices`。
-    public var voices: [VoiceInfo]? = nil
+    public var voices: [VoiceInfo]? { resolvedPlayback.voices }
     public var speechInput: SpeechInputConfig?
     public var wechat: WeChatConfig?
     public var translation: TranslationConfig? = nil
@@ -369,7 +393,7 @@ public struct Config: Codable, Sendable {
     public var hotkeys: [String: String]? = nil
 
     /// 默认音色：取 `sourceVoices["default"]`；没写就落到第一个内置音色。
-    /// 写进配置的方式：`"sourceVoices": { "default": "taozi", ... }`。
+    /// 写进配置的方式：`[playback.sourceVoices]` 段里的 `default = "taozi"`。
     public var defaultVoice: String {
         sourceVoices[VoiceSource.default] ?? VoiceCatalog.builtin.first?.id ?? ""
     }
@@ -403,9 +427,7 @@ public struct Config: Codable, Sendable {
         case playback
         case overlay
         case captions
-        case sourceVoices
         case wechat
-        case voices
 
     }
     /// 顶层键名清单（配置审计用）。
@@ -590,6 +612,29 @@ private func migrateOverlayKeys(_ object: inout [String: Any]) -> Bool {
     return moved
 }
 
+/// 音色挪段迁移（2026-10-29）：音色只服务播报，所以从顶层挪进了 `[playback]` 段——
+/// `[sourceVoices]` → `[playback.sourceVoices]`，`[[voices]]` → `[[playback.voices]]`。
+///
+/// 老配置里它们挂在顶层——照搬会让用户的音色设置**无声失效**（播报退回内置音色）。
+/// 这里把它们搬进 playback 段照常生效，审计再告诉用户去把文件里的那几行挪过去
+/// （见 `ConfigAudit.movedKeys`）。
+private func migrateVoiceKeys(_ object: inout [String: Any]) -> Bool {
+    var moved = false
+    if let value = object.removeValue(forKey: "sourceVoices") {
+        var playback = object["playback"] as? [String: Any] ?? [:]
+        if playback["sourceVoices"] == nil { playback["sourceVoices"] = value }
+        object["playback"] = playback
+        moved = true
+    }
+    if let value = object.removeValue(forKey: "voices") {
+        var playback = object["playback"] as? [String: Any] ?? [:]
+        if playback["voices"] == nil { playback["voices"] = value }
+        object["playback"] = playback
+        moved = true
+    }
+    return moved
+}
+
 /// 老 JSON 配置 → TOML。顺手把老写法的 `defaultVoice` 并进 `sourceVoices.default`。
 public func migrateLegacyJSON(_ from: String, to: String) throws {
     let data = try Data(contentsOf: URL(fileURLWithPath: from))
@@ -602,6 +647,8 @@ public func migrateLegacyJSON(_ from: String, to: String) throws {
         object["sourceVoices"] = sourceVoices
         object.removeValue(forKey: "defaultVoice")
     }
+    // 音色归到 playback 段（与 TOML 老配置同一套搬家规则）
+    _ = migrateVoiceKeys(&object)
     let text = TOML.string(from: TOML.table(from: object), order: ConfigAudit.sectionOrder)
     try text.write(toFile: to, atomically: true, encoding: .utf8)
     try? FileManager.default.setAttributes([.posixPermissions: 0o600], ofItemAtPath: to)
@@ -618,6 +665,11 @@ private func decodeConfig(_ object: [String: Any]) throws -> Config {
         Log.info("配置迁移：字幕的落点与外观键已挪到 overlay 段（screen / inset / padding / cornerRadius / "
                  + "fontSize / maxWidth / maxHeightRatio）——请把 config.toml 里那几行挪到 [overlay] 段；"
                  + "captions.position 已作废，删掉即可")
+    }
+    if migrateVoiceKeys(&object) {
+        Log.info("配置迁移：音色已挪到 playback 段（sourceVoices / voices）——"
+                 + "请把 config.toml 里的 [sourceVoices] 段改成 [playback.sourceVoices]、"
+                 + "[[voices]] 改成 [[playback.voices]]")
     }
     guard JSONSerialization.isValidJSONObject(object),
           let data = try? JSONSerialization.data(withJSONObject: object) else {
@@ -659,7 +711,7 @@ public func updateConfigValues(at path: String, _ values: [String: TOMLValue]) t
 
 public func validate(_ config: Config) throws {
     if config.defaultVoice.isEmpty {
-        throw ConfigError.invalidConfig("sourceVoices.default 未设置")
+        throw ConfigError.invalidConfig("playback.sourceVoices.default 未设置")
     }
     let tts = config.resolvedTTS
     if tts.streamingInterval <= 0 {
@@ -669,11 +721,11 @@ public func validate(_ config: Config) throws {
         throw ConfigError.invalidConfig("tts.outputSampleRate 必须大于 0")
     }
     if config.voice(id: config.defaultVoice) == nil {
-        throw ConfigError.invalidConfig("sourceVoices.default 不存在: \(config.defaultVoice)")
+        throw ConfigError.invalidConfig("playback.sourceVoices.default 不存在: \(config.defaultVoice)")
     }
     for (source, id) in config.sourceVoices {
         if config.voice(id: id) == nil {
-            throw ConfigError.invalidConfig("sourceVoices.\(source) 不存在: \(id)")
+            throw ConfigError.invalidConfig("playback.sourceVoices.\(source) 不存在: \(id)")
         }
     }
     // 浮窗的落点数字：写错（负数）当场报错，别等渲染时才发现

@@ -1,5 +1,27 @@
 # iVox 开发日志
 
+## 未发布 — 2026-10-29
+
+- **播报可以单独关掉了：`ivox playback off`** — 此前只有两个极端：整个守护进程停掉
+  （`ivox off`，热键、微信、Web 控制台一起没），或者按 Ctrl+3 把**正在播的**掀掉
+  （内容丢掉，但下一条照念）。中间缺一档：「我现在不想听它念，但别的照常用」。
+  - 新增 `[playback] enabled`（默认 true）与 `ivox playback on|off`：
+    **关掉时正在念的立刻闭嘴、排队的全清空、之后进来的内容一律丢弃**；
+    热键、划词翻译、微信、Web 控制台**照常在跑**。
+  - 真源是 config.toml（`playback.enabled`），CLI 改配置 + 发一帧
+    `{type:playback,enabled:0|1}` 让运行时立刻生效，不必重启。
+  - 落点在 `PlaybackQueue` 的收件口一处判完（整段 / 分组 / 续批 / 插队朗读四条入队路径共用），
+    状态在 `ivox status`（自动播报显示「未启用」）与 `/health` 里都报得出来。
+
+- **音色归进播报段** — `[sourceVoices]` → `[playback.sourceVoices]`，
+  `[[voices]]` → `[[playback.voices]]`。
+  - **为什么**：音色只服务播报（念出来的声音就是它挑的），挂在顶层像它自己是个功能。
+    配置一段 = 一个功能域，播报段下再分「播报行为」与「播报用的素材」。
+  - **老配置照常生效**：加载时自动搬家（与字幕挪段同一套机制），审计提示把文件里那两处
+    挪过去（顶层的 `sourceVoices` / `voices` 会被点名「已挪到 playback.…」，不算写错）。
+  - 代码侧的 API 没变（`config.sourceVoices` / `config.resolvedVoices` 照旧），
+    只有**文件布局**变了；`ivox voice add/remove` 也改写到新位置。
+
 ## 未发布 — 2026-10-26
 
 - **微信链路的播报变成一个开关：`[wechat] speak`，默认 false（不念）** — 顺带修掉一个

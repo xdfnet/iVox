@@ -28,7 +28,7 @@
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `source` | 否 | 来源标识，默认 `default`。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
-| `voice` | 否 | 音色 ID，默认按 `config.json` 中 `sourceVoices` 映射 |
+| `voice` | 否 | 音色 ID，默认按 `config.toml` 的 `[playback.sourceVoices]` 映射 |
 | `group` | 否 | 分组号 = **一摞**（一次回复）：同一摞分多次发时带上同一个值（Claude 传 `turn_id`），服务端把它们并进**同一摞**；掀摞/掀桌时按它拦住"这一摞的后续批次"。**不必发结束标记**——下一条 `group` 到来时，服务端自动把上一个盖上 |
 | `end` | 否 | 出现即表示**这是该分组的最后一批**，收尾该摞（段可前移）。漏发它这段会一直开着，直到下一个分组到来才被兜底收尾 |
 | `now` | 否 | 出现即表示**现在就念**：播报**暂停**（缓冲原样留着，一条不删），这句从**独立播放节点**出声，念完从原处接着播。**与 source 无关**——Opt+Z 划词译文走的就是这条路；它**不进队列**，所以队列顺序一点没变、其余排队的一个不丢、也不立墓碑 |
@@ -169,7 +169,7 @@ payload.append(wavData)
 |------|------|------|
 | `type` | 是 | 固定 `tts` |
 | `source` | 否 | 来源标识，默认 `default`。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
-| `voice` | 否 | 音色 ID，默认按 `config.json` 中 `sourceVoices` 映射 |
+| `voice` | 否 | 音色 ID，默认按 `config.toml` 的 `[playback.sourceVoices]` 映射 |
 
 **响应格式**：48kHz、16-bit PCM、mono，流式分块；文本为空或合成失败也以 `end` 帧结尾
 
@@ -249,7 +249,23 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 `ivox speak` 这类不带 `pageID` 的来源照样掀得掉整页，只是掀在同一摞内（它们通常一摞一页，
 于是掀页与掀摞等价）。
 
-### 6. 快速操作 — 五个快捷键的第二扇门
+### 6. 播报总开关 — 单独关掉播报
+
+请求头，无 body，**无回复**：
+
+```
+{type:playback,enabled:1}    # 打开播报
+{type:playback,enabled:0}    # 关掉播报
+```
+
+关掉之后：正在念的立刻闭嘴、排队的全清空、之后进来的内容一律丢弃（不留着等开回来）；
+**其余能力照常**（热键、划词翻译、微信、Web 控制台）——这与 `ivox off`（停整个守护进程）
+是两件事。
+
+CLI 侧 `ivox playback on|off`：它先改 config.toml 的 `playback.enabled`（**配置是真源**，
+重启后仍然照它走），再发这一帧让运行时立刻生效。
+
+### 7. 快速操作 — 五个快捷键的第二扇门
 
 请求头，无 body，**无回复**：
 
@@ -269,7 +285,7 @@ daemon 没在跑就**静默返回**（随手按的快捷键不该因为服务不
 > ⚠️ 这里的 `codex` 是**开终端跑 codex**（QuickActions 能力域），与播报链路无关；
 > codex 的**播报**链路 2026-10-19 已整条删除。
 
-### 7. 锁屏 / 解锁 — 走 HID 真键
+### 8. 锁屏 / 解锁 — 走 HID 真键
 
 请求头，无 body，**有回复**（这两件事是「开门」动作，失败必须让人知道）：
 
@@ -294,7 +310,7 @@ daemon，daemon 没起来就发不出解锁键。解锁还要求系统**没睡�
 
 密码是 AES-GCM 密文，写死在 `ScreenControl.swift` 里，运行时解开。
 
-### 8. CLI 工具
+### 9. CLI 工具
 
 ```bash
 # TTS

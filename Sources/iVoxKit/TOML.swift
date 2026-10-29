@@ -364,7 +364,12 @@ struct TOMLParser {
         let value = try parseValue()
         let fullPath = currentPath + keyPath
         let fullKey = fullPath.joined(separator: ".")
-        valueRanges[fullKey] = valueStart..<idx
+        // **值的范围不含尾随空格**：裸标量会把值后面的空格一起吞进来（`parseScalar` 读到
+        // `#` 才停），就地改值时按这个范围替换 → 行尾注释会被粘到值后面
+        // （`enabled = true# 播报总开关`）。改值只该动值本身，空格与注释原样留着。
+        var valueEnd = idx
+        while valueEnd > valueStart, chars[valueEnd - 1].isWhitespace { valueEnd -= 1 }
+        valueRanges[fullKey] = valueStart..<valueEnd
         keyLines[fullKey] = lineOf(valueStart)
         events.append(.value(path: fullPath, value: value))
         try skipTrailingLine()

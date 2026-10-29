@@ -35,8 +35,12 @@ final class ConfigAuditTests: XCTestCase {
         let issues = audit("""
         {
           "hotkeys": { "translate": "cmd+d", "voice": "rightcmd" },
-          "sourceVoices": { "default": "taozi", "claude": "taozi" },
-          "voices": [ { "id": "x" } ]
+          "playback": {
+            "enabled": true,
+            "idleGraceSeconds": 60,
+            "sourceVoices": { "default": "taozi", "claude": "taozi" },
+            "voices": [ { "id": "x" } ]
+          }
         }
         """)
         XCTAssertTrue(issues.isEmpty, "不该有告警，实际: \(issues.map(\.path))")
@@ -48,6 +52,15 @@ final class ConfigAuditTests: XCTestCase {
         let paths = issues.map(\.path)
         XCTAssertTrue(paths.contains("models"))
         XCTAssertTrue(paths.contains("tts"))
+    }
+
+    func testReportsMovedVoiceSections() {
+        // 音色挪进播报段后，老配置里顶层那两处不算「没人认领」——只告诉用户新位置
+        let issues = audit(#"{"sourceVoices": {"default": "taozi"}, "voices": [{"id": "x"}]}"#)
+        let notes = issues.compactMap(\.note)
+        XCTAssertEqual(issues.map(\.path), ["sourceVoices", "voices"])
+        XCTAssertTrue(notes.contains { $0.contains("playback.sourceVoices") })
+        XCTAssertTrue(notes.contains { $0.contains("playback.voices") })
     }
 
     func testReportsRemovedTopLevelDefaultVoice() {

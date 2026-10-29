@@ -38,15 +38,14 @@ public enum ConfigAudit {
         "speechInput": SpeechInputConfig.CodingKeys.allCases.map(\.stringValue),
         "translation": TranslationConfig.CodingKeys.allCases.map(\.stringValue),
         "playback": PlaybackConfig.CodingKeys.allCases.map(\.stringValue),
+        "playback.sourceVoices": ["default"],
         "captions": CaptionsConfig.CodingKeys.allCases.map(\.stringValue),
         "overlay": OverlayConfig.CodingKeys.allCases.map(\.stringValue),
-        "sourceVoices": ["default"],
         "wechat": WeChatConfig.CodingKeys.allCases.map(\.stringValue),
-        "voices": VoiceInfo.CodingKeys.allCases.map(\.stringValue),
     ]
 
     /// 这些段的键名由内容决定（动作名、音色 id、来源名），内层不做检查。
-    public static let dynamicSections: Set<String> = ["hotkeys", "sourceVoices"]
+    public static let dynamicSections: Set<String> = ["hotkeys"]
 
     /// **挪过位置**的键：老路径 → 新位置。
     ///
@@ -63,6 +62,8 @@ public enum ConfigAudit {
         "captions.fontSize": "overlay.fontSize",
         "captions.maxWidth": "overlay.maxWidth",
         "captions.maxHeightRatio": "overlay.maxHeightRatio",
+        "sourceVoices": "playback.sourceVoices",
+        "voices": "playback.voices",
     ]
 
     /// **已作废**的键：老配置里还有它，但这个能力已经没有了。
@@ -99,6 +100,15 @@ public enum ConfigAudit {
         let topKnown = Set(sectionOrder[""] ?? [])
         for (key, value) in root {
             guard topKnown.contains(key) else {
+                // 整段挪过位置的键（如顶层的 sourceVoices）不算「没人认领」——
+                // 它照常生效（加载时已搬家），只告诉用户新位置在哪儿。
+                if let moved = movedKeys[key] {
+                    issues.append(ConfigUnknownKey(
+                        path: key, suggestion: nil,
+                        note: "已挪到 \(moved)（老键照常生效，把这一段挪过去即可）"
+                    ))
+                    continue
+                }
                 issues.append(ConfigUnknownKey(path: key, suggestion: suggestion(for: key, known: topKnown)))
                 continue
             }

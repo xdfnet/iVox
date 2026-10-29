@@ -53,7 +53,8 @@ actor Daemon {
         self.queue = PlaybackQueue(
             engine: ttsEngine,
             mediaController: mediaController,
-            idleGraceSeconds: config.resolvedPlayback.resolvedIdleGraceSeconds
+            idleGraceSeconds: config.resolvedPlayback.resolvedIdleGraceSeconds,
+            enabled: config.resolvedPlayback.resolvedEnabled
         )
 
         let siConfig = config.speechInput ?? .default
@@ -182,12 +183,17 @@ actor Daemon {
             webUI = "error:Web 服务未监听"
         }
 
-        // 自动播报：取决于 TTS 模型是否就绪
+        // 自动播报：播报总开关关着就是「未启用」，与引擎状态无关；
+        // 开着才看 TTS 模型是否就绪。
         let playbackHealth: String
-        switch await engine.state {
-        case .ready: playbackHealth = "ok"
-        case .failed(let message): playbackHealth = "error:\(message)"
-        case .notStarted, .loading: playbackHealth = "loading"
+        if await queue.isEnabled == false {
+            playbackHealth = "off"
+        } else {
+            switch await engine.state {
+            case .ready: playbackHealth = "ok"
+            case .failed(let message): playbackHealth = "error:\(message)"
+            case .notStarted, .loading: playbackHealth = "loading"
+            }
         }
 
         // 划词翻译与快速操作都与语音输入共用同一套键盘监听（依赖同一权限）
@@ -297,6 +303,7 @@ actor Daemon {
             engine: engineState,
             queued: await queue.pendingCount,
             playing: await queue.isProcessing,
+            playbackEnabled: await queue.isEnabled,
             audibleTurn: await queue.audibleTurn,
             audiblePage: await queue.audiblePage
         )

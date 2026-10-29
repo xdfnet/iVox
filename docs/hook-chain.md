@@ -86,7 +86,7 @@ Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执�
 
 - 解析 payload 头：`{source:claude}` / `{voice:wanwan}`
 - 如果文本前面有 `{source:claude}` 前缀且带额外内容，截取 `source` 和 `voice`
-- 查 `sourceVoices` 映射 → 确定音色 ID
+- 查 `playback.sourceVoices` 映射 → 确定音色 ID
 - 调用 `cleanText()` 清洗
 
 ### 5. TextCleaner

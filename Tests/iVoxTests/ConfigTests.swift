@@ -4,26 +4,26 @@ import XCTest
 final class ConfigTests: XCTestCase {
 
     func testValidationFailsOnMissingDefaultVoice() {
-        let config = Config(
+        let config = Config(playback: PlaybackConfig(
             sourceVoices: ["default": "missing"],
             voices: [VoiceInfo(id: "voice", description: nil)]
-        )
+        ))
         XCTAssertThrowsError(try validate(config))
     }
 
     func testValidationFailsOnMissingSourceVoice() {
-        let config = Config(
+        let config = Config(playback: PlaybackConfig(
             sourceVoices: ["default": "voice", "pi": "missing"],
             voices: [VoiceInfo(id: "voice", description: nil)]
-        )
+        ))
         XCTAssertThrowsError(try validate(config))
     }
 
     func testValidationPassesOnValidConfig() {
-        let config = Config(
+        let config = Config(playback: PlaybackConfig(
             sourceVoices: ["default": "v1", "c": "v1"],
             voices: [VoiceInfo(id: "v1", description: nil)]
-        )
+        ))
         XCTAssertNoThrow(try validate(config))
     }
 
@@ -122,5 +122,74 @@ final class ConfigTests: XCTestCase {
 
         let config = try loadConfig(from: path)
         XCTAssertEqual(config.resolvedOverlay.resolvedScreen, "NEW")
+    }
+
+    // MARK: - 音色挪进播报段（2026-10-29）
+
+    /// 老配置把 `sourceVoices` / `voices` 挂在顶层——升级后**不能无声失效**
+    ///（否则播报悄悄退回内置音色，看着像「音色丢了」）。
+    func testLegacyTopLevelVoicesStillTakeEffect() throws {
+        let toml = """
+        [sourceVoices]
+        default = "taozi"
+        claude = "wanwan"
+
+        [[voices]]
+        id = "mine"
+        name = "我的音色"
+        """
+        let path = NSTemporaryDirectory() + "ivox-legacy-voices.toml"
+        try toml.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let config = try loadConfig(from: path)
+        XCTAssertEqual(config.defaultVoice, "taozi")
+        XCTAssertEqual(config.sourceVoices["claude"], "wanwan")
+        XCTAssertEqual(config.voice(id: "mine")?.name, "我的音色")
+    }
+
+    /// 新的位置：`[playback.sourceVoices]` + `[[playback.voices]]`。
+    func testVoicesInsidePlaybackSectionTakeEffect() throws {
+        let toml = """
+        [playback]
+        enabled = true
+
+        [playback.sourceVoices]
+        default = "taozi"
+        claude = "wanwan"
+
+        [[playback.voices]]
+        id = "mine"
+        name = "我的音色"
+        """
+        let path = NSTemporaryDirectory() + "ivox-playback-voices.toml"
+        try toml.write(toFile: path, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let config = try loadConfig(from: path)
+        XCTAssertEqual(config.sourceVoices["claude"], "wanwan")
+        XCTAssertEqual(config.voice(id: "mine")?.name, "我的音色")
+        XCTAssertTrue(config.resolvedPlayback.resolvedEnabled)
+    }
+
+    // MARK: - 播报总开关
+
+    /// 播报总开关：没写就是**开着**（默认开），写了 false 就关——两种都得对。
+    func testPlaybackEnabledDefaultsToTrueAndHonoursFalse() throws {
+        let base = """
+        [sourceVoices]
+        default = "taozi"
+        """
+        let onPath = NSTemporaryDirectory() + "ivox-playback-on.toml"
+        try base.write(toFile: onPath, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: onPath) }
+        XCTAssertTrue(try loadConfig(from: onPath).resolvedPlayback.resolvedEnabled,
+                      "没写 playback.enabled 就是开着")
+
+        let offPath = NSTemporaryDirectory() + "ivox-playback-off.toml"
+        try (base + "\n[playback]\nenabled = false\n").write(toFile: offPath, atomically: true, encoding: .utf8)
+        defer { try? FileManager.default.removeItem(atPath: offPath) }
+        XCTAssertFalse(try loadConfig(from: offPath).resolvedPlayback.resolvedEnabled,
+                       "写了 playback.enabled = false 就是关着")
     }
 }

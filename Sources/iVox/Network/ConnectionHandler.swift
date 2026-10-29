@@ -110,6 +110,8 @@ actor ConnectionHandler: SocketConnectionHandler {
             handleStatus(fd: fd)
         } else if header.contains("type:skip") {
             handleSkip(fd: fd, header: header)
+        } else if header.contains("type:playback") {
+            handlePlayback(fd: fd, header: header)
         } else if header.contains("type:quick") {
             handleQuick(fd: fd, header: header)
         } else if header.contains("type:lock") {
@@ -382,6 +384,29 @@ actor ConnectionHandler: SocketConnectionHandler {
                 await queue.skipCurrentPage(trigger)
             }
         }
+    }
+
+    /// 播报总开关 `{type:playback,enabled:0|1}`：`ivox playback on/off` 的运行时入口。
+    ///
+    /// **只碰播报**：热键、划词翻译、微信、Web 控制台一律照常——这正是这个开关
+    /// 与 `ivox off`（停整个守护进程）的区别。
+    private nonisolated func handlePlayback(fd: Int32, header: String) {
+        defer { Darwin.close(fd) }
+        let kv = parseMetaKV(header)
+        guard let raw = kv["enabled"] else {
+            Log.warn("播报开关请求缺 enabled 字段")
+            return
+        }
+        let flag: Bool
+        switch raw.lowercased() {
+        case "1", "true", "on": flag = true
+        case "0", "false", "off": flag = false
+        default:
+            Log.warn("播报开关请求的 enabled 值看不懂：\(raw)")
+            return
+        }
+        Log.info("播报开关请求: enabled=\(flag)")
+        Task { await queue.setEnabled(flag) }
     }
 
     /// 快速操作的命令行入口（`ivox quick <action>`）：键盘上的 Opt+Q/A/X/S/C 由此获得第二扇门。

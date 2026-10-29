@@ -55,16 +55,28 @@ baseURL = "https://api.openai.com/v1"   # OpenAI 兼容服务地址 ｜ 默认 �
 apiKey = ""                     # 服务密钥 ｜ 默认 ""（空）｜ 任意字符串（仅 openai）
 model = "gpt-5-mini"            # 翻译用的模型 ｜ 默认 "gpt-5-mini" ｜ 任意模型 id（仅 openai）
 speechEnabled = true            # 译完是否朗读 ｜ 默认 true ｜ true/false
-# speechVoice = "taozi"         # 朗读用哪个音色 ｜ 默认 空＝用 sourceVoices.default ｜ 音色 id
+# speechVoice = "taozi"         # 朗读用哪个音色 ｜ 默认 空＝用 playback.sourceVoices.default ｜ 音色 id
 panelTimeoutSeconds = 60        # 浮窗兜底隐藏秒数（鼠标一移开就提前收起）｜ 默认 60 ｜ 数字（≥0）
 timeoutSeconds = 20             # 翻译请求超时（秒）｜ 默认 20 ｜ 数字（>0）
 proxyURL = ""                   # 直连失败后的兜底代理 ｜ 默认 ""（空＝不走）｜ 任意 http(s)
 
 # ── 播报 ───────────────────────────────────────────────
 [playback]
+#   播报总开关：关掉后进来的内容一律丢弃、正在念的立刻闭嘴，但守护进程与其余能力照常在跑。
+#   临时关可以用 `ivox playback off`（它会顺手改这里，重启后仍然关着）。
+enabled = true                  # 播报总开关 ｜ 默认 true ｜ true/false
 #   idleGraceSeconds 只是兜底——端说完了（Claude 的 Stop / pi 的 {end}）就立刻收，不等这个数。
 #   太小会误判：一轮回复里夹工具调用，页与页之间常隔二十秒以上（实测 20~130 秒）。
 idleGraceSeconds = 60           # 空闲宽限（秒）｜ 默认 60 ｜ 数字
+
+# ── 音色（属于播报：念出来的声音就是它挑的）────────────
+# 键名 = 接入方自报的名字；`default` 是默认音色（没有来源时用它）。
+# 可选值 = 音色 id：`ivox voice list` 里能看到（内置 taozi / wanwan / mizai / dayi，另有自建的）。
+[playback.sourceVoices]
+default = "taozi"               # 默认音色 ｜ 默认 "taozi" ｜ 音色 id
+claude = "taozi"                # Claude 的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
+pi = "taozi"                    # pi 的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
+# 自建音色写在下面的 [[playback.voices]]（`ivox voice add` 会替你写好）。
 
 # ── 浮窗（屏幕上的那块 iVox 窗口：字幕、译文都往它里面放）──
 [overlay]
@@ -81,14 +93,6 @@ maxHeightRatio = 0.3            # 内容总高度上限＝可见高的比例（�
 # ── 字幕（独立段：屏幕上的显示，与「播报怎么排队收尾」分开）──
 [captions]
 enabled = false                 # 播报字幕开关（念到哪句显示哪句）｜ 默认 false ｜ true/false
-
-# ── 音色 ───────────────────────────────────────────────
-# 键名 = 接入方自报的名字；`default` 是默认音色（没有来源时用它）。
-# 可选值 = 音色 id：`ivox voice list` 里能看到（内置 taozi / wanwan / mizai / dayi，另有自建的）。
-[sourceVoices]
-default = "taozi"               # 默认音色 ｜ 默认 "taozi" ｜ 音色 id
-claude = "taozi"                # Claude 的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
-pi = "taozi"                    # pi 的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
 
 # ── 微信桥接 ───────────────────────────────────────────
 [wechat]

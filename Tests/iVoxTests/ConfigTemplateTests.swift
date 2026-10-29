@@ -65,7 +65,9 @@ final class ConfigTemplateTests: XCTestCase {
         let expected = Config.CodingKeys.allCases.map(\.stringValue)
         var cursor = expected.startIndex
         for name in sectionOrder {
-            guard let index = expected[cursor...].firstIndex(of: name) else {
+            // 带点的段是**子表**（如 playback.sourceVoices），它的位置跟着父段走
+            guard let parent = name.split(separator: ".").first.map(String.init) else { continue }
+            guard let index = expected[cursor...].firstIndex(of: parent) else {
                 return XCTFail("模板里 \(name) 段的位置不对（不在 Config 声明顺序上）")
             }
             cursor = index
@@ -120,8 +122,9 @@ final class ConfigTemplateTests: XCTestCase {
     }
 
     func testTemplateDefaultVoiceIsABuiltin() {        // 模板指名的默认音色必须是真存在的内置音色
-        guard case .string(let id)? = section("sourceVoices")["default"] else {
-            return XCTFail("sourceVoices.default 不见了")
+        guard case .table(let voices)? = section("playback")["sourceVoices"],
+              case .string(let id)? = voices["default"] else {
+            return XCTFail("playback.sourceVoices.default 不见了")
         }
         XCTAssertTrue(VoiceCatalog.isBuiltin(id: id), "默认音色 \(id) 不是内置音色")
     }
