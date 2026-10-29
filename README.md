@@ -142,7 +142,7 @@ translate = "opt+z"     # 改完跑 ivox restart 生效
 | `wechat.speak` | 微信回复要不要在本机念出来（默认 `false`＝不念） |
 | `playback.sourceVoices` | 按接入方分别选音色；其中 `default` 键就是**默认音色**（没有来源时用它） |
 | `playback.voices` | **只放你自建或覆盖的音色**（`[[playback.voices]]`）；内置的四个在代码里（`ivox voice list` 会标出哪个是内置） |
-| `playback.enabled` | 播报总开关（默认开）。关掉后内容一律丢弃、正在念的立刻闭嘴，其余能力照常；命令行 `ivox playback off` |
+| `playback.enabled` | 播报总开关（默认开）。关掉后内容一律丢弃、正在念的立刻闭嘴，**TTS 模型一并释放**（省显存），其余能力照常；命令行 `ivox playback off` |
 
 **写错的键不会静默**：守护进程启动时会把「写了但没人认领」的键打进 `daemon.log`，
 还会猜你是不是想写别的名字（如 `allow_from` → 「是不是想写 allowFrom？」）；

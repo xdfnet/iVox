@@ -132,6 +132,14 @@ pi 扩展(scripts/pi, text_delta 流式)  ├→ Unix Socket → Daemon ─┬�
   （实测约 1 秒），**空闲 10 分钟自动卸载**还内存（`ASREngine` 里的巡检任务）。按下语音键时
   **并行**起加载，录音本身不依赖模型 → **用户照样立刻能说话**（「可以说了」＝按下那声 Tink ＋
   浮窗「可以说了」，与模型无关）；模型没就绪时浮窗显示「加载模型…」，只影响文字出来的早晚
+- **TTS 模型：只被「人主动关播报」释放，没有空闲卸载**（与 ASR 那套相反，ASR 是按需加载 +
+  空闲 10 分钟自动卸载）：播报是 TTS 唯一的用途，播报关了模型就没有存在理由——几 G 显存
+  凭什么白占。`ivox playback off` → `PlaybackQueue.setEnabled(false)` → `engine.releaseModel()`
+  （远程引擎收掉誊清员子进程＝显存随它归还；进程内引擎丢引用 + `MLX.Memory.clearCache()`，
+  **只置空引用不降 RSS**）；`playback.enabled` 本来就是 false 时**启动就不加载模型**。
+  **释放的是内存不是能力**：之后真有合成请求（别的入口直连 `{type:tts}`）会按需加载回来。
+  问状态**不会把模型请回来**——那就把刚还回去的显存又占上了（引擎内部一个 `wanted` 标志管这事）。
+  `TTSProviding` 上的 `releaseModel()` / `resumeModel()` 是这条规则的唯一接口
 - **两摞的分界**：换摞时插 0.6 秒静音（`AudioPlayer.writeSilence`）+ 字幕顶部亮一条细线
   （1.5 秒后撤）。「换了一摞」按**助理自编的摞号**判（`session.stackID(forSeq:)`），
   外部 turn_id 不参与。译文走独立播放节点，压根不进队列，所以这条静音与它无关

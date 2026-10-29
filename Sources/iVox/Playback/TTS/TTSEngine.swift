@@ -58,7 +58,15 @@ actor TTSEngine: TTSProviding {
 
     var isLoaded: Bool { model != nil }
 
-    var state: TTSLoadState { loadState }
+    /// **模型该不该驻留**（与远程引擎同义）：
+    /// `false` = 人主动关了播报 → 模型已卸载、内存还给系统；问状态不会把它加载回来。
+    /// 真有合成需求时按需加载回去（见 `ensureModelLoaded`）。
+    private var wanted = true
+
+    var state: TTSLoadState {
+        if !wanted { return .notStarted }
+        return loadState
+    }
 
     func loadModel() async throws {
         if model != nil {
@@ -69,7 +77,16 @@ actor TTSEngine: TTSProviding {
         let modelPath = expandPath(ModelPaths.tts)
         Log.debug("加载 TTS 模型: \(modelPath)")
         do {
-            model = try await TTS.loadModel(modelRepo: modelPath)
+            let loaded = try await TTS.loadModel(modelRepo: modelPath)
+            // **加载途中被释放**（人关了播报）：这一把刚加载出来的模型得当场扔掉，
+            // 否则「释放」刚做完又被 await 回来的一行装回去，显存白放。
+            if !wanted {
+                loadState = .notStarted
+                resumeAllWaiters()
+                Log.info("TTS 模型加载途中被释放，丢弃")
+                return
+            }
+            model = loaded
             loadState = .ready
             resumeAllWaiters()
             Log.debug("TTS 模型加载完成")
@@ -93,10 +110,19 @@ actor TTSEngine: TTSProviding {
 
     /// 等待模型就绪（事件驱动，不再轮询）
     func waitUntilReady() async {
+        // 不该驻留的先请回来（真有人要声音就该给，不该装作没有）。
+        if !wanted { wanted = true }
         switch loadState {
         case .ready: return
         case .failed(let msg): Log.error("TTS 模型加载失败: \(msg)"); return
         case .notStarted, .loading:
+            // **还没开始加载**：没人会替我们加载，队列等下去是死等——自己起一次。
+            if case .notStarted = loadState {
+                Task { [weak self] in
+                    do { try await self?.loadModel() }
+                    catch { Log.error("TTS 模型加载失败: \(error)") }
+                }
+            }
             await withCheckedContinuation { (continuation: CheckedContinuation<Void, Never>) in
                 self.stateContinuations.append(continuation)
             }
@@ -109,12 +135,25 @@ actor TTSEngine: TTSProviding {
         for cont in waiters { cont.resume() }
     }
 
+    /// **按需加载**：模型没驻留就把模型加载回来。
+    ///
+    /// 释放（`releaseModel`）只说明「此刻不需要它」，不是「永远不给」——
+    /// 真有合成请求进来就该给。
+    private func ensureModelLoaded() async throws {
+        if model != nil { return }
+        wanted = true
+        try await loadModel()
+    }
+
     /// - Parameter trace: 摞/页/块三个号。进程内引擎用不上（自家日志在同一份文件里），
     ///   但保留同名参数，让 `TSPRemote` 能顶替本类而不动调用方 —— 见 TTSTrace。
     func synthesizeStream(text: String, voiceID: String, trace: TTSTrace?) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in
             let task = Task {
                 do {
+                    // **按需加载**：模型不在了就把它加载回来。真有人要声音就该给，
+                    // 不该因为「先前被释放过」就装作没有（远程引擎同一条路）。
+                    try await ensureModelLoaded()
                     try await synthesize(text: text, voiceID: voiceID, continuation: continuation)
                 } catch is CancellationError {
                     Log.info("TTS 合成已取消（打断来源=\(cancelReason)）")
@@ -217,6 +256,31 @@ actor TTSEngine: TTSProviding {
         let waiters = gateWaiters
         gateWaiters.removeAll()
         waiters.values.forEach { $0.forEach { $0.resume() } }
+    }
+
+    /// 把模型还给系统：丢引用 + 清 MLX 的缓存。
+    /// **必须清缓存**：只置空引用的话，MLX 的缓冲还压着内存不放（实测 RSS 不降）。
+    func releaseModel() async {
+        wanted = false
+        guard model != nil else { return }
+        model = nil
+        loadState = .notStarted
+        refAudioCache.removeAll()
+        MLX.Memory.clearCache()
+        Log.info("释放合成资源：TTS 模型已卸载")
+    }
+
+    /// 撤销释放：模型重新加载。**不等它加载完**（那要好几秒，不能挡着开关返回），
+    /// 后台加载，队列的「等引擎就绪」那一步会等。
+    func resumeModel() async {
+        wanted = true
+        Task { [weak self] in
+            do {
+                try await self?.loadModel()
+            } catch {
+                Log.error("TTS 模型重新加载失败: \(error)")
+            }
+        }
     }
 
     /// 返回**盒子**而非裸 `MLXArray`：见 `RefAudioBox` 的注释——既让 `sending` 检查

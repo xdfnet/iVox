@@ -264,11 +264,18 @@ actor Daemon {
     /// 第一次按下语音键时才加载，且与录音并行——用户照样立刻能说话。
     private func startModelLoading() {
         Task { [engine, config, speechInput] in
-            do {
-                try await engine.loadModel()
-                await engine.warmup(voiceID: config.defaultVoice)
-            } catch {
-                Log.error("TTS 模型加载失败: \(error)")
+            if config.resolvedPlayback.resolvedEnabled {
+                do {
+                    try await engine.loadModel()
+                    await engine.warmup(voiceID: config.defaultVoice)
+                } catch {
+                    Log.error("TTS 模型加载失败: \(error)")
+                }
+            } else {
+                // **播报关着就别把模型请进来**：启动即加载模型要几 G 显存，
+                // 而播报关着时根本没人要念——等真的开了播报再按需加载。
+                await engine.releaseModel()
+                Log.info("播报已关闭：不加载 TTS 模型（省显存），等开启播报时再加载")
             }
 
         if config.speechInput?.enabled ?? SpeechInputConfig.default.enabled {

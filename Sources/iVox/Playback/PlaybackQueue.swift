@@ -152,17 +152,23 @@ actor PlaybackQueue {
     /// 开/关播报能力。
     ///
     /// **关**：正在念的立刻闭嘴、排队的全清空、之后进来的内容一律丢弃
-    /// （不留着等开回来——攒着一大批突然开闸更难收拾）。
-    /// **开**：从下一条新内容开始照常念；刚才丢弃的内容不会补播。
+    /// （不留着等开回来——攒着一大批突然开闸更难收拾），**并把 TTS 模型释放掉**
+    /// （人主动关的，模型就没了存在理由——留着白占几 G 显存）。
+    /// **开**：从下一条新内容开始照常念；刚才丢弃的内容不会补播。模型按需重新加载。
     func setEnabled(_ newValue: Bool) async {
         guard newValue != enabled else { return }
         enabled = newValue
         if newValue {
             Log.info("播报已开启")
+            // 模型重新加载（后台跑，不挡着这次调用返回；队列「等引擎就绪」那一步会等）
+            await engine.resumeModel()
         } else {
             // 清场走「全掀」那条路：掐在播 + 清队列 + 收字幕，一次到位。
             await bargeIn(InterruptOrigin(.disablePlayback, .request("ivox-playback")))
-            Log.info("播报已关闭：正在念的停了，排队的清空，之后进来的内容丢弃")
+            // 模型还回去：释放的是**内存**，不是「再也合成不了」——
+            // 别的入口（socket 直连 {type:tts}）真要声音时，仍会按需把它加载回来。
+            await engine.releaseModel()
+            Log.info("播报已关闭：正在念的停了，排队的清空，之后进来的内容丢弃，TTS 模型已释放")
         }
     }
 

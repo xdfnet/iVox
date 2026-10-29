@@ -34,6 +34,14 @@ actor TSPRemote: TTSProviding {
     /// 已就位但引擎没用的那一次报错是不是已经说过。说过了就不再逐块刷——
     /// 队列在引擎坏掉时会把每块都试一遍，每块一条同款错误既刷屏又不带新信息。
     private var lastUnavailableNote: String?
+    /// **模型该不该驻留**。
+    ///
+    /// `true`（常态）：模型在子进程里，显存占着。
+    /// `false`：**人主动关了播报** → 模型连同子进程一并收回，几 G 显存还给系统。
+    ///
+    /// 置着 `false` 时，**问状态不会把子进程拉回来**——否则「查一下健康」就把显存请回来了，
+    /// 释放白做。真正的合成请求会把它置回 `true` 并按需加载（那是明确的需求，值得占显存）。
+    private var wanted = true
     /// 打断纪元：cancelActiveSynthesis 递增，进行中的合成比对不上就停止 yield。
     /// 独立于 actor 锁，因为读取方（阻塞读循环）跑在全局队列上。
     private let cancelToken = CancelToken()
@@ -54,6 +62,8 @@ actor TSPRemote: TTSProviding {
     /// 主进程自己不加载模型，模型在誊清员那边。问它好了没。
     var state: TTSLoadState {
         get async {
+            // 模型不该驻留：不碰子进程、不拉起它（问一次状态就把几 G 显存请回来，等于白释放）。
+            if !wanted { return .notStarted }
             guard await ensureChildRunning() else { return .failed("誊清员拉起失败") }
             guard let s = await Self.queryState(socketPath: socketPath) else {
                 return .failed("誊清员无响应")
@@ -63,6 +73,7 @@ actor TSPRemote: TTSProviding {
     }
 
     func loadModel() async throws {
+        wanted = true
         guard await ensureChildRunning() else {
             throw TTSRemoteError.unavailable
         }
@@ -77,6 +88,8 @@ actor TSPRemote: TTSProviding {
     }
 
     func waitUntilReady() async {
+        // 不该驻留的先请回来（真有人要声音就该给，不该装作没有）。
+        if !wanted { wanted = true }
         let deadline = Date().addingTimeInterval(Self.readyWaitSeconds)
         while Task.isCancelled == false {
             let s = await state
@@ -167,6 +180,32 @@ actor TSPRemote: TTSProviding {
         Log.info("TTS 合成已取消（打断来源=\(reason)）")
     }
 
+    /// 释放模型资源：把誊清员子进程收掉——模型权重在它身上，随它一起还给系统。
+    ///
+    /// **退避要清零**：释放是人主动关播报，不是「拉起失败」，
+    /// 否则下一次要合成时会被上次留下的退避窗口挡住（那一下会判 failed、那一块白丢）。
+    func releaseModel() async {
+        wanted = false
+        guard child != nil else { return }
+        Log.info("释放合成资源：收掉誊清员（模型显存随之归还）")
+        stopChild()
+        consecutiveLaunchFailures = 0
+        nextLaunchAllowedAt = .distantPast
+    }
+
+    /// 撤销释放：模型重新驻留。**按需**加载（不在这里等它好——
+    /// 那要好几秒，不能挡着开关返回），加载在后台做。
+    func resumeModel() async {
+        wanted = true
+        Task { [weak self] in
+            do {
+                try await self?.loadModel()
+            } catch {
+                Log.error("TTS 模型重新加载失败: \(error)")
+            }
+        }
+    }
+
     // MARK: - 监督
 
     /// 确认誊清员活着；死了就拉起来并等它把 socket 挂上。
@@ -191,6 +230,9 @@ actor TSPRemote: TTSProviding {
     /// startChild 一次，退避计数就无从对齐——一处成功会把别处的失败数清零，于是退避
     /// 形同虚设。现在它们都走这里，谁成功谁把计数归零。
     private func replaceChild(reason: String) async -> Bool {
+        // 模型不该驻留就不拉：**拉回来等于把刚还回去的显存又要回来**。
+        // 真正要合成的人走 `synthesizeStream` 的「按需加载」，那是有明确需求才恢复。
+        guard wanted else { return false }
         let now = Date()
         guard now >= nextLaunchAllowedAt else {
             let wait = Int(nextLaunchAllowedAt.timeIntervalSinceNow.rounded(.up))
