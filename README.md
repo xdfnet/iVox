@@ -101,9 +101,10 @@ make clean     # 清除 .build
 
 > `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **21 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
 
-> 构建用 `xcrun --toolchain swift-latest swift`，该 toolchain 即 Xcode 26 自带的 Swift 6.4。
-> 曾需要 `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`（早期快照的编译器崩溃，见
-> [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)），现已不需要。
+> 构建用 `xcrun --toolchain swift-latest swift`——`swift-latest` 这个符号链接指向
+> **开发快照** `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`（早期快照的编译器崩溃，见
+> [`docs/archive/incident-swift-compiler-crash.md`](docs/archive/incident-swift-compiler-crash.md)），
+> 崩溃在该版本已修复。
 
 ## 配置
 
@@ -173,9 +174,9 @@ voice = "rightcmd"
 | `openTerminalPi` | `opt+s` | 开终端跑 `pi` |
 | `copyPath` | `opt+c` | 复制 Finder 选中路径 |
 | `translate` | `opt+z` | 划词翻译 |
-| `skipPage` | `ctrl+1` | 读下一页（掀页） |
-| `skipBucket` | `ctrl+2` | 跳整摞 |
-| `skipAll` | `ctrl+3` | 闭嘴（全掀） |
+| `skipPage` | `ctrl+1` | 掀页（掐断在播的，掀掉这一页剩下的块） |
+| `skipBucket` | `ctrl+2` | 掀摞（掐断在播的，掀掉这一摞全部段） |
+| `skipAll` | `ctrl+3` | 全掀（掐断在播的，全场清空） |
 | `voice` | 右 ⌘ | 长按说话；可写 `rightcmd`（默认）/ `rightctrl` / `rightcmd+rightctrl` / `none` |
 
 写法：修饰键 `cmd` `ctrl` `opt` `shift`（也认 `command` `control` `option` `alt`），用 `+` 连主键；
@@ -188,7 +189,7 @@ voice = "rightcmd"
 
 ```
 Claude Code → hook ─┐
-pi 扩展（逐句流式）──────────┴→ Unix Socket → Daemon
+pi 扩展（整页一次）──────────┴→ Unix Socket → Daemon
                                             ├── TSPRemote ─→ 誊清员进程 (独立, MLX 合成)
                                             ├── WeChatPlatform (ilink 长轮询)
                                             │       └─ 常驻 Claude Agent (Swift 直连 claude)

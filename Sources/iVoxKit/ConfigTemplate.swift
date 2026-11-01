@@ -108,7 +108,7 @@ speak = false                   # 微信回复要不要在本机念出来 ｜ �
 # ── 自建音色（可选）─────────────────────────────────────
 # 只放你自建或覆盖的音色；内置的四个在代码里（`ivox voice list` 会标出哪个是内置）。
 # 同 id 时，你的条目覆盖内置的。字段：id（必填）｜ name ｜ refAudio ｜ refText ｜ description
-# [[voices]]
+# [[playback.voices]]
 # id = "myvoice"                # 音色 id（引用它就写这个）｜ 默认 无 ｜ 任意小写名
 # name = "我的音色"              # 显示名 ｜ 默认 无 ｜ 任意字符串
 # refAudio = "~/.config/ivox/voices/ref_myvoice.wav"   # 参考音频路径 ｜ 默认 无 ｜ 任意路径

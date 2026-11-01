@@ -6,7 +6,7 @@
 >
 > | 本文说 | 实际 |
 > |---|---|
-> | 「Swift 实现需显式传正确 `--model`」（§2.3 末、§4 参数行、§5 第 1 条） | **不传**。`ClaudeAskService.swift:34-35`：曾硬编码 model 并自带 `--model`，daemon 启动环境缺该变量会兜底到错模型（doubao），且这个隐含覆盖点藏得深极易被忘记（飞哥点名）。现在 spawn 不传 `--model`，全走进程自身默认 |
+> | 「Swift 实现需显式传正确 `--model`」（§2.3 末、§3 末、§4 参数行、§5 第 1 条） | **不传**。`ClaudeAskService.swift:34-35`：曾硬编码 model 并自带 `--model`，daemon 启动环境缺该变量会兜底到错模型（doubao），且这个隐含覆盖点藏得深极易被忘记（飞哥点名）。现在 spawn 不传 `--model`，全走进程自身默认 |
 > | 「闲置回收 + cleanup 信号清理」（§4） | **未实现闲置回收**，只有 `/new` 关进程与 `Daemon.cleanup` 收尾。想要省内存得自己加——别当成已有 |
 > | 「stdout 逐行读，忽略 system/assistant，取 `result.result`」（§4） | **assistant 帧是主力**。`assistantText` 是整段回复文本（不是逐字 delta，探针实测），走 `onSegment` 逐段回调让微信端看见过程；`result` 只作「本轮结束」信号，内容与最后一条 assistant 重复，不取文本 |
 
@@ -30,7 +30,7 @@ v3.3.0 用官方 `@anthropic-ai/claude-agent-sdk` 起常驻 node sidecar，实�
 
 环境基线：
 
-- `claude` 路径 `/Users/admin/.local/bin/claude` → 软链 `~/.local/share/claude/versions/2.1.283`，版本 **2.1.283 (Claude Code)**。
+- `claude` 路径 `/Users/admin/.local/bin/claude` → 软链 `~/.local/share/claude/versions/<版本>`。本文探针当时跑在 **2.1.283** 上；本机现为 **2.1.303 (Claude Code)**（版本会自己往前跳，读到哪个版本别当成结论的前提）。
 - SDK 既可用系统 `claude`，也可用包内自带二进制（`@anthropic-ai/claude-agent-sdk-darwin-arm64`）；本机走系统 CLI。
 
 ---
@@ -144,7 +144,8 @@ RESULT success '7291'    fb2c376c-…   ← 同进程、同 session、记忆保�
 RESUME RESULT success '7291' fb2c376c-…   ← 历史随 resume 恢复
 ```
 
-一个观察：探针环境里默认 model 出现 `[claude-code:unrecognized_model]`（env 残留 `ark-code-latest`）警告，但不影响结果。Swift 实现需显式传正确 `--model`，避免依赖 env 残留。
+一个观察：探针环境里默认 model 出现 `[claude-code:unrecognized_model]`（env 残留 `ark-code-latest`）警告，但不影响结果。
+⚠️ **本条的结论已被 §0 纠偏推翻**：Swift 实现**不传** `--model`（硬编码 model 反而会在 daemon 环境缺变量时兜底到错模型），全走进程自身默认。
 
 ---
 
@@ -170,10 +171,10 @@ Daemon (actor)
 
 ## 5. 实施清单
 
-1. **Swift 进程层重写** [ClaudeAskService.swift](../Sources/iVox/Network/ClaudeAskService.swift) → 验证：单轮问答文本与现桥一致。
+1. **Swift 进程层重写** [ClaudeAskService.swift](../Sources/iVox/SpeechInput/ClaudeAskService.swift) → 验证：单轮问答文本与现桥一致。
    - 定位 claude：候选 `~/.local/bin/claude`、`which claude`。
    - 参数 §2.1；`currentDirectoryURL` 设 `~/.config/ivox/wechat/workspace`。
-   - env 显式传 `--model`（不依赖残留）；保留现有 API/网关 env。
+   - env 保留现有 API/网关 env；**不传 `--model`**（见 §0 纠偏）。
 2. **NDJSON 行缓冲编解码**（复用现有 readabilityHandler 切行模式）→ 验证：result 收尾、错误分支、乱行不崩。
 3. **stdin 写消息**：统一包 `{type:"user",message:{role:"user",content}}` → 验证：裸消息不发、包层正确。
 4. **多轮常驻**：stdin 长开、连续 ask → 验证：同 session_id、上下文连续。

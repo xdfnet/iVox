@@ -16,7 +16,7 @@
 **游标不能只存整数下标**：掀页会把整页删掉，下标全部失效。所以游标是
 `(块号 seq, 该块)`（`PlaybackSession.swift`）——块号是全局单调的，
 删页删不掉它。删页后要重定位到「下一页第一块」，那一步由 `audiblePageTarget()` **现算**：
-先看发声点此刻落在哪页（`PlaybackSession.swift:219`），冷启动没有发声点才退回队首（`:523`）。
+先看发声点此刻落在哪页（`PlaybackSession.audiblePageTarget()`），冷启动没有发声点才退回队首（`headStackTarget()`）。
 
 **② 会炸的那一层不住在同一间屋子。** MLX 的 Metal 命令编码器析构时重复释放 GPU 命令
 队列 → SIGTRAP，上游未修且 Swift 侧拿不到 encoder 引用无从拦截。故合成整个搬进子进程
@@ -103,8 +103,8 @@
 - **播报字幕（可选）取「播放侧」而非合成侧**：每句的**首块音频**捎上该句文本（`AudioChunk.sentenceText`），`AudioPlayer` 在它被设备读出（`.dataConsumed`）时回调 → 队列转发给 `onCaption`。合成领先播放一两句，**从合成侧取会让字幕比声音早**（实测踩过，飞哥听出来了）；播放侧取则与声音对齐（误差约一个 IO 缓冲）。打断天然正确——被掐掉的句子的回调本就过不了世代校验；整队播完 / 全掀（`bargeIn`）广播 `nil` 收起。
 - **三档打断各落到哪个函数**（形象说法与键位见 [paper.md 的三档一节](paper.md)，本文**不重复比喻**
   ——两份各写一遍就会各自漂移，2026-10-20 那次键位全反正是这么来的）：
-  - 掀页 `Ctrl+1` → `claimCurrentPage`（在 Session 内**占位**领走当前页）→ 掐 → 删这一页
-  - 掀摞 `Ctrl+2` → `discardCurrentSegment`（后续分块立墓碑，连没印出来的也不印）
+  - 掀页 `Ctrl+1` → `takeHeadPage()`（在 Session 内**占位**领走当前页）→ 掐 → 删这一页
+  - 掀摞 `Ctrl+2` → `takeHeadStack()`（后续分块立墓碑，连没印出来的也不印）
   - 全掀 `Ctrl+3` → `cancelAll`；**右⌘ 说话不走这条路**——它是「你停一下」（`pausePlayback`：设备闭嘴、内容一条不删），不是「你别说了」。背景音乐不归它管
   - 译文插队 → `speakUserInitiated`（**译文不进容器**：主节点暂停 + 独立节点念 + 念完接着播）
   - **右⌘说话 → `pausePlayback()`（暂停，不是打断）**：`AudioPlayer.pauseOutput()` = `node.pause()`，
@@ -113,7 +113,7 @@
     三个必须记住的坑：① 断流看门狗要认「人为暂停」（否则暂停满 10 秒会被当成设备断流，
     重建引擎把排队音频丢掉）；② `ensureHealthy()` 在暂停时不能判「异常」（`node.isPlaying == false`
     是故意的，重建同样丢音频）；③ 前导静音那步的 `node.play()` 在暂停时不能调（那等于解除暂停）。
-  > **掀页的靶心必须占位，不能只读一次**：`claimCurrentPage` 与「删这一页」之间隔着 `await`（等播放器退净），actor 在挂起点可重入，第二次按压会插进来、又领到同一个页号，两次都去删同一页（2026-10-17 `P2` 实测两下都报同一页，随后 daemon 崩）。**领走即焚 + 占位**两半都要：领走后第二次按压拿不到靶心，退化成「只掐在播」。
+  > **掀页的靶心必须占位，不能只读一次**：`takeHeadPage()` 与「删这一页」之间隔着 `await`（等播放器退净），actor 在挂起点可重入，第二次按压会插进来、又领到同一个页号，两次都去删同一页（2026-10-17 `P2` 实测两下都报同一页，随后 daemon 崩）。**领走即焚 + 占位**两半都要：领走后第二次按压拿不到靶心，退化成「只掐在播」。
 - **⚠️ 调用顺序必须先于状态判定：连接内的四个操作要按帧序落地**（`ConnectionHandler.StreamOpChain` 串成一链）。`{type:stream}` 首帧、每个入队块、`{end}`/`{cancel}` 原先各自 `Task {}` 投递到本 actor，**落地顺序全凭调度器**。实测 `{end}` 的 Task 抢在同一连接后一个入队 Task 之前执行：`endTurn` 已把该轮盖印，迟到的**同轮** `enqueue` 又把它揭回未收尾，而此时再无帧可关它——分块全部播完后那一摞永远收不掉：`/health` 恒 `playing=true`、`queued=0`、无「播放结束」，而**两把兜底都够不着**（背压看门狗要求 `pendingCount>0`，此刻已 0；drain 还没轮到）。
   > 旧形态下这里的后果更硬：管道本身**也**永久停在 `waitForJobs()` 里。新形态里 producer 发现没块就退出管道（见上「空闲宽限归身份层」），悬住的是宽限那条等待，而宽限有 60 秒上限——所以即便帧序再乱，也不会像从前那样永久挂死。黑盒 A-tail / E3 用例的「未收尾」即此，现场探针原始顺序为 `enqueue(open=1) → endTurn(open=0) → enqueue(open=1)`，6 秒后进入永久挂起。
 - **轮次身份靠「轮次栈 + 墓碑」判定**（`turnStack` / `deadTurns`，都在 `PlaybackSession` 里），**消费靠游标**：
@@ -133,19 +133,44 @@
     「已排队的音频」前面；要同时做到「译文先念」与「正在播的一句不丢」，只能各占一个节点。
     **入口有两个，落到同一条路**：`ConnectionHandler` 的 `{now:1}` 字段（CLI `ivox speak --now`），
     以及 `TranslationCoordinator` 的 Opt+Z 快捷键。加 socket/CLI 入口是为了让自检能压到它。
-  - **Ctrl+2 = 掐 + 掀当前摞**：`skipCurrentBucket` = `preemptCurrent` → `discardCurrentSegment()`（内部含立墓碑，该摞后续分块也不再开口）→ `pumpOrSettle()` 接着播；没有下一摞则收尾。
-  - **Ctrl+1 = 掐 + 掀当前页**：`skipCurrentPage` = `claimCurrentPage()`（占位领靶心）→ `preemptCurrent` → 等旧管道退净 → `discardClaimedPage()` → `pumpOrSettle()`。页号为 nil（非 Claude 路径）时走 `discardCurrentSegmentBlocks()`：清掉游标所在**那一段**的全部块、**不立墓碑**（与 Ctrl+2 的区别就在这——`ivox speak` 这类普通播报没有摞可掀，别牵连它的后续增量）；没块在播时退化成「只掐在播」。
+  - **Ctrl+2 = 掐 + 掀当前摞**：`skipCurrentBucket` = `preemptCurrent` → `takeHeadStack()`（内部含立墓碑，该摞后续分块也不再开口）→ `pumpOrSettle()` 接着播；没有下一摞则收尾。
+  - **Ctrl+1 = 掐 + 掀当前页**：`skipCurrentPage` = `takeHeadPage()`（占位领靶心）→ `preemptCurrent` → 等旧管道退净 → 删掉领到的那一页 → `pumpOrSettle()`。没有独立页号可领时退化成「清掉游标所在**那一段**的全部块、**不立墓碑**」（与 Ctrl+2 的区别就在这——`ivox speak` 这类普通播报没有摞可掀，别牵连它的后续增量）；没块在播时退化成「只掐在播」。
 - **`pipelineSeq` 代号作废在途管道（修「旧 producer 消费新轮任务」）**：`Task {}` 是结构化外的子任务，**不继承取消**——`bargeIn` 的 `currentTask?.cancel()` 根本停不住已进 MLX 的 producer。故 `bargeIn`/`shutdown` 递增 `pipelineSeq`，producer 每轮循环、consumer 每次循环都比对「代号是否仍是自己的」，不等即立即退场。`currentTaskSeq` 同理：管道收尾只在 `currentTaskSeq == 自己` 时才清 `currentTask`，防止旧管道把新起的管道清掉。
 - **收敛兜底 `pumpOrSettle()`**（原名 `pumpOrResume`——它那一步"恢复音乐"已随播报不再碰音乐而删除）：轮次顶替时序可能留下「有 job 但没管道」的孤儿态。`endTurn`/`cancelAll`/掀页掀摞 收尾统一走它——无管道且有活就补起管道，否则等旧管道退净、按需收字幕。任何路径结束都不会挂住。⚠️ **等它退净**：遇到「管道仍在退出中 + 已取消 + 无待播」时必须等（`awaitCurrentPipelineFinished()`），不能一律直接返回——否则 `currentTask` 还非 nil，收字幕那一支进不去，字幕就永远挂在屏幕上。
 - **`drain()` 超时定时器绑定自身序号 `drainSeq`**：超时兜底的 `asyncAfter` 闭包必须校验 `drainSeq == 自己`，否则**上一次 drain 遗留的定时器会提前放行下一次 drain**，表现为尾音被掐（曾实测 `drain 超时强制返回（pendingCount=28 尾音=1.12s）`）。
 - **门控挂起回来要复核目标块还在**（旧形态的 `removeFirst from empty` → `EXC_BREAKPOINT` 的等价物）：producer 在 `awaitPrefetchCapacity()` 之前读游标、回来后确认「游标之后的第一块还是我读到的那个」，不是就跳过。现在**容器不会被 producer 改动**（它只读游标），但掀页/掀摞会删——所以复核的是「这一块还在不在」，在就合成、不在就跳。
-- **`sweepSegments` 不能 `remove(at:)` 配 `indices` 遍历**：删完索引整体前移，下一轮越界 → `Index out of range` → daemon 崩、LaunchAgent 拉起，一批用例集体假红（2026-10-17 实测，崩溃报告 `iVox-2026-10-17-135311.ips`）。要删的先 `filter` 出来算块数，再用 `removeAll` 一次性删——`PlaybackSession.swift:544-545` 现在就是这个形态，改的时候别退回 `remove(at:)`。
+- **`sweepSegments` 不能 `remove(at:)` 配 `indices` 遍历**：删完索引整体前移，下一轮越界 → `Index out of range` → daemon 崩、LaunchAgent 拉起，一批用例集体假红（2026-10-17 实测，崩溃报告 `iVox-2026-10-17-135311.ips`）。要删的先 `filter` 出来算块数，再用 `removeAll` 一次性删——`PlaybackSession.swift` 的 `removeAll` 现在就是这个形态，改的时候别退回 `remove(at:)`。
 
 > **历史事故与修复记录已移入 archive/**（本文只写现状）：历史修复清单
 > [`incident-playback-queue-fixes.md`](../archive/incident-playback-queue-fixes.md)、
 > drain 回调丢失复盘 [`incident-audio-drain-callback.md`](../archive/incident-audio-drain-callback.md)、
 > 文本泄漏进播报 [`incident-hook-tts-leak.md`](../archive/incident-hook-tts-leak.md)。
 > 那些记录里 media 与 `↓` 跳段相关的部分都是 v4.0.0 之前的旧形态。
+
+## 队列落盘（SQLite）：内存只是工作副本
+
+**真源在磁盘**：`~/.config/ivox/ivox-queue.db`（SQLite，系统自带 libsqlite3；队列库路径跟 socket 走，
+隔离实例各写各的）。里面**只存还没播出去的块**。
+
+- 写点：入队（存那一页）、播完（删已交给合成的块）、被掀（掀页/掀摞/全掀/取消轮次 → 删）
+- 恢复：`daemon` 起来时（**接单之前**）由 `restorePersisted()` 把它们重新排队
+- **恢复出来的内容要显式开管道才有人念**（恢复不经过入队/收尾那两条起管道的路），
+  故 `restorePersisted` 里补一次 `pumpOrSettle()`
+- 写盘失败只记警告，不挡播报
+
+**为什么必须有**：`ivox on` / `make update` 走 `launchctl kickstart -k`，那是 **SIGKILL**
+（旧 daemon 瞬间死、抓不到、atexit 也不跑）——**每次部署都会杀一次 daemon**。
+队列只在内存里，就等于每次部署都丢一次排队。
+
+## 播报总开关（`playback.enabled`）
+
+`PlaybackQueue.setEnabled(_:)` 是总开关的唯一入口：
+
+- **关**：走 `cancelAll` 那条路（掐在播 + 清队列 + 收字幕）**并释放 TTS 模型**
+  （`engine.releaseModel()`——人主动关的，模型就没了存在理由）
+- **开**：`engine.resumeModel()` 按需重新加载（后台跑，不挡开关返回）
+- 所有进队路径都过收件口的闸 `accept(_:)`：播报关着时进来的内容一律丢弃，不攒着等开回来
+- 归因档位多一档 `disablePlayback`（`ivox playback off` 触发，与用户三档打断分开记）
 
 ## 维护约束
 
@@ -160,8 +185,8 @@
 6. **`scheduleBuffer` 必须带 `completionCallbackType: .dataConsumed`**——旧 API（不带 callbackType）是 `.dataPlayedBack` 语义，播放末尾引擎 auto-shutdown 时回调永不触发，会重新引入 drain 超时；`.dataConsumed` 在数据被读出即回调，不依赖引擎存活
 7. **多条块一次性入队时走批量入口 `enqueue([PlaybackJob])`**——逐条 `await enqueue` 时，若两批之间队列瞬时为空，会白起停一次管道与收尾。批量入口先 append 完再启动处理，消除该窗口
 8. **不要在 job 之间重新引入 `await player.drain()`**——句间接力靠 AudioPlayer 连续 `scheduleBuffer` 排队，逐句 drain 会播空设备、重补 prime、重启调度，重新引入逐字卡顿。drain 只允许出现在 `processNext` 末端一次
-9. **新增「有新内容」的入口时必须让它走到 `PlaybackSession.signal()`**——空闲宽限挂在 `waitForContent()` 的等待表上，任何让它该醒来的事件（入队/轮次开始/结束/掐）都必须经过 `signal`，否则宽限只能等满 5 秒才判。**反过来：删除路径（掀页/掀摞/全掀）绝不能发 `signal`**——`signal` 的语义是「来新货了」，删除发了会让宽限误判成有更新而作废，且作废后没有接班人，这一摞永远收不掉
+9. **新增「有新内容」的入口时必须让它走到 `PlaybackSession.signal()`**——空闲宽限挂在 `waitForContent()` 的等待表上，任何让它该醒来的事件（入队/轮次开始/结束/掐）都必须经过 `signal`，否则宽限只能等满 60 秒才判。**反过来：删除路径（掀页/掀摞/全掀）绝不能发 `signal`**——`signal` 的语义是「来新货了」，删除发了会让宽限误判成有更新而作废，且作废后没有接班人，这一摞永远收不掉
 9b. **作废宽限只能递增 `graceEpoch`，不能 `graceTask?.cancel()`**——取消挂在 `withCheckedContinuation` 上的 Task 不会解开 continuation，Waiter 会永远留在等待表里。`idleGraceElapsed` 发现自己已被取代就直接返回、不动别人的 `graceTask`；被唤醒（来新货）则**必须再 `pumpOrSettle()` 一次**，否则那次起宽限可能被「`graceTask` 还占着」挡掉而没人接班
 10. **背压水位（4s/2s）调整只改 `AudioPlayer` 的 `highWaterFrames/lowWaterFrames`**——高水位是内存上限也是合成预取上限（约 48kHz Int16 单声道 ≈ 384KB/4s），低水位须低于高水位以形成滞后区间，避免在阈值边缘反复挂起/放行
-11. **弱分组只在 `appendGrouped` 里管，绝不要接进 `turnStack`**——`turnStack` 是 pi 双流「属主交还」的认证栈，混入别的 id 会让 pi 的正文流被判成过期旧轮（**整轮没声音**）。弱分组要的只有两件事：「同 group 并段」和「墓碑拦住后续批次」，都不需要栈。掀摞时记得连墓碑一起立（`discardCurrentSegment` 已做），**全掀时记得连 `turnStack` 里的轮一起立**（`discardAll` 已做——它们「已声明、块还没到」，此刻容器里还没有对应的段，只按段立墓碑就漏掉了，打断之后它们陆续送来的字照常播，`E7` 实测）；但**右⌘说话不埋碑也不清场**，它只暂停
+11. **弱分组只在 `enqueueGrouped` / Session 的并段入口里管，绝不要接进 `turnStack`**——`turnStack` 是 pi 双流「属主交还」的认证栈，混入别的 id 会让 pi 的正文流被判成过期旧轮（**整轮没声音**）。弱分组要的只有两件事：「同 group 并段」和「墓碑拦住后续批次」，都不需要栈。掀摞时记得连墓碑一起立（`takeHeadStack` 已做），**全掀时记得连 `turnStack` 里的轮一起立**（`discardAll` 已做——它们「已声明、块还没到」，此刻容器里还没有对应的段，只按段立墓碑就漏掉了，打断之后它们陆续送来的字照常播，`E7` 实测）；但**右⌘说话不埋碑也不清场**，它只暂停
 12. **流式连接的队列操作一律走 `ConnectionHandler` 的 `chain.hop {}`，不许直接 `Task { await queue.… }`**——顺序是协议语义的一部分（`{end}` 之后再无帧可关轮次）；裸 `Task {}` 落地乱序会让已关轮次被迟到分块重新打开，管道永久挂起（见上「按帧序落地」条）

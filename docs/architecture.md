@@ -53,7 +53,7 @@ macOS 本地语音助手守护进程，全栈 actor 化。输入侧接 AI 工具
 | 语音输入 | `Sources/iVox/SpeechInput/` | SpeechInput |
 | 划词翻译 | `Sources/iVox/Translation/` | Translation |
 | 快速操作 | `Sources/iVox/QuickActions/` | QuickActions |
-| 微信桥接 | `Sources/iVox/WeChat/` | WeChatPlatform、ClaudeAskService |
+| 微信桥接 | `Sources/iVox/WeChat/` | WeChatPlatform（ClaudeAskService 在 `Sources/iVox/SpeechInput/`，语音输入与微信共用） |
 | 媒体控制 | `Sources/iVox/MediaControl/` | MediaHTTPServer、MediaController、SodaVolumeDucker |
 | 屏幕锁 | `Sources/iVox/Screen/` | ScreenControl |
 | （基础设施） | `HotKey/` `Network/` `Daemon/` `Commands/` | GlobalKeyTap、SocketServer、Daemon |
@@ -115,7 +115,7 @@ await ws; await sock; await mic
 
 ### ClaudeAskService — 原生常驻 Claude Agent
 
-`Sources/iVox/Network/ClaudeAskService.swift`
+`Sources/iVox/SpeechInput/ClaudeAskService.swift`
 
 Swift 直接 spawn 原生 `claude` 进程、经 stdio NDJSON 通信，**无 node、无 Agent SDK 依赖**（此前的 node sidecar 方案占用 278 MB node_modules，已移除）。底层 claude 进程常驻 → **后台任务跨微信消息存活**。
 
@@ -147,14 +147,14 @@ Daemon (actor)
 
 ### 合成引擎 — `TTSProviding` 契约 + 两种实现
 
-**契约**：`Sources/iVox/Playback/TTSProviding.swift`（成员一律声明 `async`——按同步写会报
+**契约**：`Sources/iVox/Playback/TTS/TTSProviding.swift`（成员一律声明 `async`——按同步写会报
 "conformance crosses into actor-isolated code"）。队列与 `ConnectionHandler` 只认这个协议，
 不知道背后是进程内还是跨进程。
 
 | 实现 | 落点 | 谁在用 |
 |---|---|---|
-| `TSPRemote` | `Playback/TSPRemote.swift` | **默认**。Unix socket + `StreamFrame` 长度帧，兼**监督者**：先问 socket 再问 child，断了重拉 |
-| `TTSEngine` | `Playback/TTSEngine.swift` | `IVOX_TTS=local` 时退回进程内，仅供调试对照 |
+| `TSPRemote` | `Playback/TTS/TSPRemote.swift` | **默认**。Unix socket + `StreamFrame` 长度帧，兼**监督者**：先问 socket 再问 child，断了重拉 |
+| `TTSEngine` | `Playback/TTS/TTSEngine.swift` | `IVOX_TTS=local` 时退回进程内，仅供调试对照 |
 
 装点在 `Daemon.init`；`Daemon.cleanup` 显式 `stopChild()`，不留孤儿。子进程入口是
 `ivox tts --serve`（`Commands/TTSCommand.swift`），日志落 `~/.config/ivox/tts.log`。
@@ -165,7 +165,7 @@ Daemon (actor)
 
 ### TTSEngine — 进程内 MLX 合成（`IVOX_TTS=local`）
 
-`Sources/iVox/Playback/TTSEngine.swift`
+`Sources/iVox/Playback/TTS/TTSEngine.swift`
 
 - `mlx-audio-swift` 加载本地 Qwen3-TTS 模型
 - `generateStream()` 流式合成 float32 PCM → 重采样 48kHz → int16
@@ -276,7 +276,7 @@ Daemon (actor)
 - **落点**：水平居中、垂直贴底（`inset` 是底边距可见区底边的点数）。纯几何，
   `origin(...)` 是 static 便于单测（渲染与几何分开测，测几何不用开窗口）
 - **内容一空就收窗**，不留残余：早先留了「等 3 秒再收」的机制，想让音乐别在两句之间抖——
-  实际是把问题换个地方摆：用户按 Ctrl+3 掀桌，字幕还挂着最后那句 3 秒、音乐也压着 3 秒。
+  实际是把问题换个地方摆：用户按 Ctrl+3 全掀，字幕还挂着最后那句 3 秒、音乐也压着 3 秒。
   空了就收（`overlay.lingerSeconds` 已作废）
 - **背景音乐让路只跟浮层走**：浮窗在屏上 → 汽水音乐降 5 格；**浮窗一消失立刻恢复**。
   早先还掺了「iVox 正在出声」这半个判据（播报起落信号），飞哥否了：
@@ -295,7 +295,7 @@ Daemon (actor)
 - **right ⌘/⌃ 按下**：过 150ms 长按阈值 → 查授权 → **先试录**；`record()` 成功了才暂停音乐 +
   取消 TTS + 出浮窗（见下「副作用在录上之后」）
 - **right ⌘/⌃ 松开**：结束录音 + 恢复音乐 + 开始 ASR 识别
-- 用户快捷键五个：right⌘ 说话、Opt+Z 插队念译文、Ctrl+3 掀桌（只静音播报，不录音、不碰音乐）、Ctrl+2 跳整摞、Ctrl+1 读下一页。**pi 新轮与停止帧不再打断**，一律排队
+- 用户快捷键五个：right⌘ 说话、Opt+Z 插队念译文、Ctrl+3 全掀（只静音播报，不录音、不碰音乐）、Ctrl+2 掀摞、Ctrl+1 掀页。**pi 新轮与停止帧不再打断**，一律排队
 - ASR 结果通过 `CGEvent` 模拟键盘输入 + `NSPasteboard` 粘贴
 - **ASR 模型按需加载 + 空闲卸载**：权重 2.5G，常驻不划算。模型**不随 daemon 启动加载**，
   第一次要识别时才加载（实测约 1 秒），**空闲 10 分钟自动卸载**把内存还回去
@@ -325,7 +325,7 @@ Daemon (actor)
   `HotKeySpec.defaultChord`，解析器与默认值都在 `iVoxKit/HotKeySpec.swift`（纯逻辑、可测）。改完跑
   `ivox restart` 生效。**本节及下文提到的所有键位都是默认值**——实际生效的看 `daemon.log` 里的
   「热键: 动作 = 键位」各行；配错时那里会写明是哪个动作、错在哪、退回了哪个默认
-- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Opt+Z` → `TranslationService`；`Opt+Q/A/X/S/C` → `QuickActionsService`；`Ctrl+3` / `Ctrl+2` / `Ctrl+1` → `PlaybackQueue`（手动打断三档：掀桌 / 跳整摞 / 读下一页）
+- 消费者按**能力归属**分派（`Daemon.setUpHotKeys()`）：右⌘/右⌃ → `SpeechInputService`；`Opt+Z` → `TranslationService`；`Opt+Q/A/X/S/C` → `QuickActionsService`；`Ctrl+3` / `Ctrl+2` / `Ctrl+1` → `PlaybackQueue`（手动打断三档：全掀 / 掀摞 / 掀页）
 - 热键精确匹配（四个标准修饰位全等，故 `Cmd+Shift+D` 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（若按 keyCode 宽松匹配，会吞掉「单独按 D」的抬起而干扰打字）
 - ⚠️ tap 回调**跑在专用线程且监听的是全系统键盘**——回调里任何耗时都会拖慢整机输入，所以只做整数比较，业务一律 offload
 - 普通键（`keyDown`）需要「输入监控」权限：只授辅助功能时表现为"修饰键正常、`Opt+Z` 毫无反应"，启动时用 `CGPreflightListenEventAccess()` 自检并打印引导
@@ -444,7 +444,7 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 
 ### pi 流式播报（第二层流式）
 
-pi 扩展（`scripts/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）在模型生成中逐 `text_delta` 转发**原文**（TS 侧不切句），经一条长连接按 `\n` 分帧送入 socket。**这条连接的边界是一个 agent run（= 一次输入）**，不是 turn —— pi 的结构是 `agent_start` 之后 N 个 turn 循环、每个 turn 恰好一条 assistant 消息（`packages/agent/src/agent-loop.ts`），整摞回复都落在同一个 `agent_start … agent_end` 之间，页的边界由每条 assistant `message_start` 的 `{page}` 帧给出：
+pi 扩展（`scripts/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）**一条 assistant 消息 = 一页**，在 `message_end` 时把整页原文一次发出（不逐字转发、不攒缓冲），经一条长连接按 `\n` 分帧送入 socket。**这条连接的边界是一个 agent run（= 一次输入）**，不是 turn —— pi 的结构是 `agent_start` 之后 N 个 turn 循环、每个 turn 恰好一条 assistant 消息（`packages/agent/src/agent-loop.ts`），整摞回复都落在同一个 `agent_start … agent_end` 之间，页的边界由每条 assistant `message_start` 的 `{page}` 帧给出：
 
 ```
 {type:stream,source:pi,turn:<id>}\n   首帧开流（beginTurn，登记轮次；新轮排队不打断）
@@ -510,7 +510,7 @@ ConnectionHandler.extractVoicePrefix():
 所有运行时文件在 `~` 下，项目目录可删：
 
 ```
-~/.local/bin/ivox                          # CLI 与守护进程同一个二进制（约 61MB，ad-hoc 签名）
+~/.local/bin/ivox                          # CLI 与守护进程同一个二进制（约 61MB，自签长期身份 iVox Local Signing）
 ~/.config/ivox/config.toml                 # 配置（TOML，可写注释）
 ~/.config/ivox/scripts/                   # 接入资产权威源（随发布包解包，分发器读这里）
 ~/.config/ivox/hook.sh                     # 分发后的 hook（Claude 挂载引用它）
@@ -524,6 +524,7 @@ ConnectionHandler.extractVoicePrefix():
 ~/.config/ivox/ivox.sock                    # 主进程 socket
 ~/.config/ivox/ivox-tts.sock                # 誊清员 socket
 ~/.config/ivox/ivox.lock                    # 实例独占锁（同一 socket 只允许一个 daemon）
+~/.config/ivox/ivox-queue.db                # 队列落盘（SQLite，存还没播出去的块）
 ```
 
 日志为什么分家（2026-10-19 决定）：拆成子进程后若还共用一份文件，从「pi 没出声」
@@ -548,12 +549,12 @@ ConnectionHandler.extractVoicePrefix():
 
 ## Hook 集成
 
-**打断权只归 ivox 快捷键**（right⌘ 说话 / Opt+Z 插队译文 / 手动三档：Ctrl+1 读下一页 · Ctrl+2 跳整摞 · Ctrl+3 掀桌）；`hook.sh` **不再有 interrupt 分支**（手动打断在 `ivox skip` 三档：`--page` 读下一页 / `--stack` 跳整摞 / `--all` 全场闭嘴），`UserPromptSubmit` 亦不挂。
+**打断权只归 ivox 快捷键**（right⌘ 说话 / Opt+Z 插队译文 / 手动三档：Ctrl+1 掀页 · Ctrl+2 掀摞 · Ctrl+3 全掀）；`hook.sh` **不再有 interrupt 分支**（手动打断在 `ivox skip` 三档：`--page` 掀页 / `--stack` 掀摞 / `--all` 全掀），`UserPromptSubmit` 亦不挂。
 
 | 工具 | 配置/挂载 | 回复播报 |
 |------|----------|----------|
 | Claude Code（交互会话） | `~/.claude/settings.json` | **MessageDisplay → `hook.sh msgdisplay claude`**（assistant 行批增量，过程逐句播、final 批含完整结尾）＋ **Stop → `hook.sh end claude`**（只发「这一摞说完了」的暗号，不出声） |
-| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_update` 流式（`agent_settled` 兜底） |
+| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_end` 整页一次（`agent_settled` 兜底） |
 
 由 `install-hooks.sh` 统一安装（Claude 挂 MessageDisplay + Stop 收尾信号）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。`hook.sh` 有 `msgdisplay` / `end` 两模式（`end` 只送收尾暗号、不出声）：`msgdisplay` 提取 `delta` 增量并攒成整页，经 `ivox speak` 排队入队（不打断）。
 

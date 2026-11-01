@@ -29,20 +29,22 @@
 |------|------|------|
 | `source` | 否 | 来源标识，默认 `default`。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
 | `voice` | 否 | 音色 ID，默认按 `config.toml` 的 `[playback.sourceVoices]` 映射 |
-| `group` | 否 | 分组号 = **一摞**（一次回复）：同一摞分多次发时带上同一个值（Claude 传 `turn_id`），服务端把它们并进**同一摞**；掀摞/掀桌时按它拦住"这一摞的后续批次"。**不必发结束标记**——下一条 `group` 到来时，服务端自动把上一个盖上 |
-| `end` | 否 | 出现即表示**这是该分组的最后一批**，收尾该摞（段可前移）。漏发它这段会一直开着，直到下一个分组到来才被兜底收尾 |
-| `now` | 否 | 出现即表示**现在就念**：播报**暂停**（缓冲原样留着，一条不删），这句从**独立播放节点**出声，念完从原处接着播。**与 source 无关**——Opt+Z 划词译文走的就是这条路；它**不进队列**，所以队列顺序一点没变、其余排队的一个不丢、也不立墓碑 |
+| `group` | 否 | 分组号 = **一摞**（一次回复）：同一摞分多次发时带上同一个值（Claude 传 `turn_id`），服务端把它们并进**同一摞**；掀摞时按它拦住"这一摞的后续批次"。⚠️ **下一条 `group` 到来不会自动盖上前一摞**——盖印（判「说完了」）只有两条路：发 `end:1`，或等满 60 秒空闲宽限 |
+| `end` | 否 | **必须写成 `key:value` 形式**（如 `end:1`；裸 `end` 不生效——字段按 `,` 切分再按第一个 `:` 拆成键值，只认成对的；值本身不校验）。`end:1` 表示**这是该分组的最后一批**，收尾该摞（段可前移）。漏发它这摞会一直「还在说」，直到 60 秒空闲宽限兜底 |
+| `page` | 否 | 外部页标识：同一个 `page` 值的内容会被并进**同一页**（Claude 传 `message_id`）。缺省时服务端自编页号；外部 `page` 只作「算不算同一页」的线索，不取代自编页号 |
+| `now` | 否 | **必须写成 `key:value` 形式**（如 `now:1`；裸 `now` 不生效，同上）。表示**现在就念**：播报**暂停**（缓冲原样留着，一条不删），这句从**独立播放节点**出声，念完从原处接着播。**与 source 无关**——Opt+Z 划词译文走的就是这条路；它**不进队列**，所以队列顺序一点没变、其余排队的一个不丢、也不立墓碑。⚠️ 同时带 `group` 时以 `group` 为准，`now` 被忽略 |
 
 **无响应**（fire-and-forget）
 
-**`group` 用法**（Claude 的 MessageDisplay 走的就是这条：一次回复按行批分多次送来）
+**`group` 用法**（Claude 的 MessageDisplay 走的就是这条：一次回复分多次送来）
 ```bash
 echo "{source:claude,group:turn-1}第一段" | nc -U ~/.config/ivox/ivox.sock
 echo "{source:claude,group:turn-1}第二段" | nc -U ~/.config/ivox/ivox.sock
-# 一次回复说完就完了——下一条 turn-2 到来时，服务端自动把 turn-1 这一摞盖上
+# 一次回复说完要**显式收尾**（end:1）：下一条 group 到来不会自动盖掉 turn-1
+echo "{source:claude,group:turn-1,end:1}说完了" | nc -U ~/.config/ivox/ivox.sock
 echo "{source:claude,group:turn-2}下一轮" | nc -U ~/.config/ivox/ivox.sock
 ```
-`group` 里不要出现 `,` 和 `:`（协议按这两个字符切分字段）。
+`group` 里不要出现 `,`（协议按它切分字段）。
 
 **示例（bash）**
 ```bash
@@ -86,9 +88,14 @@ L<UTF-8 字节数 N>\n   ← 帧头：大写 L + 纯 ASCII 十进制字节数 + 
                                          （pi 每个 turn 恰好一条 assistant 消息）
 {end}                                    结束帧：flush 残尾并结束该轮保活（允许空段前移）
 {cancel} / {cancel:<turn>}               取消帧（用户中断）
+                                         ⚠️ 后缀的 turn **不参与判断**：取消的是本连接首帧声明的那一轮
 ```
 
 客户端直接断开（EOF）等价于 `{end}`。
+
+⚠️ **每条连接有 10 秒读超时**（`SocketServer.swift` 的 `SO_RCVTIMEO`）：连接上连续 10 秒没有新字节，
+服务端把它当 EOF 处理——收尾该轮并结束保活。所以**长间隔的流式客户端（超过 10 秒才发下一帧）会被静默掐断**；
+要么保持心跳，要么把间隔压到 10 秒内。
 
 > **为何引入 L 帧**：旧协议正文帧靠 `\n` 定界、控制帧是裸 `{end}`，于是正文中独立成行的 `{end}`/`{cancel}` 会被误判成控制帧（协议注入），正文里的换行也和帧定界符混淆。L 帧按字节精确切，正文可含任意内容。服务端**向后兼容**：行首不是 `L<数字>` 的仍按旧裸文本帧解析（裸文本 + `\n`），旧客户端无需改造。
 
@@ -205,14 +212,15 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 
 ```json
 {
-  "version": "3.6.1",
+  "version": "6.0.0",
   "features": {
     "playback": "ok",
     "speechInput": "ok",
     "translation": "ok",
     "quickActions": "ok",
     "wechat": "ok",
-    "mediaControl": "ok"
+    "mediaControl": "ok",
+    "screen": "ok"
   },
   "permissions": {
     "microphone": "authorized",
@@ -221,7 +229,7 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 }
 ```
 
-> `features` 对应六个能力域，彼此平级。`mediaControl` 就是那个 Web 控制台（打开 `http://<本机IP>:8888` 远程控制音乐），它的健康度即 Web 服务的健康度。
+> `features` 对应**七个**能力域，彼此平级（`screen` = 屏幕锁那套 Web 滑块）。`mediaControl` 就是那个 Web 控制台（打开 `http://<本机IP>:8888` 远程控制音乐），它的健康度即 Web 服务的健康度。
 
 权限状态由 daemon 进程自查，反映 daemon 自身授权（非调用方终端）。`ivox status` 即此接口的中文渲染。
 
@@ -235,6 +243,8 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 {type:skip,mode:all,by:ivox-skip}     # 掐 + 全掀（同 Ctrl+3）：停当前 + 清空排队
 ```
 
+另有一个可选字段 `tag`（自报标签，会打进打断归因的日志），如 `{type:skip,mode:page,by:ivox-skip,tag:selftest}`。
+
 无回复。`mode` 缺省按 `page`。**头的尾随 `\n` 是必需的路由依据**——没有它，服务端会把整条请求当传统整段播报体交给 `handleTTS`（`{type:stop}` 正踩在这条边界上：它现在发无换行裸串，走的就是 handleTTS 分支）。
 
 **`by`：请求方自报的身份**（可选，缺省记「未署名」），记进打断归因（`掀摞·请求方 ivox-skip`）——「谁打断的」要答得出来，就得有个人报名。**为什么不查内核里的对端 pid**：`ivox skip` 这种发完就退的短命进程，等服务端读到帧时它早没了（实测 `getsockopt(LOCAL_PEERPID)` 返回 -1），查出来是残值更糟。自报是唯一稳的渠道。
@@ -243,8 +253,9 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 
 > `{type:stop}` 停止帧（旧的 `ivox quiet`）已删除，服务端收到只记日志忽略——那一支保留作护栏，防止旧脚本发来的停止帧落进正文分支被念出来。
 
-翻页的靶心是**资料室自编的页号**（`PlaybackPage.localID`），不依赖块上有没有 `pageID`
-（Claude 的 `message_id`）。2026-10-18 改：早先这里写着「非 Claude 路径没有页号，
+翻页的靶心是**资料室自编的页号**（`PlaybackPage.localID`）：掀页总是掀得掉，
+不依赖来源给不给外部页号。外部 `page`（Claude 的 `message_id`）只作**并页线索**——
+两个内容块的外部 `page` 相同就并进同一页，不影响自编页号本身。2026-10-18 改：早先这里写着「非 Claude 路径没有页号，
 `mode:page` 会退化成只掐在播」——**这条已经作废**，页号一律由助理自编，
 `ivox speak` 这类不带 `pageID` 的来源照样掀得掉整页，只是掀在同一摞内（它们通常一摞一页，
 于是掀页与掀摞等价）。

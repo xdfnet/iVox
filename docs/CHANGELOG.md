@@ -2,6 +2,32 @@
 
 ## 未发布 — 2026-10-29
 
+- **全量文档核对：把「文档说的」和「代码做的」对齐** — 四路并行核对了
+  README、`docs/architecture.md`、`docs/hook-chain.md`、`docs/socket-api.md`、
+  `docs/playback/` 四层、`docs/native-bridge.md`、`CLAUDE.md`、`runtime-files.md`，
+  确认 35 处不一致并逐条改正。**高危几条**（照着旧文档做会失败）：
+  - **pi 链路不是「逐字流式」**：pi 在 `message_end` 时把一条 assistant 消息
+    **整页一次**发出（Claude 的 hook 也改成攒到 `final=True` 才整页交出）。
+    README / hook-chain / architecture / sources / requirements 五处都还写着
+    「逐 `text_delta` 转发」。
+  - **socket 协议两处写错**：`{end}` / `{now}` 必须写成 `key:value`（裸键不生效）；
+    `group` **不会**「下一条自动盖上前一摞」——盖印只有 `end:1` 与 60 秒空闲宽限两条路。
+    另外补上漏写的 `page` 字段、漏写的 10 秒连接读超时、`{type:status}` 的第七个
+    能力域 `screen`。
+  - **签名方式写反**：早就不是 ad-hoc，现在是自签长期身份 `iVox Local Signing`
+    （ad-hoc 的 cdhash 每次重编译都变，TCC 权限会跟着掉）。
+  - **两处不存在的配置键**：`mediaControl.enabled` 与 `tts.streamingInterval`
+    都是**代码内配置**，写进 config.toml 会被审计点名。
+  - **右⌘ 麦克风是「暂停不删」不是「全掀」**（2026-10-23 早改了，paper/sources
+    还写着旧行为）；**「属主」第三档已作废**，现在不分来源全挂；**划词译文不进队列**，
+    Ctrl+1/2/3 掀不到它。
+  - **hook.log 早按 5M 轮转**（CLAUDE.md 说「只增不减」）；**daemon 早能吃 SIGTERM**
+    优雅退出（runtime-files.md 说「只有 kill -9」）；Swift 工具链仍指向 6.4 开发快照。
+  - 其余为路径/行号/函数名过时（`claimCurrentPage` → `takeHeadPage()` 等）、
+    数字过时（测试 22 个、模型 5.2G）、术语不统一（掀页/掀摞/全掀）。
+- **配置模板的自建音色示例写错了段名** — `[[voices]]` → `[[playback.voices]]`。
+  照旧模板抄会写出一个顶层 `voices`，审计会点名「没人认领」。
+
 - **播报可以单独关掉了：`ivox playback off`** — 此前只有两个极端：整个守护进程停掉
   （`ivox off`，热键、微信、Web 控制台一起没），或者按 Ctrl+3 把**正在播的**掀掉
   （内容丢掉，但下一条照念）。中间缺一档：「我现在不想听它念，但别的照常用」。

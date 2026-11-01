@@ -3,13 +3,14 @@
 iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文档随代码走**（在版本库里），
 说清每个文件是谁写的、能不能删、删了会怎样。
 
-> 一句话：删东西前先回来看这张表。10G 里 10G 是模型，其余加起来不到 4M。
+> 一句话：删东西前先回来看这张表。模型占绝大多数，其余（日志、队列库、缓存）加起来几十 M。
+> 下面的体积是本机实测值，会随模型版本变。
 
 ## 目录结构
 
 ```
 ~/.config/ivox/
-├── model/          10G  ← 两个模型，iVox 的命，别动
+├── model/          5.2G ← 两个模型，iVox 的命，别动
 ├── voices/         1.7M ← 参考音频（每个音色一个 wav）
 ├── wechat/          28K ← 微信 agent 的工作区与会话
 ├── recordings/     136K ← 语音输入的录音临时文件
@@ -22,14 +23,14 @@ iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文�
 └── config.toml      配置（TOML，能写注释）
 ```
 
-## 大头：模型（10G，别删）
+## 大头：模型（5.2G，别删）
 
 | 模型 | 体积 | 谁在用 | 删了会怎样 |
 |---|---|---|---|
-| `Qwen3-TTS-12Hz-1.7B-Base-8bit` | 5.8G | **播报**（每次出声） | 播报彻底不能用 |
-| `Qwen3-ASR-1.7B-8bit` | 4.6G | **语音输入**（按住右⌘说话） | 只有那个功能报错，其余照常 |
+| `Qwen3-TTS-12Hz-1.7B-Base-8bit` | 2.9G | **播报**（每次出声） | 播报彻底不能用 |
+| `Qwen3-ASR-1.7B-8bit` | 2.3G | **语音输入**（按住右⌘说话） | 只有那个功能报错，其余照常 |
 
-想省地方的话 4.6G 的 ASR 是唯一候选——前提是你不用语音输入。重装模型见仓库的
+想省地方的话 2.3G 的 ASR 是唯一候选——前提是你不用语音输入。重装模型见仓库的
 `scripts/download-models.sh`。
 
 ## 文件逐个说明
@@ -49,7 +50,7 @@ iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文�
   一句说明，照着改就行。
 - **改完要 `ivox restart`** 才生效（只重启守护进程，不动登录自启开关）。
 - 里面能改的：热键（含语音键，默认只右⌘）、语音输入、划词翻译服务与代理、字幕、
-  音色（`playback.sourceVoices.default` 是默认音色）、微信 token 与白名单。
+  音色（`playback.sourceVoices.default` 是默认音色）、**播报总开关**（`playback.enabled`，也可以用 `ivox playback on|off`）、微信 token 与白名单。
 - **改不了的**（在代码里）：Web 控制台的开关与端口（一直是 8888）、模型路径、合成参数、
   内置音色清单。
 - 写错键名不会静默：`ivox status` 与 `daemon.log` 会点名「这个键没人认领」，
@@ -61,6 +62,8 @@ iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文�
 |---|---|---|---|
 | `ivox.sock` | daemon 启动时 | ✅ 停了就能删 | 主 daemon 的 socket |
 | `ivox-tts.sock` | 誊清员启动时 | ✅ 停了就能删 | 誊清员的 socket；崩了会留残file，下次 bind 时自动覆盖 |
+| `ivox.lock` | daemon 启动时 | ✅ 停了就能删 | 实例独占锁：抢不到就退出，防止开成两份 daemon |
+| `ivox-queue.db` | daemon | ❌ 删了会丢排队内容 | 队列落盘（SQLite）：只存**还没播出去**的块，daemon 起来时重新排队 |
 | `lastturn/` | hook 每次 Stop | ✅ | 每个 Claude 会话一个 36 字节文件，记「这会话最后一摞是哪个」，给 Stop 反查用。**只在会话还活着时有用**，hook 里已加「超过 7 天的每次 Stop 顺手扫掉」 |
 | `pagebuf/` | hook 攒整页正文 | ✅ | 正常情况是空的（有文件说明有一页没收完） |
 | `recordings/` | 语音输入 | ✅ | **代码里写死只保留最近 2 个**，多的自动删。看到 2 个就是正常的 |
@@ -73,8 +76,8 @@ iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文�
 | `daemon.log` | daemon | 主日志，**超过 5M 自动轮转**成 `daemon.log.old` |
 | `tts.log` | 誊清员进程 | 合成侧日志。跟 daemon.log 分家是有意的：出事时「哪个文件里有现场，就是哪个角色的错」 |
 | `hook.log` | hook.sh | 每批增量的审计行（截前 40 字） |
-| `crash.log` / `tts-crash.log` | CrashTrap | 崩溃现场（含调用栈）。当前 0 字节 = 近期没崩过 |
-| `crash.count` / `tts-crash.count` | CrashTrap | 累计崩溃次数，各 1 字节 |
+| `crash.log` / `tts-crash.log` | CrashTrap | 崩溃现场（含调用栈）。**每次启动就清空**（它是「上一次崩溃」），所以 0 字节只说明上次启动后没崩过 |
+| `crash.count` / `tts-crash.count` | CrashTrap | 累计崩溃次数，各 1 字节，**跨重启不清零**——看有没有崩过要看它，不是看日志大小 |
 
 > 轮转：`daemon.log` 与 `hook.log` 都在 5M 阈值上把主文件改名成 `.old`（旧的被覆盖），
 > `tts.log` 同样。`hook.log` 的这条是 2026-10-20 补上的——原先只有 `daemon.log` 有阈值，
@@ -92,8 +95,8 @@ ivox restart               # 只重启守护进程（改完配置跑它，不动
 
 查状态：`ivox status`，或 `curl -s localhost:8888/health`。
 
-**停不掉的时候**：`kill`/`pkill` 都不管用（SIGTERM 收信号不退），只有 `kill -9`。
-而且拆成子进程后要杀两个：
+**停不掉的时候**：正常用 `ivox off` 或 `ivox restart`（走 SIGTERM/SIGINT，daemon 会优雅退出：
+`Daemon.swift` 装了信号源，收信号后走 `cleanup()`）。真的卡死才 `kill -9`，而且拆成子进程后要杀两个：
 
 ```bash
 pkill -9 -f 'ivox serve'

@@ -42,9 +42,9 @@
 | 工具 | 回复完成播报 | 配置位置 |
 |------|-------------|----------|
 | Claude Code | MessageDisplay → `hook.sh msgdisplay claude` | `~/.claude/settings.json` |
-| pi 扩展 | `agent_start`→`agent_end` 一条流跨整次输入，`message_update` 逐 `text_delta` 送（新轮排队，不打断） | `~/.pi/agent/extensions/ivox.ts` |
+| pi 扩展 | `agent_start`→`agent_end` 一条流跨整次输入；**一条 assistant 消息 = 一页**，`message_end` 时整页一次发出（不逐字转发） | `~/.pi/agent/extensions/ivox.ts` |
 
-> ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Opt+Z 译文插队 / 手动三档：Ctrl+1 读下一页 · Ctrl+2 跳整摞 · Ctrl+3 掀桌）。在 Claude Code 里提交、后台 agent 轮次、pi 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip` 承担）。
+> ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Opt+Z 译文插队 / 手动三档：Ctrl+1 掀页 · Ctrl+2 掀摞 · Ctrl+3 全掀）。在 Claude Code 里提交、后台 agent 轮次、pi 新轮均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip` 承担）。
 
 Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`）：assistant 消息流式显示时按行批触发，**攒成整页**（final=True 那一批到齐才交出去），交由助理自己切句排队。一页早先被拆成十几批碎片依次入队，听着不像一页，队列顺序也被切碎（2026-10-19 改）。
 
@@ -66,7 +66,7 @@ Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh msgdisplay claude`�
 
 > **`interrupt` 分支已从 hook.sh 移除**——打断权只归 ivox 快捷键（右⌘/Opt+Z/Ctrl+3/Ctrl+2/Ctrl+1）与命令行 `ivox skip`（同三档），不再经 hook.sh 自动打断（UserPromptSubmit 亦不挂）。
 
-Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执行。脚本不传配置文件路径，依赖 `~/.config/ivox/config.json` 自动加载。
+Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执行。脚本不传配置文件路径，daemon 固定读 `~/.config/ivox/config.toml`（`config.json` 是更早的遗留格式，已不再读取）。
 
 ### 3. ivox speak
 
@@ -163,12 +163,12 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 
 - **本地直接控制**：`MRMediaRemoteSendCommand`（播放 / 暂停 / 切歌）与 `CGEvent`（音量 / 静音 / 方向键 / 锁屏）
 - **只给麦克风让路**：语音输入按下 `pause()`、松手 `resume()`（录音要干净，音乐会串进麦克风）。**播报不经由它**——播报不改音乐的播放状态（播报期间压汽水音乐音量走 `SodaVolumeDucker`，改的是数值不是状态）
-- 不需要媒体控制时可设置 `mediaControl.enabled = false`
+- 媒体控制**没有外部开关**：`mediaControl` 是代码内配置（`MediaControlConfig`），写在 `config.toml` 里会被配置审计点名说「写了不生效」
 - 只有 play/pause/next/prev 免权限；音量 / 静音 / 方向键 / 锁屏要「设备控制与数据访问」（`MediaHTTPServer` 对这几个动作会做权限校验）
 
 ### 8. 誊清员 — 合成引擎（跨进程）
 
-主进程侧 `Sources/iVox/Playback/TSPRemote.swift`，子进程侧 `TTSServer.swift` +
+主进程侧 `Sources/iVox/Playback/TTS/TSPRemote.swift`，子进程侧同目录的 `TTSServer.swift` +
 `TTSEngine.swift`（`ivox tts --serve`）。
 
 - 模型：Qwen3-TTS-12Hz-1.7B-Base-8bit，**纯本地推理，不上传任何数据**
@@ -176,8 +176,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
   把会炸的那一层圈出去；`IVOX_TTS=local` 可退回进程内 `TTSEngine`，仅供调试对照
 - `TSPRemote` 兼监督者：先问 socket 再问 child，断了自动重拉；崩溃验收见
   [`docs/playback/queue.md`](playback/queue.md)
-- 流式生成 PCM chunk，间隔由 `tts.streamingInterval` 控制；按模型采样率重采样到
-  `tts.outputSampleRate`，再转为 int16 PCM
+- 流式生成 PCM chunk；间隔与输出采样率是**代码内配置**（`TTSConfig.default`：间隔 0.15 秒、输出 48 kHz），外部配置里没有 `tts` 段
 - **块号 `seq` 是跨进程归因的主键**——两侧日志都打它，`~/.config/ivox/tts.log` 与
   `daemon.log` 用它对时间线
 
@@ -202,7 +201,7 @@ Qwen3-TTS 不支持特殊标签（如 `<laughter>`），情感通过文本语义
 |---|---|---|
 | `~/.config/ivox/daemon.log` | 主进程 | 队列状态、打断、播放收尾（>5M 轮转） |
 | `~/.config/ivox/tts.log` | 誊清员 | 合成侧；某一块怎么没出来先看它 |
-| `~/.config/ivox/hook.log` | `hook.sh` | 每批增量的审计行（截前 40 字）。⚠️ 只增不减、无轮转 |
+| `~/.config/ivox/hook.log` | `hook.sh` | 每批增量的审计行（截前 40 字）。超过 5M 轮转成 `hook.log.old`（旧文件被覆盖） |
 
 崩溃现场：`crash.log`（主）/ `tts-crash.log`（誊清员），累计次数 `crash.count` /
 `tts-crash.count`。`daemon.log` 的关键行：
@@ -234,24 +233,23 @@ TTS 合成作废（MLX 不响应中途取消…）[…]（打断来源=掀摞·�
 
 ## 代码签名
 
-macOS 要求可执行文件有效签名。iVox 用的是 **ad-hoc 自签名**（没有开发者证书）：
+macOS 要求可执行文件有效签名。iVox 用的是**自签的长期身份** `iVox Local Signing`
+（10 年有效，Apple 不会吊销），签名身份的选择顺序见 `scripts/runtime.sh` 的 `sign_bin`：
+`IVOX_SIGN_IDENTITY` > 自签的 `iVox Local Signing` > 钥匙串里第一个有效证书 > ad-hoc 兜底。
 
 ```bash
-codesign --force --sign - ~/.local/bin/ivox
+codesign -dv ~/.local/bin/ivox 2>&1 | grep -E 'Signature|Authority|TeamIdentifier'
 ```
 
-验证：
+**为什么不用 ad-hoc**：ad-hoc 签名要求里含 cdhash（= 二进制内容哈希），每次重新构建内容就变、
+要求就变 → macOS 的 TCC 授权（麦克风、输入监控）自动作废，表现为「重装后突然不灵」，
+得回系统设置重新勾一遍。自签长期身份的 designated requirement 只含**证书指纹**，
+重编译重签多少次权限都不掉（2026-10-21 实测：重编译重签后六项能力与三项权限全绿）。
 
-```bash
-codesign -dv ~/.local/bin/ivox 2>&1 | grep -E 'Signature|flags'
-```
-
-期望 `Signature=adhoc`、`flags=0x2(adhoc)`、`TeamIdentifier=not set`——
-**没有 TeamIdentifier 才是对的**，有反而说明签成了别的证书。
-
-> ⚠️ **ad-hoc 签名的代价：每次重新构建重签，签名就变，macOS 的 TCC 授权（麦克风、
-> 输入监控）可能随之失效**，表现为热键与语音输入毫无反应。遇到这种「重装后突然不灵」
-> 先去系统设置重新勾一遍，而不是查代码。`make update` 会自动重签。
+> 证书与私钥备份在 `~/.config/ivox/signing/`（钥匙串重置后按那里的 README 恢复；
+> 恢复后指纹仍是同一张 → 权限不用重勾）。将来若要把 iVox **分发给别人**
+> （Gatekeeper / 公证），得换 Developer ID 证书——那时签名身份变了，权限会掉一次。
+> `make update` 会自动重签。
 
 
 ## 故障排查
