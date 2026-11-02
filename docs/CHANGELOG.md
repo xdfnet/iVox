@@ -49,8 +49,9 @@
     本来就带着 source 与音色。
   - **两条裁决**（2026-11-02）：① pi 的 Esc 中断**不再撤页**，已送出的页照念完
     （要马上闭嘴用 `ivox skip --all`）——不为此再加一条协议；② **音色各端各管各的**：
-    iVox 的 `[playback.sourceVoices]` 只管走 iVox 客户端的那些端（hook.sh、pi 扩展），
-    端自带配置的（如 Samantha 读自己的 `Configuration.ivox.ttsVoice`）不归它管，也不必改。
+    iVox 配置里的 `[playback.sourceVoices]` 放的是 **iVox 项目自己的端**（hook.sh、pi 扩展）的音色，
+    **每个端自己去表里拿自己那一份、传给 `ivox speak`**；
+    别的项目自带配置的端（如 Samantha 读自己的 `Configuration.ivox.ttsVoice`）不归它管，也不必改。
   - 真机验过：CLI 缺参数 → 命令行报错不发请求；裸请求缺 voice → 日志拒收；带全 → 照播；
     hook 走 claude / wechat 两个来源 → 音色都从配置里取到；pi 的流式首帧带 `voice:wanwan` → 认。
   - **自检全量重跑：20 pass / 0 fail / 0 skip / 0 advisory**（协议变了必须重跑——旧断言在

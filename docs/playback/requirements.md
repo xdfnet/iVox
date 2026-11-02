@@ -99,7 +99,7 @@
 | 场景 | 验证手段（自检用例名） | 状态 |
 |---|---|---|
 | 1 一页一次到 | `N1-one-request-one-page`（一次请求 = 一页，页内切句） | **已验**（2026-11-02 全量 16/16） |
-| 2 来源与音色归客户端 | `N2-server-does-not-manage-source-or-voice`（缺 voice 也照念，服务端不拒）。**音色各端各管各的**：iVox 的 `[playback.sourceVoices]` 只管走 iVox 客户端的那些端（hook.sh、pi 扩展）；端自带配置的（如 Samantha）不归它管 | **已验**（2026-11-02 全量 16/16） |
+| 2 来源与音色归客户端 | `N2-server-does-not-manage-source-or-voice`（缺 voice 也照念，服务端不拒）。**音色各端各管各的**：iVox 配置里的 `[playback.sourceVoices]` 放的是 **iVox 项目自己的端**（hook.sh、pi 扩展）的音色，**每个端自己去表里拿自己那一份、传给 `ivox speak`**；别的项目自带配置的端（如 Samantha）不归它管 | **已验**（2026-11-02 全量 16/16） |
 | 3 句播完下一页没来 | `E8-idle-queue-no-spin`（队列见底不得紧循环） | **已验**（2026-11-02 全量 16/16） |
 | 4 队列排空 | 自检跑到底看「播报结束: 队列已空，字幕收起」；`D-liveness-after-burst` | **已验**（2026-11-02 全量 16/16） |
 | 5 掀页 | `P1-skip-page-then-next`（掀掉的是正在听的那页）· `P2-skip-page-repeat-safe`（连按不掀错）· `P3-late-page-after-skip-still-plays`（掀完之后才到的页照播）+ 单测「起点落在正在响的那一句」 | **已验**（2026-11-02 全量 16/16） |

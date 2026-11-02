@@ -148,7 +148,10 @@ pi 扩展(scripts/pi, 每页一次 speak)  ├→ Unix Socket → Daemon ─┬�
   `ivox speak` 的 `--source` **必填**（缺了在命令行就报错，请求根本发不出去）；
   `--voice` **可省**（省了走默认音色）——这道检查在客户端，正好符合「各端做好各端的事」。
   **音色的真源仍是 `config.toml` 的 `[playback.sourceVoices]`**，只是**读它的人从守护进程换成了客户端**：
-  `hook.sh` 与 pi 扩展各自读它（该来源自己的键 → 取不到退回 `default` 键 → 都没有就不出声）。
+  **配置表里放的是 iVox 项目自己的端（`hook.sh`、pi 扩展）的音色；每个端自己去表里拿自己那一份，
+  传给 `ivox speak`**（该来源自己的键 → 取不到退回 `default` 键 → 都没有就不带 `--voice`）。
+  别的项目自带配置的端（如 Samantha 读自己的 `Configuration.ivox.ttsVoice`）不归这张表管，
+  也不必往这儿加。
   守护进程只留用这张表的 `default` 键（译文朗读兜底、`ivox voice list` 的「默认」标记）。
   ⚠️ 这意味着**改这张表要同时看两个客户端**（`scripts/hook.sh` 与 `scripts/pi/ivox.ts`），
   它们各自手写了一份 TOML 取值逻辑（不引第三方库）。

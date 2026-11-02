@@ -68,8 +68,9 @@ public struct PlaybackConfig: Codable, Sendable {
     public static let defaultEnabled: Bool = true
 
     /// **来源 → 音色 id 的映射**：哪个接入方（claude / pi / …）的回复用哪个音色念。
-    /// **这张表由客户端读**（各端自己查音色、自己拼 `ivox speak` 的参数）——
-    /// 服务端不管来源与音色。
+    /// **这张表放的是 iVox 项目自己的端（hook.sh、pi 扩展）的音色；每个端自己去表里拿自己那一份、
+    /// 传给 `ivox speak`**——服务端不管来源与音色；
+    /// 别的项目自带配置的端不归它管。
     /// 音色只服务播报，所以它住在这段里（2026-10-29 从顶层 `[sourceVoices]` 挪进来）。
     public var sourceVoices: [String: String]?
 
