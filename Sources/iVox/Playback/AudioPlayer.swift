@@ -286,7 +286,8 @@ final class AudioPlayer: @unchecked Sendable {
                         self.lastReportedSeq = seq
                         // **播放开始**——与末尾的 `播放结束` 成对的那一头。
                         // 位置必须在**设备真读出数据**这一刻，而不是 write 入队那一刻：
-                        // 管道预取领先发声 2~4 秒，拿入队当开始会把整段时间算错。
+                        // 管道预取领先发声至少 2~4 秒（队列深时更多），
+                        // 拿入队当开始会把整段时间算错。
                         // prime 静音不带 seq，所以这里天然只认真正的第一块。
                         if !self.reportedStartSinceEmpty {
                             self.reportedStartSinceEmpty = true
