@@ -62,7 +62,13 @@ esac
 # 不再按 turn 分组（turn_id 只留在日志里，不参与排队）。
 # **必须极快返回**：交互模式下 Claude Code 等本钩子返回才渲染该批。
 # python 只做「攒页 + 审计写 hook.log」两件事；播报用后台 & 不阻塞。
-# python 吐两行：页号（message_id）、整页文本。文本放最后是因为它可能含换行。
+# python 吐三段：音色 id、页号（message_id）、整页文本。
+# **顺序有讲究**：正文放最后且从第 3 行起全取——正文可能含换行，取单行会截断。
+#
+# **音色由客户端自己取**（2026-11-02）：协议要求 source 与 voice 都必填，
+# 守护进程不再猜「这个来源该用什么音色」。映射表仍是 config.toml 的
+# `[playback.sourceVoices]`（唯一真源），读它的人从守护进程换成了客户端：
+# 先取该来源自己的键，取不到退回 `default` 键。两处都没有 → 不播（没有音色就没法念）。
 payload="$(cat)"
 IVOX_HOOK_SOURCE="$SOURCE" meta=$(printf '%s' "$payload" | python3 -c "
 import json, os, sys, re
@@ -75,9 +81,28 @@ pg  = san(d.get('message_id',''))
 from pathlib import Path
 from datetime import datetime
 home = Path.home()
+src = os.environ.get('IVOX_HOOK_SOURCE','')
+def voice_for(source):
+    cfg = home/'.config/ivox/config.toml'
+    table = {}
+    if cfg.exists():
+        in_section = False
+        for line in cfg.read_text(errors='replace').splitlines():
+            t = line.strip()
+            if t.startswith('[') and t.endswith(']'):
+                in_section = (t == '[playback.sourceVoices]')
+                continue
+            if not in_section or not t or t.startswith('#'):
+                continue
+            m = re.match(r'^([A-Za-z0-9_.-]+)\s*=\s*\"([^\"]*)\"', t)
+            if m:
+                table[m.group(1)] = m.group(2)
+    return table.get(source) or table.get('default') or ''
+
+voice = voice_for(src)
 home.joinpath('.config/ivox/hook.log').open('a').write(
-    '%s hook.sh source=%s turn=%s mid=%s index=%s final=%s delta=%s\n' % (
-    datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], os.environ.get('IVOX_HOOK_SOURCE',''),
+    '%s hook.sh source=%s voice=%s turn=%s mid=%s index=%s final=%s delta=%s\n' % (
+    datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], src, voice or '（无）',
     d.get('turn_id',''), d.get('message_id',''), d.get('index',''), final, delta[:40]))
 
 bufdir = home/'.config/ivox/pagebuf'
@@ -100,14 +125,17 @@ if isinstance(page, str):
     if len(page) <= 5 and not re.search(r'[一-鿿]', page):
         page = ''
 
+print(voice)
 print(pg)
 print(page)
 " 2>/dev/null)
-pg="$(printf '%s' "$meta" | sed -n 1p)"
-page="$(printf '%s' "$meta" | tail -n +2)"
-if [[ -n "${page// }" ]]; then
+voice="$(printf '%s' "$meta" | sed -n 1p)"
+pg="$(printf '%s' "$meta" | sed -n 2p)"
+# 正文可能含换行 → 从第 3 行起全要（不能只取一行）
+page="$(printf '%s' "$meta" | tail -n +3)"
+if [[ -n "${page// }" && -n "$voice" ]]; then
   # 后台 &：走 socket 短连 O(ms)，不阻塞本批渲染
-  "$IVO" speak --source "$SOURCE" -- "$page" 2>/dev/null &
+  "$IVO" speak --source "$SOURCE" --voice "$voice" -- "$page" 2>/dev/null &
 fi
 echo '{"continue": true}'
 exit 0

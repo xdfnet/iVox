@@ -151,10 +151,20 @@ pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬�
   ~~"assistant"~~（一会儿指回复、一会儿指会话）、~~"一叠 = 一轮、一张 = 一句"~~、~~"跳这句"~~、
   ~~"摞"~~（2026-11-02 作废）、~~"块"~~（现在叫**句**）都已作废。
 
+- **协议必填：source 与 voice（2026-11-02）**：对外 socket 协议的播报类请求
+  （一次性正文 / 流式首帧 / `{type:tts}` 合成回传）**都必须带 `source:` 与 `voice:`**，
+  缺任一 → 守护进程**拒收**并记日志说明缺哪个（`播报请求缺必填字段（voice），已拒`）。
+  **守护进程不再自己猜**「这个来源该用什么音色」——猜错的后果是**整页用错音色念出来**，
+  而现场没人发现。`ivox speak` 的 `--source`/`--voice` 因此也是必填（缺了在命令行就报错）。
+  **音色的真源仍是 `config.toml` 的 `[playback.sourceVoices]`**，只是**读它的人从守护进程换成了客户端**：
+  `hook.sh` 与 pi 扩展各自读它（该来源自己的键 → 取不到退回 `default` 键 → 都没有就不出声）。
+  守护进程只留用这张表的 `default` 键（译文朗读兜底、`ivox voice list` 的「默认」标记）。
+  ⚠️ 这意味着**改这张表要同时看两个客户端**（`scripts/hook.sh` 与 `scripts/pi/ivox.ts`），
+  它们各自手写了一份 TOML 取值逻辑（不引第三方库）。
 - **播报通路（hook / 微信 / pi）**：①Claude Code 交互会话的播报**只靠 `MessageDisplay` 钩子**
   （`hook.sh claude`）：assistant 消息按行批送来，hook 按 `message_id` **攒成整页**
-  （`final=True` 那一批到齐才交），一次 `ivox speak --source claude -- "<整页正文>"` 送出去 =
-  队列里的一页。**不再挂 Stop / UserPromptSubmit**：Stop 收尾信号整套作废（队列排空即收尾，
+  （`final=True` 那一批到齐才交），一次 `ivox speak --source claude --voice <音色> -- "<整页正文>"`
+  送出去 = 队列里的一页。**不再挂 Stop / UserPromptSubmit**：Stop 收尾信号整套作废（队列排空即收尾，
   不需要端报「说完了」）；UserPromptSubmit 因打断权只归快捷键。
   **收尾 = 队列排空**：等设备把尾音播完（声音真停下）→ 收字幕、还汽水音乐音量。
   `hook.sh` 已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip --page|--all` 两档承担，
@@ -207,7 +217,9 @@ pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬�
   `~/.config/ivox/config.toml`，**就这一个文件**，装凭据与用户会改的（开关/键位/端口/路径），
   **键名一律驼峰**（`wechat` 段早先是蛇形，2026-10-21 统一）；**`[playback]` 段现在只有两类东西**：
   `enabled`（播报总开关）与音色（`[playback.sourceVoices]` + `[[playback.voices]]`，2026-10-29 从
-  顶层挪进来——音色只服务播报；老位置照读不失效，加载时自动搬家）。⚠️ `idleGraceSeconds`
+  顶层挪进来——音色只服务播报；老位置照读不失效，加载时自动搬家）。
+  ⚠️ `[playback.sourceVoices]` 这张「来源→音色」表**由客户端读**（hook.sh 与 pi 扩展），
+  守护进程不再拿它兜底（协议要求 voice 必填）——它只用 `default` 键。⚠️ `idleGraceSeconds`
   已删（收尾信号整套作废，队列排空即收尾）——还写着它会被配置审计点名；③ **用户数据**——录音、微信
   context_token 等程序写出的东西。**写错的键不会静默**：`ConfigAudit` 在解码后对照各段已知键
   打日志，还能猜「是不是想写 allowFrom？」（已知键从各类型 `CodingKeys` 派生，不另抄清单）。

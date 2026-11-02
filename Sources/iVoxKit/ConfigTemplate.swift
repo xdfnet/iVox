@@ -66,12 +66,15 @@ proxyURL = "http://192.168.100.6:10808"   # 直连失败后的兜底代理 ｜ �
 enabled = true                  # 播报总开关 ｜ 默认 true ｜ true/false
 
 # ── 音色（属于播报：念出来的声音就是它挑的）────────────
-# 键名 = 接入方自报的名字；`default` 是默认音色（没有来源时用它）。
+# 键名 = 接入方自报的名字；`default` 是默认音色（某个来源没写自己的键时用它）。
+# **这张表由客户端自己读**（hook.sh 与 pi 扩展读它，把音色连同来源一起发给守护进程；
+# 守护进程不再自己猜「这个来源该用什么音色」——猜错就是整页用错音色念出来）。
 # 可选值 = 音色 id：`ivox voice list` 里能看到（内置 taozi / wanwan / mizai / dayi，另有自建的）。
 [playback.sourceVoices]
 default = "taozi"               # 默认音色 ｜ 默认 "taozi" ｜ 音色 id
 claude = "taozi"                # Claude 的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
 pi = "wanwan"                   # pi 的回复用哪个音色 ｜ 默认 "wanwan" ｜ 音色 id
+wechat = "taozi"                # 微信链路的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
 # 自建音色写在下面的 [[playback.voices]]（`ivox voice add` 会替你写好）。
 
 # ── 浮窗（屏幕上的那块 iVox 窗口：字幕、译文都往它里面放）──

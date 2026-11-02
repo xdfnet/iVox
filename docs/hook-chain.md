@@ -15,7 +15,7 @@
                 │
                 ▼
        ┌─────────────────────┐
-       │   ivox speak -s X  │
+       │  ivox speak -s X -v Y │
        │   Unix Socket 写入   │
        └─────────┬───────────┘
                  │
@@ -59,7 +59,9 @@ Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh claude`）：assista
 
 播报模式：
 
-- **`hook.sh <source>`（MessageDisplay，Claude Code 交互会话主路径）**：assistant 消息流式显示时按行批触发，`delta` = 自上一批以来新完成的整行文本。hook 按 `message_id` 把各批正文追加进 `~/.config/ivox/pagebuf/`，`final=True`（这一页说完了）时把**整页**交给 daemon。**不带动作名**——收尾信号整条删除后只剩「搬一页」这一件事，再挂个 `msgdisplay` 的名字纯属多余。来源只认 `claude` / `wechat`，别的静默退出。**必须极快返回**（Claude Code 等本钩子返回才渲染该批），故攒页 + 审计用单个 python、播报用后台 `&`。走 `ivox speak --source <source> -- "<整页正文>"`，一次请求 = daemon 队列里的一页。空/过短纯西文 delta 不播。
+- **`hook.sh <source>`（MessageDisplay，Claude Code 交互会话主路径）**：assistant 消息流式显示时按行批触发，`delta` = 自上一批以来新完成的整行文本。hook 按 `message_id` 把各批正文追加进 `~/.config/ivox/pagebuf/`，`final=True`（这一页说完了）时把**整页**交给 daemon。**不带动作名**——收尾信号整条删除后只剩「搬一页」这一件事，再挂个 `msgdisplay` 的名字纯属多余。来源只认 `claude` / `wechat`，别的静默退出。**必须极快返回**（Claude Code 等本钩子返回才渲染该批），故攒页 + 审计用单个 python、播报用后台 `&`。走 `ivox speak --source <source> --voice <音色> -- "<整页正文>"`，一次请求 = daemon 队列里的一页。
+**音色由 hook 自己取**：从 `config.toml` 的 `[playback.sourceVoices]` 里读该来源的键（取不到退回 `default` 键）——
+协议要求 source 与 voice 都必填，守护进程不再自己猜（2026-11-02）。空/过短纯西文 delta 不播。
   ⚠️ **`<source>` 优先取环境变量 `IVOX_SOURCE`**（`${IVOX_SOURCE:-$2}`）：微信链路的 claude 由 daemon spawn，注入 `IVOX_SOURCE=wechat` → hook 把来源标成 `wechat` → daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播。hook 只标来源，不自己决定。
   ⚠️ **hook 里调 `ivox` 用绝对路径** `~/.local/bin/ivox`：hook 由 claude 拉起、继承 claude 的环境；微信侧 claude 继承 launchd 托管 daemon 的残缺 PATH（`/usr/bin:/bin:/usr/sbin:/sbin`），裸名 `ivox` 找不到 → 播报静默失效（2026-10-26 实测）。
 - **旧的 Stop 收尾信号**：**已删除**——收尾信号整套没了（队列排空即收尾）。
@@ -83,9 +85,9 @@ Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执�
 
 `Sources/iVox/Network/`
 
-- 解析 payload 头：`{source:claude}` / `{voice:wanwan}`
-- 如果文本前面有 `{source:claude}` 前缀且带额外内容，截取 `source` 和 `voice`
-- 查 `playback.sourceVoices` 映射 → 确定音色 ID
+- 解析 payload 头：`{source:claude,voice:wanwan}`（**两者都必填，缺一即拒**）
+- 如果文本前面有 `{source:…,voice:…}` 前缀且带额外内容，截取 `source` 和 `voice`
+- 音色是**客户端带来的**：hook 自己从 `playback.sourceVoices` 读过再发，守护进程不猜
 - 调用 `cleanText()` 清洗 → `splitSentences()` 切句 → **一次请求 = 一页**入队（`enqueuePage`）
 
 ### 5. TextCleaner

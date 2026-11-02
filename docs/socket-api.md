@@ -27,8 +27,8 @@
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `source` | 否 | 来源标识，默认 `default`。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
-| `voice` | 否 | 音色 ID，默认按 `config.toml` 的 `[playback.sourceVoices]` 映射 |
+| `source` | **是** | 来源标识（谁在说话）。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
+| `voice` | **是** | 音色 ID。**客户端自己从 `config.toml` 的 `[playback.sourceVoices]` 取**（该来源自己的键，取不到退回 `default` 键），连同 source 一起发过来 |
 | `now` | 否 | **必须写成 `key:value` 形式**（如 `now:1`；裸 `now` 不生效——字段按 `,` 切分再按第一个 `:` 拆成键值，只认成对的；值本身不校验）。表示**现在就念**：播报**暂停**（缓冲原样留着，一条不删），这句从**独立播放节点**出声，念完从原处接着播。**与 source 无关**——Opt+Z 划词译文走的就是这条路；它**不进队列**，所以队列顺序一点没变、其余排队的一个不丢 |
 
 **无响应**（fire-and-forget）
@@ -37,8 +37,13 @@
 页与页之间**先来先进**，不分组、不排队次：
 
 ```bash
-echo "{source:claude}一整页的正文" | nc -U ~/.config/ivox/ivox.sock
+echo "{source:claude,voice:taozi}一整页的正文" | nc -U ~/.config/ivox/ivox.sock
 ```
+
+> **source 与 voice 都必填**（2026-11-02）：客户端必须说清「谁在说话」「用哪个音色」，
+> 守护进程不再自己猜——猜错的后果是**整页用错音色念出来**，而现场没人发现。
+> 缺任一 → 请求被拒，日志写明缺哪个（`播报请求缺必填字段（voice），已拒`）。
+> 音色的真源仍是 `config.toml` 的 `[playback.sourceVoices]`，只是**读它的人从守护进程换成了客户端**。
 
 ⚠️ 字段里不要出现 `,`（协议按它切分字段）。
 
@@ -51,12 +56,9 @@ echo "{source:myapp,voice:taozi}任务完成" | nc -U ~/.config/ivox/ivox.sock
 ```swift
 import Darwin
 
-func speak(_ text: String, source: String? = nil, voice: String? = nil) {
-    let prefix: String
-    var parts: [String] = []
-    if let s = source { parts.append("source:\(s)") }
-    if let v = voice { parts.append("voice:\(v)") }
-    prefix = parts.isEmpty ? "" : "{\(parts.joined(separator: ","))}"
+func speak(_ text: String, source: String, voice: String) {
+    // source 与 voice 必填：守护进程不再猜，缺一即拒
+    let prefix = "{source:\(source),voice:\(voice)}"
     
     let msg = Data((prefix + text).utf8)
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
@@ -79,7 +81,7 @@ L<UTF-8 字节数 N>\n   ← 帧头：大写 L + 纯 ASCII 十进制字节数 + 
 **控制帧仍裸行**（以 `\n` 结尾）：
 
 ```
-{type:stream,source:pi}          首帧：开流（声明来源；可选带 voice / turn）
+{type:stream,source:pi,voice:wanwan}   首帧：开流（**source 与 voice 必填**；turn 可选，只进日志）
 {end}                             结束帧：这条连接送完了
 {cancel}                          取消帧（用户中断）：撤掉**这条连接送来的那几页**
 ```
@@ -167,8 +169,8 @@ payload.append(wavData)
 | 字段 | 必填 | 说明 |
 |------|------|------|
 | `type` | 是 | 固定 `tts` |
-| `source` | 否 | 来源标识，默认 `default`。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
-| `voice` | 否 | 音色 ID，默认按 `config.toml` 的 `[playback.sourceVoices]` 映射 |
+| `source` | **是** | 来源标识（谁在说话） |
+| `voice` | **是** | 音色 ID（同样由客户端从 `[playback.sourceVoices]` 取好带上；缺任一 → 请求被拒） |
 
 **响应格式**：48kHz、16-bit PCM、mono，流式分块；文本为空或合成失败也以 `end` 帧结尾
 
@@ -320,9 +322,9 @@ daemon，daemon 没起来就发不出解锁键。解锁还要求系统**没睡�
 
 ```bash
 # TTS
-ivox speak "你好"                          # 纯文本
-ivox speak -s myapp -v mizai "hello"      # 指定来源和音色
-ivox speak --now "打断先念这句"            # 插队：主节点只暂停、这句从独立节点念，念完接着播原来的（= {now:1}）
+ivox speak -s claude -v taozi "你好"       # 来源与音色**都是必填**
+ivox speak -s myapp -v mizai "hello"      # 换来源换音色
+ivox speak -s claude -v taozi --now "打断先念这句"   # 插队：主节点只暂停、这句从独立节点念，念完接着播原来的（= {now:1}）
 
 # ASR
 ivox listen < 录音.wav                     # stdin

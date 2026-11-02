@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 安装完服务已在后台运行。常用命令：
 
 ```bash
-ivox speak "你好"           # 手动播报
+ivox speak -s claude -v taozi "你好"   # 手动播报（来源与音色都是必填）
 ivox skip --page            # 掀页（Ctrl+1，可省）；--all 全掀（Ctrl+2）
 ivox playback off           # 单独关掉播报（正在念的停、排队清空）；on 打开；不带参数看状态
 ivox translate "hello"      # 划词翻译（--selection 取当前选中文本，--json 结构化输出）

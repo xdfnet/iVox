@@ -124,8 +124,14 @@ actor ConnectionHandler: SocketConnectionHandler {
                                           buf: inout [UInt8]) {
         defer { Darwin.close(fd) }
         let meta = parseMetaKV(header)
-        let source = meta["source"] ?? VoiceSource.default
-        let voiceID = meta["voice"] ?? config.voice(forSource: source)
+        let head = requireHead(meta)
+        if let missing = head.missing {
+            // 与一次性播报同一把尺：source 与 voice 都必填，缺一即拒（见 RequiredHead）。
+            Log.warn("流式请求缺必填字段（\(missing)），已拒：客户端必须自己带上来源与音色")
+            return
+        }
+        let source = head.source
+        let voiceID = head.voiceID
         let turn = meta["turn"] ?? "-"
         Log.info("流式开始: source=\(source) voice=\(voiceID) turn=\(turn)")
         // 本连接的入队/结束/取消全部串到同一根链上：帧序 = 执行序（见 StreamOpChain）
@@ -255,7 +261,14 @@ actor ConnectionHandler: SocketConnectionHandler {
         // 现在要停 daemon 走**正经信号**：读实例锁里的 pid，发 SIGTERM →
         // 走的是信号那条退出路径（有日志、有清理、有退出栈）。
         
-        let (source, voiceID, content, isNow) = extractVoicePrefix(text, config: config)
+        let (head, content, isNow) = parseRequest(text)
+        if let missing = head.missing {
+            // **source 与 voice 都必填**：缺了就拒，不再猜（猜错 = 整页用错音色念出来）。
+            Log.warn("播报请求缺必填字段（\(missing)），已拒：客户端必须自己带上来源与音色")
+            return
+        }
+        let source = head.source
+        let voiceID = head.voiceID
         Log.info("请求解析: source=\(source) voice=\(voiceID) raw_chars=\(content.count)")
         // 微信链路的播报开关：默认**不念**（聊天窗口里已经有文字，再念是打扰）。
         // 微信侧的 claude 由 daemon spawn，它照样吃 Claude Code 那套 hook（hook 配在
@@ -453,8 +466,15 @@ actor ConnectionHandler: SocketConnectionHandler {
     /// 合成 TTS 并将 PCM 分块写回客户端（请求-响应，不播放、不入队）
     private nonisolated func handleTTSPCM(fd: Int32, header: String, body: Data) {
         let meta = parseMetaKV(header)
-        let sourceID = meta["source"] ?? VoiceSource.default
-        let voiceID = meta["voice"] ?? config.voice(forSource: sourceID)
+        let head = requireHead(meta)
+        if let missing = head.missing {
+            Log.warn("合成请求缺必填字段（\(missing)），已拒：客户端必须自己带上来源与音色")
+            _ = writeAll(StreamFrame.end, to: fd)
+            Darwin.close(fd)
+            return
+        }
+        let sourceID = head.source
+        let voiceID = head.voiceID
 
         let text = String(data: body, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -490,31 +510,44 @@ actor ConnectionHandler: SocketConnectionHandler {
         }
     }
 
-    nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, isNow: Bool) {
-        guard text.hasPrefix("{"), let end = text.firstIndex(of: "}") else {
-            return (VoiceSource.default, config.defaultVoice, text, false)
-        }
-        let metaStr = String(text[text.index(after: text.startIndex)..<end])
-        let pairs = metaStr.split(separator: ",").map { $0.split(separator: ":", maxSplits: 1).map(String.init) }
-        var sourceID = VoiceSource.default
-        var explicitVoice: String?
-        var isNow = false
-        for pair in pairs where pair.count == 2 {
-            switch pair[0] {
-            case "source": sourceID = pair[1]
-            case "voice":  explicitVoice = pair[1]
-            // now：用户自己要求现在念（Opt+Z 译文 / `ivox speak --now`）→ **插队**，不是排队。
-            // 与 source 无关：Opt+Z 走这条路，自检也要能压到它，否则「唯一一条机器借道」的路径
-            // 永远没有自动化回归保护。
-            case "now":    isNow = true
-            default: break
-            }
-        }
-        let voiceID = explicitVoice ?? config.voice(forSource: sourceID)
-        let content = String(text[text.index(after: end)...])
-        return (sourceID, voiceID, content, isNow)
+    /// 请求头里**必填**的两样：来源与音色。
+    ///
+    /// **2026-11-02 起两者都必填**：客户端必须说清「谁在说话」「用哪个音色」，
+    /// 守护进程不再自己猜——猜错的后果是**整页用错音色念出来**，而现场没人发现。
+    /// 音色由**客户端自己**从 config.toml 的 `[playback.sourceVoices]` 取好带过来
+    /// （`hook.sh` 与 pi 扩展都这么做；那条表仍是唯一真源，只是读它的人换成了客户端）。
+    struct RequiredHead {
+        var source: String
+        var voiceID: String
+        /// 缺了哪些必填字段（nil = 齐全）。文案直接进日志。
+        var missing: String?
     }
 
+    /// 从请求头里取 source / voice，缺的记下来。
+    nonisolated private func requireHead(_ kv: [String: String]) -> RequiredHead {
+        let source = kv["source"] ?? ""
+        let voice = kv["voice"] ?? ""
+        var missing: [String] = []
+        if source.isEmpty { missing.append("source") }
+        if voice.isEmpty { missing.append("voice") }
+        return RequiredHead(source: source, voiceID: voice,
+                            missing: missing.isEmpty ? nil : missing.joined(separator: "+"))
+    }
+
+    /// 解析一次性播报请求：`{source:x,voice:y,now:1}` + 正文。
+    /// **source 与 voice 缺一即拒**（见 `RequiredHead`）。
+    nonisolated private func parseRequest(_ text: String) -> (head: RequiredHead, content: String, isNow: Bool) {
+        guard text.hasPrefix("{"), let end = text.firstIndex(of: "}") else {
+            // 连头都没有 → source 与 voice 都缺
+            return (RequiredHead(source: "", voiceID: "", missing: "source+voice"), text, false)
+        }
+        let kv = parseMetaKV(String(text[...end]))
+        // now：用户自己要求现在念（Opt+Z 译文 / `ivox speak --now`）→ **插队**，不是排队。
+        // 与 source 无关：Opt+Z 走这条路，自检也要能压到它，否则「唯一一条机器借道」的路径
+        // 永远没有自动化回归保护。
+        let head = requireHead(kv)
+        return (head, String(text[text.index(after: end)...]), kv["now"] != nil)
+    }
     nonisolated private func oneLine(_ value: String) -> String {
         value.replacingOccurrences(of: "\n", with: " ")
             .replacingOccurrences(of: "\r", with: " ")

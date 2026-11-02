@@ -424,12 +424,10 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 ### TTS 播报
 
 ```
-1. Hook 脚本 → `ivox speak -s claude -- "<整页正文>"`
-2. SpeakCommand → Unix Socket `{source:claude}整页正文`
+1. Hook 脚本 → `ivox speak -s claude -v <音色> -- "<整页正文>"`（音色由 hook 自己从配置取）
+2. SpeakCommand → Unix Socket `{source:claude,voice:taozi}整页正文`
 3. ConnectionHandler.handle():
-   - 解析前缀 → source="claude"
-   - voice = sourceVoices["claude"] ?? sourceVoices["default"]
-   - 显式 `{voice:xxx}` 可覆盖
+   - 解析前缀 → source="claude"、voice="taozi"（**两者都必填，缺一即拒**）
    - cleanText() 清洗 Markdown + 行内噪音 → splitSentences() 切句
 4. PlaybackQueue.enqueuePage(text:jobs:) → PlaybackSession.appendPage
    → **一次请求 = 一页**，追加到队尾（先来先进）；由收敛点 `pumpOrSettle()` 判断要不要起管道
@@ -497,16 +495,23 @@ claude 是 daemon spawn 的，它拉起的 hook 与终端会话的 hook 是同�
 清洗后由 `TextSplitter` 分成 ≤80 字的**句**入队（一页 = 一条 assistant 消息 = 队列的单位），
 既贴合 TTS 的句级合成，也让接入方能整页一次交上来。
 
-## 音色匹配
+## 音色从哪来（2026-11-02 改）
 
-优先级：`显式 voice > sourceVoices 映射 > sourceVoices["default"]`（默认音色就并在这一段里）
+**客户端自己取，守护进程不再猜**。协议要求 `source:` 与 `voice:` 都必填，缺一即拒
+（猜错的后果是整页用错音色念出来，而现场没人发现）。
 
 ```
-ConnectionHandler.extractVoicePrefix():
-  if {voice:xxx} in payload  → xxx
-  else if {source:s}         → sourceVoices[s] ?? sourceVoices["default"]
-  else                       → sourceVoices["default"]
+hook.sh / pi 扩展:
+  读 config.toml 的 [playback.sourceVoices]
+  voice = sourceVoices[自己的来源] ?? sourceVoices["default"] ?? （没有 → 不出声）
+  → 连同 source 一起发给守护进程
+
+守护进程:
+  收到就信；缺 source 或 voice → 拒收并记日志说明缺哪个
+  只留用这张表的 default 键（译文朗读兜底、ivox voice list 的「默认」标记）
 ```
+
+内部那条「主进程 → 誊清员」的协议（`{type:tts,voice:x}`）是另一套，不受这条约束。
 
 ## 部署结构
 
@@ -560,7 +565,7 @@ ConnectionHandler.extractVoicePrefix():
 | PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_end` 整页一次（一个长度帧一页；`agent_settled` 兜底） |
 
 由 `install-hooks.sh` 统一安装（Claude 只挂 MessageDisplay）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op），**也不再挂 Stop**（2026-11-02：队列排空即收尾，端不再报告「这一轮说完了」）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。
-`hook.sh` 现在**只认来源、不带动作名**（用法 `hook.sh <source>`，来源只认 `claude` / `wechat`，别的静默退出）：提取 `delta` 增量、按 `message_id` 攒成整页，经 `ivox speak` 排队入队（不打断）。存量那条 `hook.sh end claude` 无害——`end` 不在来源白名单里，静默退出。
+`hook.sh` 现在**只认来源、不带动作名**（用法 `hook.sh <source>`，来源只认 `claude` / `wechat`，别的静默退出）：提取 `delta` 增量、按 `message_id` 攒成整页，经 `ivox speak -s <来源> -v <音色>` 排队入队（不打断；音色由 hook 自己从 `[playback.sourceVoices]` 取）。存量那条 `hook.sh end claude` 无害——`end` 不在来源白名单里，静默退出。
 
 **`~/.config/ivox/pagebuf/`** 是 hook 链的一小块状态：hook 按 `message_id` 把每批正文追加进去，
 `final=True` 时把整页取出交出去。**队列侧不认它**（页号由助理自编）。

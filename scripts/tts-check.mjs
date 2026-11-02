@@ -41,6 +41,10 @@ const HEALTH_URL = "http://127.0.0.1:8888/health";
 const SR = 48000;
 const LABEL = "com.ivox.daemon";
 
+// **音色**：协议要求 source 与 voice 都必填（2026-11-02）——守护进程不再猜。
+// 自检是测试客户端，直接指定一个内置音色（taozi）即可，不必读配置。
+const VOICE = "taozi";
+
 // 以 debug 级日志拉起 daemon：断言要读 DEBUG 行（如「队列状态:」数入队句数），而 daemon
 // 默认只留 INFO 及以上。环境变量走 `launchctl setenv`——LaunchAgent 跑在 launchd 下，
 // 不继承当前 shell 的环境，父进程 execFileSync 传 env 是没用的（曾在这里想当然过）。
@@ -175,7 +179,7 @@ function writeFrame(s, text) {
 // 根本发不出去（曾让 P3 干等 41 秒）。小报文直接 write 后 end，由 socket 自己 flush。
 async function speakPage(source, text) {
   const s = await conn();
-  s.write(`{source:${source}}${text}`);
+  s.write(`{source:${source},voice:${VOICE}}${text}`);
   s.end();
 }
 
@@ -183,7 +187,7 @@ async function speakPage(source, text) {
 // 其余排队内容一个不丢。CLI 等价物 `ivox speak --now`。
 async function speakNow(source, text) {
   const s = await conn();
-  s.write(`{source:${source},now:1}${text}`);
+  s.write(`{source:${source},voice:${VOICE},now:1}${text}`);
   s.end();
 }
 
@@ -209,7 +213,7 @@ async function openStream(turn, source) {
   const s = await conn();
   openSocks.add(s);
   s.on("close", () => openSocks.delete(s));
-  await new Promise((res) => s.write(`{type:stream,source:${source},turn:${turn}}\n`, res));
+  await new Promise((res) => s.write(`{type:stream,source:${source},voice:${VOICE},turn:${turn}}\n`, res));
   return {
     // 一整个长度帧 = 一页
     sendPage: (t) => writeFrame(s, t),
@@ -231,7 +235,7 @@ async function closeAllStreams() {
 // type:tts：只合成不播放，解析 [4B LE len][PCM]…[0] 帧，返回累计 PCM 秒数。
 async function ttsPcm(text, { timeoutMs = 60000 } = {}) {
   const s = await conn();
-  s.write(`{type:tts}\n${text}`);
+  s.write(`{type:tts,source:selftest,voice:${VOICE}}\n${text}`);
   s.end();
   const chunks = [];
   const done = new Promise((resolve, reject) => {
