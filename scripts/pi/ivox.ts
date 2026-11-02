@@ -1,5 +1,5 @@
 import type { ExtensionAPI } from "@earendil-works/pi-coding-agent";
-import { createConnection, type Socket } from "node:net";
+import { spawn } from "node:child_process";
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { join } from "node:path";
@@ -7,19 +7,18 @@ import { join } from "node:path";
 /**
  * iVox TTS extension for pi coding agent。
  *
- * 只干一件事：每页搬一次。一条 assistant message = 一页，
- * 页结束（message_end）时把整页原文装进一个长度帧发给守护进程。
- * 页号由守护进程自己数，扩展不给 id。切句/清洗/排队/播放全在守护进程那边。
+ * 只干一件事：**每页搬一次**。一条 assistant message = 一页，
+ * 页结束（message_end）时把整页原文交给 `ivox speak`。
  *
- * 不逐字转发、不攒缓冲、不兜底重念。守护进程没开就闭嘴。
+ * **播报的唯一入口是 `ivox speak`**（2026-11-02）：本扩展自己拼好命令
+ * （来源 pi、音色从配置查、正文整页），自己调它。守护进程照单念，不猜、不管。
+ * 不逐字转发、不攒缓冲、不自己切句（切句/清洗/排队/播放都在守护进程那边）。
  *
- * **音色由客户端自己取**（2026-11-02）：协议要求 source 与 voice 都必填，
- * 守护进程不再猜「pi 该用什么音色」。映射表仍是 config.toml 的
- * `[playback.sourceVoices]`（唯一真源），这里自己读它：
- * 先取 `pi` 自己的键，取不到退回 `default` 键；两处都没有 → 不出声。
+ * 代价：以前 pi 走流式连接，用户按 Esc 能 `{cancel}` 撤掉这一轮送来的页；
+ * 现在没有流，也就撤不回来——已送出的页照念完（要立刻闭嘴用 `ivox skip --all`）。
  */
 
-const SOCKET_PATH = join(homedir(), ".config", "ivox", "ivox.sock");
+const IVOX = join(homedir(), ".local", "bin", "ivox");
 const CONFIG_PATH = join(homedir(), ".config", "ivox", "config.toml");
 
 /** 从 config.toml 的 [playback.sourceVoices] 里取某个来源的音色 id。 */
@@ -46,46 +45,23 @@ export function voiceFor(source: string): string {
 }
 
 export default function (pi: ExtensionAPI) {
-  let sock: Socket | null = null;
-  let turnId = "";
-  let muted = false; // 用户中断后，本 run 剩余的页不搬
-
   const hasUI = (ctx: unknown) =>
     (ctx as { hasUI?: boolean } | undefined)?.hasUI !== false;
 
-  function connect() {
-    muted = false;
-    turnId =
-      Math.floor(Math.random() * 0xffffffff).toString(16).padStart(8, "0") +
-      Date.now().toString(16);
-    sock?.destroy();
-    // 取不到音色 → 干脆不开这条连接：没有音色就没法念（协议要求 voice 必填）。
+  /** 把一页交给 `ivox speak`：本端自己拼命令、自己带来源与音色。 */
+  function speakPage(page: string) {
     const voice = voiceFor("pi");
-    if (!voice) return;
-    const s = createConnection(SOCKET_PATH);
-    s.on("error", () => { sock = null; }); // 守护进程没开：闭嘴，不出声
-    // turn 只进日志：不参与排队、不落库（队列是页的 FIFO，先来先进）。
-    s.write(`{type:stream,source:pi,voice:${voice},turn:${turnId}}\n`);
-    sock = s;
+    // 查不到音色就不带 --voice（服务端走默认音色）；正文作为独立参数传（不经 shell），不用转义
+    const args = ["speak", "--source", "pi"];
+    if (voice) args.push("--voice", voice);
+    args.push("--", page);
+    const child = spawn(IVO, args, { stdio: "ignore", detached: true });
+    child.unref(); // 不等它结束：扩展不该被播报拖住
   }
-
-  // 长度帧 L<字节数>\n<正文>：正文可含换行、{end} 等任意字符，守护进程按字节精确切。
-  // **一帧 = 一页**（一条 assistant 消息的全文）。
-  function send(text: string) {
-    if (!sock) return;
-    const body = Buffer.from(text, "utf8");
-    sock.write(`L${body.length}\n`);
-    sock.write(body);
-  }
-
-  pi.on("agent_start", (_e: unknown, ctx: unknown) => {
-    if (!hasUI(ctx)) return;
-    connect();
-  });
 
   // 一页 = 一条 assistant message。message_end 带的是已定稿的完整 message。
   pi.on("message_end", (event: unknown, ctx: unknown) => {
-    if (!hasUI(ctx) || muted) return;
+    if (!hasUI(ctx)) return;
     const msg = (event as { message?: { role?: string; content?: Array<{ type: string; text?: string }> } }).message;
     if (msg?.role !== "assistant") return;
     let text = "";
@@ -93,25 +69,6 @@ export default function (pi: ExtensionAPI) {
       if (block.type === "text" && typeof block.text === "string") text += block.text;
     }
     if (!text.trim()) return;
-    send(text);
-  });
-
-  pi.on("agent_end", (_e: unknown, ctx: unknown) => {
-    if (!hasUI(ctx)) return;
-    const s = sock;
-    sock = null;
-    turnId = "";
-    s?.end("{end}\n");
-  });
-
-  // 用户按 Esc 中断：撤掉这一轮送来的页
-  pi.on("agent_settled", (event: unknown, ctx: unknown) => {
-    if (!hasUI(ctx)) return;
-    if ((event as { aborted?: boolean }).aborted !== true) return;
-    muted = true;
-    const s = sock;
-    sock = null;
-    turnId = "";
-    s?.end("{cancel}\n");
+    speakPage(text);
   });
 }

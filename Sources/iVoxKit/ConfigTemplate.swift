@@ -74,7 +74,6 @@ enabled = true                  # 播报总开关 ｜ 默认 true ｜ true/false
 default = "taozi"               # 默认音色 ｜ 默认 "taozi" ｜ 音色 id
 claude = "taozi"                # Claude 的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
 pi = "wanwan"                   # pi 的回复用哪个音色 ｜ 默认 "wanwan" ｜ 音色 id
-wechat = "taozi"                # 微信链路的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
 # 自建音色写在下面的 [[playback.voices]]（`ivox voice add` 会替你写好）。
 
 # ── 浮窗（屏幕上的那块 iVox 窗口：字幕、译文都往它里面放）──
@@ -102,7 +101,7 @@ longPollMS = 35000              # 长轮询间隔（毫秒）｜ 默认 35000 �
 baseURL = "https://ilinkai.weixin.qq.com"   # ilink 服务地址 ｜ 默认 同值 ｜ 任意 http(s)
 claudePath = "~/.local/bin/claude"          # claude 可执行文件 ｜ 默认 同值 ｜ 任意路径
 askTimeoutSeconds = 300         # 单条提问等待上限（秒）｜ 默认 300 ｜ 数字
-speak = false                   # 微信回复要不要在本机念出来 ｜ 默认 false（不念）｜ true / false
+# 微信回复**永远不念**：那个 claude 以 --bare 启动，不触发任何钩子，它的回复不进播报队列。
 
 # ── 自建音色（可选）─────────────────────────────────────
 # 只放你自建或覆盖的音色；内置的四个在代码里（`ivox voice list` 会标出哪个是内置）。

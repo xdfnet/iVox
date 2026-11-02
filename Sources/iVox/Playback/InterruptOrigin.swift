@@ -8,8 +8,6 @@ enum InterruptTier: Sendable, CustomStringConvertible {
     case skipPage
     /// 全掀（Ctrl+2）：清空全部排队内容。
     case skipAll
-    /// 撤回来路（接入方自己发的 `{cancel}`）：丢它自己送来的那几页，不掐在播。
-    case cancelPages
     /// 关播报（`ivox playback off`）：掐在播 + 清空排队，之后进来的内容一律丢弃。
     case disablePlayback
     /// 退出清场：守护进程退出时的系统级清场。
@@ -19,7 +17,6 @@ enum InterruptTier: Sendable, CustomStringConvertible {
         switch self {
         case .skipPage: return "掀页"
         case .skipAll: return "全掀"
-        case .cancelPages: return "撤回来路"
         case .disablePlayback: return "关播报"
         case .shutdown: return "退出清场"
         }

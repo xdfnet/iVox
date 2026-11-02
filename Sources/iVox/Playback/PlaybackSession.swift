@@ -290,18 +290,6 @@ actor PlaybackSession {
         return dropped
     }
 
-    /// 撤掉指定的一批页（接入方放弃自己送来的那几页，例如 pi 被用户中断）。
-    @discardableResult
-    func discardPages(_ pageNos: [Int]) -> Int {
-        guard !pageNos.isEmpty else { return 0 }
-        let set = Set(pageNos)
-        let dropped = pages.filter { set.contains($0.localID) }
-            .reduce(0) { $0 + $1.sentences.filter { $0.seq > cursorSeq }.count }
-        pages.removeAll { set.contains($0.localID) }
-        for no in pageNos { store?.deletePage(no) }
-        return dropped
-    }
-
     /// 回收念完的页（一句都不剩的页）：它们留在容器里只是历史垃圾。
     ///
     /// **为什么必须清**：容器原先只增不减，播完的页一直留着，酿成两个后果——

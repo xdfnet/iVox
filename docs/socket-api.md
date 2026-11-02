@@ -3,6 +3,12 @@
 其他程序通过 Unix Socket 调用 iVox 的 TTS 播报和 ASR 识别。
 协议极简：文本头 + 可选二进制体，一行 `\n` 分隔。
 
+> **播报的唯一入口是 `ivox speak`**（2026-11-02）：`ivox speak --source X [--voice Y] -- "<正文>"`
+> 是客户端拼好的命令，它把这段请求发到这个 socket 上。**来源与音色是客户端的事**——
+> 客户端自己读 `config.toml` 的 `[playback.sourceVoices]` 查音色、自己把 source 与 voice 带上；
+> **服务端照单念，不猜、不管、不拒**（缺 voice 就走默认音色，缺 source 就按 `default` 记）。
+> 曾经还有一路「流式连接」（长度帧 / `{end}` / `{cancel}`），随 pi 改走 `ivox speak` 一并删除。
+
 ## Socket 路径
 
 ```
@@ -27,8 +33,8 @@
 
 | 字段 | 必填 | 说明 |
 |------|------|------|
-| `source` | **是** | 来源标识（谁在说话）。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
-| `voice` | **是** | 音色 ID。**客户端自己从 `config.toml` 的 `[playback.sourceVoices]` 取**（该来源自己的键，取不到退回 `default` 键），连同 source 一起发过来 |
+| `source` | **是**（`ivox speak` 在命令行上把关） | 来源标识（谁在说话）。**微信永不出声**（那个 claude 不挂钩子，回复压根不进队列），所以没有保留来源 |
+| `voice` | 否 | 音色 ID。**客户端自己从 `config.toml` 的 `[playback.sourceVoices]` 取**（该来源自己的键，取不到退回 `default` 键），连同 source 一起发过来。**省了就走默认音色**（服务端用 `[playback.sourceVoices].default`）。服务端不猜：猜错的后果是整页用错音色念出来，而现场没人发现 |
 | `now` | 否 | **必须写成 `key:value` 形式**（如 `now:1`；裸 `now` 不生效——字段按 `,` 切分再按第一个 `:` 拆成键值，只认成对的；值本身不校验）。表示**现在就念**：播报**暂停**（缓冲原样留着，一条不删），这句从**独立播放节点**出声，念完从原处接着播。**与 source 无关**——Opt+Z 划词译文走的就是这条路；它**不进队列**，所以队列顺序一点没变、其余排队的一个不丢 |
 
 **无响应**（fire-and-forget）
@@ -40,10 +46,11 @@
 echo "{source:claude,voice:taozi}一整页的正文" | nc -U ~/.config/ivox/ivox.sock
 ```
 
-> **source 与 voice 都必填**（2026-11-02）：客户端必须说清「谁在说话」「用哪个音色」，
-> 守护进程不再自己猜——猜错的后果是**整页用错音色念出来**，而现场没人发现。
-> 缺任一 → 请求被拒，日志写明缺哪个（`播报请求缺必填字段（voice），已拒`）。
-> 音色的真源仍是 `config.toml` 的 `[playback.sourceVoices]`，只是**读它的人从守护进程换成了客户端**。
+> **source 与 voice 由客户端负责**（2026-11-02）：客户端说清「谁在说话」「用哪个音色」，
+> 音色的真源仍是 `config.toml` 的 `[playback.sourceVoices]`，只是**读它的人从守护进程换成了客户端**
+> （`hook.sh` 与 pi 扩展各自读）。
+> **服务端不猜、不管、不拒**：`source` 缺了就按 `default` 记，`voice` 缺了就走默认音色——
+> 它只是不得不有个缺省，不是它管的。
 
 ⚠️ 字段里不要出现 `,`（协议按它切分字段）。
 
@@ -56,63 +63,14 @@ echo "{source:myapp,voice:taozi}任务完成" | nc -U ~/.config/ivox/ivox.sock
 ```swift
 import Darwin
 
-func speak(_ text: String, source: String, voice: String) {
-    // source 与 voice 必填：守护进程不再猜，缺一即拒
-    let prefix = "{source:\(source),voice:\(voice)}"
+func speak(_ text: String, source: String, voice: String?) {
+    // source 必填；voice 可省（省了服务端走默认音色）
+    let prefix = voice.map { "{source:\(source),voice:\($0)}" } ?? "{source:\(source)}"
     
     let msg = Data((prefix + text).utf8)
     let fd = socket(AF_UNIX, SOCK_STREAM, 0)
     // ... connect + write + close
 }
-```
-
-### 1b. 流式 TTS — 一条连接送一页页的正文
-
-接入方自己开一条连接，边生成边把**一页**交过来。**一个长度帧 = 一页**（一条 assistant 消息的全文）。
-一条连接多帧，连接保持打开。帧分两类：
-
-**正文帧用自描述长度帧**（v3.6.2 起，pi 已采用）：
-
-```
-L<UTF-8 字节数 N>\n   ← 帧头：大写 L + 纯 ASCII 十进制字节数 + 换行
-<恰好 N 字节的原文>    ← 帧体：可含任意字节（\n、{end}、代码、emoji），不再靠 \n 定界
-```
-
-**控制帧仍裸行**（以 `\n` 结尾）：
-
-```
-{type:stream,source:pi,voice:wanwan}   首帧：开流（**source 与 voice 必填**；turn 可选，只进日志）
-{end}                             结束帧：这条连接送完了
-{cancel}                          取消帧（用户中断）：撤掉**这条连接送来的那几页**
-```
-
-客户端直接断开（EOF）等价于 `{end}`（正文已经整帧送出，EOF 只补发残尾）。
-
-⚠️ **每条连接有 10 秒读超时**（`SocketServer.swift` 的 `SO_RCVTIMEO`）：连接上连续 10 秒没有新字节，
-服务端把它当 EOF 处理。所以**长间隔的流式客户端（超过 10 秒才发下一帧）会被静默掐断**；
-要么保持心跳，要么把间隔压到 10 秒内。
-
-> **为何引入 L 帧**：旧协议正文帧靠 `\n` 定界、控制帧是裸 `{end}`，于是正文中独立成行的 `{end}`/`{cancel}` 会被误判成控制帧（协议注入），正文里的换行也和帧定界符混淆。L 帧按字节精确切，正文可含任意内容。服务端**向后兼容**：行首不是 `L<数字>` 的仍按旧裸文本帧解析（裸文本 + `\n`），攒到 `{end}`/EOF 时当一页发出去。
-
-**关键约定**
-
-- 客户端**只转发原文，不要自己切句/清洗**。切句（`splitSentences`）与降噪（`cleanText`）真源只在服务端：按句末/段落边界（`。！？!?…；;` 及换行；不含英文 `.`，以免切碎小数/缩写）切句，并保证吐出前缀的代码围栏（```` ``` ````）自身配平后才抽出整段清洗，避免念出 Markdown/代码残片。
-- **一帧 = 一页**。服务端把整帧当一页：清洗 → 切句 → 入队为**一页**，页与页之间先来先进。
-- `turn` **可省**（首帧里带不带都行）：它**只进日志**，不参与排队、不落库。
-- `{cancel}` 撤的是**这条连接送来的那几页**（服务端按连接记住页号），不碰别人的页、也不掐在播。
-- 服务端**保证同一连接内按帧序执行**（首帧 → 各正文帧 → `{end}`/`{cancel}`，内部用 `StreamOpChain` 串成一链）。顺序是协议语义的一部分：`{cancel}` 必须落在那些页入队之后，否则撤了个空、后到的帧又把页入队（撤不掉）。
-- **优雅半关**：发 `{end}`/`{cancel}` 用 `sock.end(...)`（等内核发完再 FIN），不要 `destroy()` 强杀——后者随 RST 可能丢掉最后一两个字。
-
-**示例（Node，pi 扩展即此实现）**
-
-```js
-import { createConnection } from "node:net";
-const sock = createConnection(`${process.env.HOME}/.config/ivox/ivox.sock`);
-sock.write(`{type:stream,source:pi}\n`);
-const body = Buffer.from(pageText, "utf8");   // 一条 assistant 消息的全文
-sock.write(`L${body.length}\n`);   // 长度帧头（一帧 = 一页）
-sock.write(body);                  // 正文（任意字节，无需转义）
-sock.end("{end}\n");               // 送完了，优雅半关
 ```
 
 ### 2. ASR — 语音识别
@@ -322,7 +280,8 @@ daemon，daemon 没起来就发不出解锁键。解锁还要求系统**没睡�
 
 ```bash
 # TTS
-ivox speak -s claude -v taozi "你好"       # 来源与音色**都是必填**
+ivox speak -s claude "你好"                # 来源必填；音色省了就走默认音色
+ivox speak -s claude -v taozi "你好"       # 指定音色
 ivox speak -s myapp -v mizai "hello"      # 换来源换音色
 ivox speak -s claude -v taozi --now "打断先念这句"   # 插队：主节点只暂停、这句从独立节点念，念完接着播原来的（= {now:1}）
 

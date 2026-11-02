@@ -216,34 +216,6 @@ final class PlaybackSessionStoryTests: XCTestCase {
 
     // MARK: - 撤回来路：只撤指定的页
 
-    /// **撤回来路只撤指定的那几页**，别的页照旧排队。
-    ///
-    /// 接入方（例如 pi 被用户中断）撤回自己送来的那几页时，
-    /// 不能连带掀掉别人的内容。
-    func testDiscardPagesRemovesOnlyTheGivenPages() async {
-        let s = PlaybackSession()
-        let p1 = await page(s, ["甲"])
-        let p2 = await page(s, ["乙"])
-        _ = await page(s, ["丙"])
-
-        let dropped = await s.discardPages([p2!])
-        XCTAssertEqual(dropped, 1, "只撤了那一页的一句")
-
-        let rest = await spokenOrder(s)
-        XCTAssertEqual(rest, ["甲", "丙"], "别的页一个字都不许少")
-        XCTAssertNotNil(p1)
-    }
-
-    /// 撤回来路之后，**那几页的迟到增量不再算数**——撤掉的就是那几页。
-    func testDiscardedPagesAreGoneForGood() async {
-        let s = PlaybackSession()
-        let p2 = await page(s, ["乙"])
-        _ = await s.discardPages([p2!])
-
-        let pending = await s.pendingCount
-        XCTAssertEqual(pending, 0, "撤掉的那页不在队列里了")
-    }
-
     // MARK: - 不立墓碑：放弃之后迟到的内容照常入队照常播
 
     /// **掀页不立墓碑**——放弃的是那一页，不是这个来源以后所有的页。

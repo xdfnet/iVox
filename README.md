@@ -19,7 +19,7 @@
 
 | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f5e3.svg"><br>**自动播报** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f39b.svg"><br>**媒体控制** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f399.svg"><br>**语音输入** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4d6.svg"><br>**划词翻译** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/26a1.svg"><br>**快速操作** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4ac.svg"><br>**微信桥接** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f512.svg"><br>**屏幕锁** |
 |---|---|---|---|---|---|---|
-| AI 回复整页念出来（跳过代码与噪音）；可开屏幕字幕（贴底跟随声音）；手动打断两档：`Ctrl+1` 掀页 · `Ctrl+2` 全掀 | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 按住说话，松开识别粘贴，浮窗实时显示波形 | 选中即译，屏幕下方浮窗出译文（原文+译文）并可朗读 | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制 Finder 选中路径 | 微信消息直通常驻 Claude，回复以文字转发回微信（**默认不念**，`wechat.speak=true` 可开） | 一个滑块：右滑锁屏、左滑解锁（走 HID 真键） |
+| AI 回复整页念出来（跳过代码与噪音）；可开屏幕字幕（贴底跟随声音）；手动打断两档：`Ctrl+1` 掀页 · `Ctrl+2` 全掀 | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 按住说话，松开识别粘贴，浮窗实时显示波形 | 选中即译，屏幕下方浮窗出译文（原文+译文）并可朗读 | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制 Finder 选中路径 | 微信消息直通常驻 Claude，回复以文字转发回微信（**永远不念**——那个 claude 不挂钩子，回复压根不进播报队列） | 一个滑块：右滑锁屏、左滑解锁（走 HID 真键） |
 | 装好即用 | 打开 `127.0.0.1:8888`，手机同局域网用 `http://<本机IP>:8888` | 右 ⌘ / 右 ⌃ | `Opt+Z` | `Opt+Q` · `Opt+A` · `Opt+X` · `Opt+S` · `Opt+C` | `ivox wechat setup` | `ivox lock` / `ivox unlock` |
 
 ---
@@ -48,7 +48,7 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 安装完服务已在后台运行。常用命令：
 
 ```bash
-ivox speak -s claude -v taozi "你好"   # 手动播报（来源与音色都是必填）
+ivox speak -s claude "你好"           # 手动播报（来源必填；音色省了走默认音色）
 ivox skip --page            # 掀页（Ctrl+1，可省）；--all 全掀（Ctrl+2）
 ivox playback off           # 单独关掉播报（正在念的停、排队清空）；on 打开；不带参数看状态
 ivox translate "hello"      # 划词翻译（--selection 取当前选中文本，--json 结构化输出）
@@ -68,9 +68,8 @@ curl -s 127.0.0.1:8888/health
 # {"status":"ok","version":"6.0.0","model":"Qwen3-TTS-…","engine":"ready","queued":0,"playing":false}
 ```
 
-**微信**：配置后微信消息自动注入 Claude Code，AI 回复以**文字**转发回微信，默认不经 TTS 播报——
+**微信**：配置后微信消息自动注入 Claude Code，AI 回复以**文字**转发回微信，**永不**经 TTS 播报——
 聊天窗口里已经有文字了，再念一遍是打扰（裁决见 `docs/playback/purpose.md`）。
-要在本机一起念，把配置 `[wechat] speak` 改成 `true` 再 `ivox restart`（默认 `false`）。
 
 ```bash
 ivox wechat setup              # 扫码登录微信机器人的 ilink bot
@@ -99,7 +98,7 @@ make check-tts # 播报黑盒自检（压真实 daemon，发版前手动跑）
 make clean     # 清除 .build
 ```
 
-> `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **20 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
+> `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验「一次请求 = 一页」、来源与音色归客户端、合成时长、密集打断、尾音完整等 **16 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
 
 > 构建用 `xcrun --toolchain swift-latest swift`——`swift-latest` 这个符号链接指向
 > **开发快照** `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`（早期快照的编译器崩溃，见
@@ -140,7 +139,6 @@ translate = "opt+z"     # 改完跑 ivox restart 生效
 | `translation.proxyURL` | 直连不通时的兜底代理，如 `http://192.168.100.6:10808`（只在直连失败后才用） |
 | `hotkeys` | 热键（键位写法见下）；首次安装会写全量默认键位 |
 | `wechat.token` / `wechat.allowFrom` | 微信 ilink bot token / 允许发消息的那个用户 |
-| `wechat.speak` | 微信回复要不要在本机念出来（默认 `false`＝不念） |
 | `playback.sourceVoices` | 按接入方分别选音色；其中 `default` 键就是**默认音色**（没有来源时用它） |
 | `playback.voices` | **只放你自建或覆盖的音色**（`[[playback.voices]]`）；内置的四个在代码里（`ivox voice list` 会标出哪个是内置） |
 | `playback.enabled` | 播报总开关（默认开）。关掉后内容一律丢弃、正在念的立刻闭嘴，**TTS 模型一并释放**（省显存），其余能力照常；命令行 `ivox playback off` |
@@ -187,8 +185,8 @@ voice = "rightcmd"
 ## 架构
 
 ```
-Claude Code → hook ─┐
-pi 扩展（整页一次）──────────┴→ Unix Socket → Daemon
+Claude Code → hook（攒整页）─┐
+pi 扩展（每页一次）──────────┴→ ivox speak ─→ Unix Socket → Daemon
                                             ├── TSPRemote ─→ 誊清员进程 (独立, MLX 合成)
                                             ├── WeChatPlatform (ilink 长轮询)
                                             │       └─ 常驻 Claude Agent (Swift 直连 claude)
@@ -200,7 +198,7 @@ pi 扩展（整页一次）──────────┴→ Unix Socket → 
                                             └── MediaHTTPServer (Web UI)
 ```
 
-微信消息经守护进程发给一个常驻 `claude` Agent（Swift 经 stdio NDJSON 直连，无 node 依赖），后台任务可跨消息持续运行；Agent 工作目录隔离在 `~/.config/ivox/wechat/workspace`，发 `/new` 可开新会话。
+微信消息经守护进程发给一个常驻 `claude` Agent（Swift 经 stdio NDJSON 直连，无 node 依赖），后台任务可跨消息持续运行；Agent 工作目录隔离在 `~/.config/ivox/wechat/workspace`，发 `/new` 可开新会话。这个 claude 以 `--bare` 启动（**跳过所有钩子**），所以它的回复**不会**流进播报队列——微信永远不念。
 
 详见 [架构文档](docs/architecture.md)。
 

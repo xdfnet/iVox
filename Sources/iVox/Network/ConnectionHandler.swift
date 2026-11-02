@@ -59,11 +59,6 @@ actor ConnectionHandler: SocketConnectionHandler {
             return
         }
 
-        if header.contains("type:stream") {
-            handleStream(fd: fd, header: header, leftover: data[(nl + 1)...], buf: &buf)
-            return
-        }
-
         // 其余请求读完 body 到 EOF 后分发
         guard drainToEOF(fd: fd, into: &data, buf: &buf) else {
             Darwin.close(fd)
@@ -111,133 +106,6 @@ actor ConnectionHandler: SocketConnectionHandler {
         }
     }
 
-    /// 流式播报：首帧 `{type:stream,source:x,turn:<id>}`，其后逐帧原文，
-    /// `{end}` 结束，`{cancel}` 取消（撤掉这条连接送来的页）。帧以 \n 分隔。
-    ///
-    /// **页的边界 = 一个长度帧**（`L<n>` + n 字节正文）：扩展把一条 assistant 消息的
-    /// 全文装进一帧，于是「一帧 = 一页」，与 Claude 那边「一个 MessageDisplay = 一页」同构。
-    /// 帧内再切句（合成单位），切句真源只在 Swift 一份（`splitSentences`）。
-    ///
-    /// **turn_id 只进日志**：它不参与排队、不落库（队列是页的 FIFO，先来先进）。
-    /// 它的用处只有一个——`{cancel}` 时按连接撤页（一条流 = 一轮 = 一条连接）。
-    private nonisolated func handleStream(fd: Int32, header: String, leftover: Data,
-                                          buf: inout [UInt8]) {
-        defer { Darwin.close(fd) }
-        let meta = parseMetaKV(header)
-        let head = requireHead(meta)
-        if let missing = head.missing {
-            // 与一次性播报同一把尺：source 与 voice 都必填，缺一即拒（见 RequiredHead）。
-            Log.warn("流式请求缺必填字段（\(missing)），已拒：客户端必须自己带上来源与音色")
-            return
-        }
-        let source = head.source
-        let voiceID = head.voiceID
-        let turn = meta["turn"] ?? "-"
-        Log.info("流式开始: source=\(source) voice=\(voiceID) turn=\(turn)")
-        // 本连接的入队/结束/取消全部串到同一根链上：帧序 = 执行序（见 StreamOpChain）
-        let chain = StreamOpChain()
-        // 本连接送来的页号（`{cancel}` 时按它撤回来路）
-        let tracker = StreamPageTracker()
-
-        var acc = Data()
-        var closed = false
-        // 长度帧状态：读到 "<n>\n" 后，记录还差多少字节正文；非 nil 时不按行解析。
-        var expectBytes: Int? = nil
-        // 旧裸文本（没有长度帧的老客户端）：攒起来，{end} 时当一页发出去。
-        var legacyText = ""
-
-        // 返回 false 表示收到结束/取消控制帧，停止读取。
-        func feed(_ chunk: Data) -> Bool {
-            acc.append(chunk)
-            // 帧迟迟不完整时也不能让 acc 无限涨
-            guard acc.count <= Self.maxBodyBytes else {
-                Log.warn("流式连接缓冲超长（\(acc.count) 字节），停止读取")
-                return false
-            }
-            while true {
-                // ── 长度帧正文消费中：按剩余字节数精确切，正文可含任意字节（含 \n/{end}）──
-                if let need = expectBytes {
-                    guard acc.count >= need else { return true }   // 数据不全，等更多
-                    let payload = Data(acc.prefix(need))
-                    acc.removeFirst(need)
-                    expectBytes = nil
-                    if let text = String(data: payload, encoding: .utf8), !text.isEmpty {
-                        emitStreamPage(text, source: source, voiceID: voiceID, turn: turn, chain: chain, tracker: tracker)
-                    }
-                    continue
-                }
-
-                guard let nl = acc.firstIndex(of: 0x0A) else { return true }  // 行不完整
-                let line = Data(acc[acc.startIndex..<nl])
-                acc.removeSubrange(acc.startIndex...nl)
-
-                // 长度帧头："L<n>" → 下一帧是 n 字节自描述正文。L 前缀使其不可能与
-                // 正常正文行（含纯数字、{end} 等）或旧客户端裸文本混淆。
-                if line.first == 0x4C, let len = parseLengthPrefix(Data(line.dropFirst())) {
-                    expectBytes = len
-                    continue
-                }
-
-                // 控制帧 / 旧裸文本（兼容老客户端）
-                guard let frame = String(data: line, encoding: .utf8) else { continue }
-                if frame == "{end}" {
-                    if !legacyText.isEmpty {
-                        emitStreamPage(legacyText, source: source, voiceID: voiceID,
-                                       turn: turn, chain: chain, tracker: tracker)
-                        legacyText = ""
-                    }
-                    Log.info("流式结束: turn=\(turn)")
-                    return false
-                }
-                if frame.hasPrefix("{cancel") {
-                    Log.info("流式取消: turn=\(turn)")
-                    // 归因记「是哪个接入方取消的」——`source` 是这条流自己报的身份。
-                    chain.hop { await self.cancelStreamPages(source: source, tracker: tracker) }
-                    return false
-                }
-                // 旧分页标记：现在页边界由长度帧承担，这个标记只作兼容（忽略）。
-                if frame == "{page}" { continue }
-                legacyText += frame + "\n"
-            }
-        }
-
-        if !leftover.isEmpty { closed = !feed(leftover) }
-        while !closed {
-            let n = Darwin.read(fd, &buf, buf.count)
-            if n <= 0 { break }
-            if !feed(Data(buf[0..<n])) { closed = true; break }
-        }
-        if !closed, !legacyText.isEmpty {  // EOF 兜底：正常结束 flush 残尾
-            emitStreamPage(legacyText, source: source, voiceID: voiceID, turn: turn, chain: chain, tracker: tracker)
-        }
-    }
-
-    /// 解析长度头数字部分（调用方已确认行首为 'L'）；空 / 非数字 / 超限返回 nil。
-    /// 先卡位数再算：否则 `L` 跟一长串数字会让 `n * 10` 溢出，直接 trap 崩掉整个守护进程
-    /// （而守护进程没有自恢复），这是同 UID 进程最容易踩到的一脚。
-    private nonisolated func parseLengthPrefix(_ data: Data) -> Int? {
-        guard !data.isEmpty, data.count <= 10 else { return nil }
-        var n = 0
-        for b in data {
-            guard b >= 0x30, b <= 0x39 else { return nil }
-            n = n * 10 + Int(b - 0x30)
-        }
-        return n <= Self.maxFrameBytes ? n : nil
-    }
-
-    /// 一个长度帧 = 一页（一条 assistant 消息）：清洗 → 切句 → 入队。
-    private nonisolated func emitStreamPage(_ raw: String, source: String,
-                                            voiceID: String, turn: String,
-                                            chain: StreamOpChain, tracker: StreamPageTracker) {
-        let cleaned = cleanText(raw)
-        guard !cleaned.isEmpty else { return }
-        let jobs = splitSentences(cleaned).map {
-            PlaybackJob(text: $0, voiceID: voiceID, source: source)
-        }
-        Log.info("流式入队: source=\(source) turn=\(turn) 句=\(jobs.count) chars=\(cleaned.count)")
-        chain.hop { await self.enqueuePage(text: cleaned, jobs: jobs, tracker: tracker) }
-    }
-
     private nonisolated func handleTTS(fd: Int32, data: Data) {
         defer { Darwin.close(fd) }
         guard let text = String(data: data, encoding: .utf8)?.trimmingCharacters(in: .whitespaces),
@@ -261,23 +129,11 @@ actor ConnectionHandler: SocketConnectionHandler {
         // 现在要停 daemon 走**正经信号**：读实例锁里的 pid，发 SIGTERM →
         // 走的是信号那条退出路径（有日志、有清理、有退出栈）。
         
-        let (head, content, isNow) = parseRequest(text)
-        if let missing = head.missing {
-            // **source 与 voice 都必填**：缺了就拒，不再猜（猜错 = 整页用错音色念出来）。
-            Log.warn("播报请求缺必填字段（\(missing)），已拒：客户端必须自己带上来源与音色")
-            return
-        }
-        let source = head.source
-        let voiceID = head.voiceID
+        let (source, voiceID, content, isNow) = parseRequest(text, config: config)
+        // **服务端不管来源与音色**（2026-11-02）：客户端说是什么就是什么。
+        // 缺 voice 是**正常路径**（`ivox speak --voice` 可省 → 走默认音色）；
+        // 缺 source 也不拒，只按 default 记一笔，便于事后对账。
         Log.info("请求解析: source=\(source) voice=\(voiceID) raw_chars=\(content.count)")
-        // 微信链路的播报开关：默认**不念**（聊天窗口里已经有文字，再念是打扰）。
-        // 微信侧的 claude 由 daemon spawn，它照样吃 Claude Code 那套 hook（hook 配在
-        // user 级 settings.json，谁启动 claude 都吃），hook 把来源标成 wechat 传回来，
-        // 由这里按配置裁决——真源在 config.toml，hook 不猜（2026-10-26）。
-        if source == VoiceSource.wechat && !(config.wechat?.speak ?? false) {
-            Log.info("微信来源播报已关闭（wechat.speak=false），丢弃 \(content.count) 字")
-            return
-        }
         Log.debug("请求原始内容: source=\(source) raw=\(logPreview(content))")
         let cleaned = cleanText(content)
         if cleaned.isEmpty {
@@ -309,25 +165,6 @@ actor ConnectionHandler: SocketConnectionHandler {
             Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(clen) 句=\(jobs.count)")
             Task { await queue.enqueuePage(text: cleaned, jobs: jobs) }
         }
-    }
-
-    /// 入队一页并记住它的页号（`{cancel}` 时按页号撤回来路）。
-    ///
-    /// **每条流连接自己记自己送来的页号**——这是「{cancel} 撤掉本轮内容」在新模型下的实现：
-    /// 没有 turn_id 参与排队，撤的依据只剩「哪几页是这条连接送来的」。
-    private nonisolated func enqueuePage(text: String, jobs: [PlaybackJob],
-                                         tracker: StreamPageTracker) async {
-        guard let pageNo = await queue.enqueuePage(text: text, jobs: jobs) else { return }
-        tracker.append(pageNo)
-    }
-
-    /// 撤掉这条流送来的全部页（`{cancel}`：用户中断了这一轮）。
-    private nonisolated func cancelStreamPages(source: String,
-                                              tracker: StreamPageTracker) async {
-        let pages = tracker.takeAll()
-        guard !pages.isEmpty else { return }
-        let dropped = await queue.discardPages(pages, .request(source))
-        Log.info("流式取消落地: source=\(source) 撤掉 \(pages.count) 页（\(dropped) 句）")
     }
 
     /// 跳过请求 `{type:skip,mode:page|all}`：手动打断的命令行入口（`ivox skip`
@@ -466,15 +303,9 @@ actor ConnectionHandler: SocketConnectionHandler {
     /// 合成 TTS 并将 PCM 分块写回客户端（请求-响应，不播放、不入队）
     private nonisolated func handleTTSPCM(fd: Int32, header: String, body: Data) {
         let meta = parseMetaKV(header)
-        let head = requireHead(meta)
-        if let missing = head.missing {
-            Log.warn("合成请求缺必填字段（\(missing)），已拒：客户端必须自己带上来源与音色")
-            _ = writeAll(StreamFrame.end, to: fd)
-            Darwin.close(fd)
-            return
-        }
-        let sourceID = head.source
-        let voiceID = head.voiceID
+        // 同上：服务端不管来源与音色，缺了用缺省（客户端该带全）。
+        let sourceID = meta["source"] ?? VoiceSource.default
+        let voiceID = meta["voice"] ?? config.defaultVoice
 
         let text = String(data: body, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -510,43 +341,22 @@ actor ConnectionHandler: SocketConnectionHandler {
         }
     }
 
-    /// 请求头里**必填**的两样：来源与音色。
-    ///
-    /// **2026-11-02 起两者都必填**：客户端必须说清「谁在说话」「用哪个音色」，
-    /// 守护进程不再自己猜——猜错的后果是**整页用错音色念出来**，而现场没人发现。
-    /// 音色由**客户端自己**从 config.toml 的 `[playback.sourceVoices]` 取好带过来
-    /// （`hook.sh` 与 pi 扩展都这么做；那条表仍是唯一真源，只是读它的人换成了客户端）。
-    struct RequiredHead {
-        var source: String
-        var voiceID: String
-        /// 缺了哪些必填字段（nil = 齐全）。文案直接进日志。
-        var missing: String?
-    }
-
-    /// 从请求头里取 source / voice，缺的记下来。
-    nonisolated private func requireHead(_ kv: [String: String]) -> RequiredHead {
-        let source = kv["source"] ?? ""
-        let voice = kv["voice"] ?? ""
-        var missing: [String] = []
-        if source.isEmpty { missing.append("source") }
-        if voice.isEmpty { missing.append("voice") }
-        return RequiredHead(source: source, voiceID: voice,
-                            missing: missing.isEmpty ? nil : missing.joined(separator: "+"))
-    }
-
     /// 解析一次性播报请求：`{source:x,voice:y,now:1}` + 正文。
-    /// **source 与 voice 缺一即拒**（见 `RequiredHead`）。
-    nonisolated private func parseRequest(_ text: String) -> (head: RequiredHead, content: String, isNow: Bool) {
+    ///
+    /// **来源与音色是客户端的事，服务端不猜、不管**（2026-11-02）：给了就用给的，
+    /// 没给就用缺省接着念。`source` 客户端必填（`ivox speak` 在命令行上把住这道），
+    /// `voice` 可省——省了走默认音色。各端通常自己在配置里查好音色再带上。
+    nonisolated private func parseRequest(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, isNow: Bool) {
         guard text.hasPrefix("{"), let end = text.firstIndex(of: "}") else {
-            // 连头都没有 → source 与 voice 都缺
-            return (RequiredHead(source: "", voiceID: "", missing: "source+voice"), text, false)
+            return (VoiceSource.default, config.defaultVoice, text, false)
         }
         let kv = parseMetaKV(String(text[...end]))
         // now：用户自己要求现在念（Opt+Z 译文 / `ivox speak --now`）→ **插队**，不是排队。
         // 与 source 无关：Opt+Z 走这条路，自检也要能压到它，否则「唯一一条机器借道」的路径
         // 永远没有自动化回归保护。
-        let head = requireHead(kv)
-        return (head, String(text[text.index(after: end)...]), kv["now"] != nil)
+        let source = kv["source"] ?? VoiceSource.default
+        let voiceID = kv["voice"] ?? config.defaultVoice
+        return (source, voiceID, String(text[text.index(after: end)...]), kv["now"] != nil)
     }
     nonisolated private func oneLine(_ value: String) -> String {
         value.replacingOccurrences(of: "\n", with: " ")
@@ -558,44 +368,5 @@ actor ConnectionHandler: SocketConnectionHandler {
         let limit = 2000
         guard value.count > limit else { return oneLine(value) }
         return oneLine(String(value.prefix(limit))) + "…（共 \(value.count) 字，日志已截断）"
-    }
-}
-
-/// 单连接内的队列操作串行链：让首帧 / 入队 / `{end}` / `{cancel}` 严格按**帧序**落地。
-/// 原先这四处各自 `Task {}`，落到 PlaybackQueue 的顺序全凭调度器——实测 `{end}` 的 Task
-/// 抢在同一连接后一个入队 Task 之前执行：轮次已被 `{end}` 关闭（turnOpen=0），迟到的同轮
-/// 入队又把它打开且再无人关，管道把分块播完后永久停在「等新 job」（/health 恒 playing=true、
-/// queued=0，看门狗与 drain 都够不着）。黑盒 A-tail/E3 用例抓到的「未收尾」即此。
-/// `hop` 只在连接自己的读取线程（`handle` → `feed`）调用，故无需同步。
-private final class StreamOpChain {
-    private var tail: Task<Void, Never>?
-
-    func hop(_ op: @escaping @Sendable () async -> Void) {
-        let prev = tail
-        tail = Task {
-            if let prev { _ = await prev.value }
-            await op()
-        }
-    }
-}
-
-/// 一条流连接送来的页号（`{cancel}` 时按它撤回来路）。
-///
-/// **每条连接一份**：`ConnectionHandler` 是 actor、多个连接共用它，
-/// 所以这袋子不能放在 actor 上（会串到别的连接去），得跟着连接走。
-/// 加锁是因为入队与取消可能落在不同的执行线程上（`chain.hop` 的 Task）。
-private final class StreamPageTracker: @unchecked Sendable {
-    private let lock = NSLock()
-    private var pages: [Int] = []
-
-    func append(_ pageNo: Int) {
-        lock.lock(); defer { lock.unlock() }
-        pages.append(pageNo)
-    }
-
-    func takeAll() -> [Int] {
-        lock.lock(); defer { lock.unlock() }
-        defer { pages.removeAll() }
-        return pages
     }
 }

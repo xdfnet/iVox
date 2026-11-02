@@ -221,17 +221,6 @@ actor PlaybackQueue {
         return pageNo
     }
 
-    /// 撤掉指定的几页（接入方放弃自己那一轮留下的页）。
-    @discardableResult
-    func discardPages(_ pageNos: [Int], _ trigger: InterruptTrigger) async -> Int {
-        let dropped = await session.discardPages(pageNos)
-        if dropped > 0 {
-            Log.info("打断（来源=\(InterruptOrigin(.cancelPages, trigger))）：撤回来路，丢弃 \(dropped) 句（\(pageNos.count) 页）")
-        }
-        await pumpOrSettle()
-        return dropped
-    }
-
     // MARK: - 打断（掐 + 掀）：两个原子动作，热键层不再接触掐
 
     /// 取消所有播放（正在播的和排队中的）。

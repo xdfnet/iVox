@@ -2,6 +2,34 @@
 
 ## 未发布 — 2026-11-02
 
+- **播报只有一个入口：`ivox speak`；各端自己拼好参数，服务端只管照单念** —
+  接入口从两条并成一条，架构不再有两套语义。
+  - **唯一入口**：`ivox speak --source <来源> [--voice <音色>] -- "<正文>"`，**一次请求 = 一页**。
+    `--source` **必填**（缺了命令行就报错，请求发不出去）；`--voice` **可省**——省了走默认音色。
+    各端自己攒页、自己读 `config.toml` 的 `[playback.sourceVoices]` 查音色、自己拼好命令。
+    **将来接新的端照这个模板来**——不要新开协议、不要新开 socket 协议分支。
+  - **服务端不猜、不管、不拒**：来源与音色是客户端的事。缺了就用缺省接着念，只记一行提示。
+    猜错的后果是**整页用错音色念出来**，而现场没人发现。
+  - **删掉整个流式协议**（pi 改走 `ivox speak` 后没有第二个用户）：长度帧、`{end}`、`{cancel}`、
+    `ConnectionHandler.StreamOpChain`、`StreamPageTracker` 全部删除；「撤回来路」这个能力
+    （`{cancel}` → `discardPages`）随之消失，打断回到**两档**（掀页 / 全掀）。
+    ⚠️ **代价**：pi 里按 Esc 中断后，已送出的页照念完（要立刻闭嘴用 `ivox skip --all`）。
+  - **微信永不出声，且没有开关**：微信那个 claude 改以 **`--bare`** 启动（跳过 settings 与插件里的
+    所有钩子）→ 它**压根不触发 `MessageDisplay`**（实测 hook.log 不再新增行，模型与接口配置照旧），
+    它的回复不会流进播报队列。`[wechat] speak` 开关、`sourceVoices` 的 wechat 行、
+    daemon 里「微信来源播报已关闭」的判断一并删除——「不念」变成结构性的，不是配置出来的。
+  - **hook.sh 只管 Claude 这一端**：去掉来源白名单与 `IVOX_SOURCE`，命令不再带参数；
+    它只做「攒整页 → 查音色 → 拼 `ivox speak`」。
+  - **自检**：6 条流式用例作废，剩 16 条；补 `N1`（一次请求只成一页）、`N2`（缺 voice 也照念）。
+    **全量 16 pass / 0 fail / 0 skip / 0 advisory**（协议改了必须重跑，旧断言会假绿）。
+    途中还修掉两处自检/安装器自己的毛病：`N1` 的正文太短（切句会把相邻短句合并到 ≤80 字，
+    本来就是一个「句」，断言写成「应切出多句」必然假红）；安装器判「hook 已存在」时整份文件
+    grep `hook.sh`，会把存量那条 Stop 当成「已有」→ 反而漏装 MessageDisplay（改成只看
+    MessageDisplay 那一段）。
+  - **真机验过**：CLI 缺 `--source/--voice` → 命令行报错不发请求；裸请求缺 voice → 服务端照样念
+    并记提示；hook 走 claude → 音色从配置取到；pi 的 `ivox speak --source pi --voice wanwan`
+    → 认；微信那个 claude 加 `--bare` → hook 不再触发、回复正常。
+
 - **协议必填：source 与 voice** — 对外 socket 协议的播报类请求（一次性正文 / 流式首帧 /
   `{type:tts}` 合成回传）**都必须带 `source:` 与 `voice:`**，缺任一 → 守护进程**拒收**
   并记日志说明缺哪个（`播报请求缺必填字段（voice），已拒`）。`ivox speak` 的

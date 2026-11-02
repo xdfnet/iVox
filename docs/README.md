@@ -14,7 +14,7 @@
 |---|---|
 | [architecture.md](architecture.md) | 整体架构：actor 模型、守护进程生命周期、各子系统 |
 | [hook-chain.md](hook-chain.md) | 从 AI 助手回复到出声的完整 Hook 链路（含踩坑清单） |
-| [socket-api.md](socket-api.md) | Unix Socket IPC 协议：TTS 播报（整页一次）、流式分页、ASR 识别、打断两档 |
+| [socket-api.md](socket-api.md) | Unix Socket IPC 协议：TTS 播报（整页一次，唯一入口 `ivox speak`）、ASR 识别、打断两档 |
 | [native-bridge.md](native-bridge.md) | 微信链路「Swift 直连 claude」的实测依据（v3.4.0 已实施） |
 | [runtime-files.md](../Sources/iVox/Resources/runtime-files.md) | 运行时家当：`~/.config/ivox/` 里每个文件是谁写的、能不能删、删了会怎样。**装机时由 `ivox init-config` 拷到 `~/.config/ivox/`** |
 

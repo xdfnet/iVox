@@ -10,7 +10,6 @@ final class InterruptOriginTests: XCTestCase {
     func testDescriptionCarriesBothTierAndTrigger() {
         XCTAssertEqual(InterruptOrigin(.skipPage, .hotkey("ctrl+1")).description, "掀页·键盘 ctrl+1")
         XCTAssertEqual(InterruptOrigin(.skipAll, .hotkey("ctrl+2")).description, "全掀·键盘 ctrl+2")
-        XCTAssertEqual(InterruptOrigin(.cancelPages, .request("pi")).description, "撤回来路·请求方 pi")
         XCTAssertEqual(InterruptOrigin(.disablePlayback, .request("cli")).description, "关播报·请求方 cli")
         XCTAssertEqual(InterruptOrigin(.shutdown, .system).description, "退出清场·系统")
     }

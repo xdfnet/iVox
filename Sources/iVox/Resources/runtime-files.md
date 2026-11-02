@@ -39,7 +39,7 @@ iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文�
 | 文件 | 谁写 | 能删吗 |
 |---|---|---|
 | `config.toml` | 你手改 / `ivox init-config` 生成 | ❌ 主配置，删了播报与音色全没 |
-| `hook.sh` | `install-hooks.sh` 从 `scripts/` 铺过来 | ❌ Claude 的播报 hook 入口 |
+| `hook.sh` | `install-hooks.sh` 从 `scripts/` 铺过来 | ❌ Claude 的播报 hook 入口（**只管 Claude 这一端**：攒整页 → 拼 `ivox speak`） |
 | `scripts/` | `make update` 时铺一次 | ⚠️ 删了下次 update 会补回来 |
 | `signing/` | 我（一次性备好） | ⚠️ 删了钥匙串重置后就没法用同一张证书签名了（权限会再掉一次） |
 

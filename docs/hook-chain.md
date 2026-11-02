@@ -6,11 +6,11 @@
 
 ```
 ┌─ Claude Code ─┐   ┌─ pi 扩展 ─┐
-│ MessageDisplay│   │ 长连接流式 │
-│（攒成整页一次）│   │ agent_start→agent_end │
+│ MessageDisplay│   │ 每页一次   │
+│（攒成整页一次）│   │ message_end│
 └──────┬────────┘   └─────┬──────┘
-       │  hook.sh          │  TS 扩展直连
-       │ <source>          │
+       │  hook.sh          │  TS 扩展调 CLI
+       │                   │
        └────────┬──────────┘
                 │
                 ▼
@@ -41,17 +41,17 @@
 
 | 工具 | 回复完成播报 | 配置位置 |
 |------|-------------|----------|
-| Claude Code | MessageDisplay → `hook.sh claude` | `~/.claude/settings.json` |
+| Claude Code | MessageDisplay → `hook.sh`（**只管 Claude 这一端**） | `~/.claude/settings.json` |
 | pi 扩展 | `agent_start`→`agent_end` 一条流跨整次输入；**一条 assistant 消息 = 一页**，`message_end` 时整页一次发出（不逐字转发） | `~/.pi/agent/extensions/ivox.ts` |
 
 > ⚠️ **不再挂「提交即打断」钩子**：hook 类工具原先的 `UserPromptSubmit → hook.sh interrupt <source>`（发停止帧）已被移除/忽略——**打断权只归 ivox 快捷键**（右⌘ 说话 / Opt+Z 译文插队 / 手动两档：Ctrl+1 掀页 · Ctrl+2 全掀）。在 Claude Code 里提交、后台 agent 轮次、pi 新页均不再打断当前播报，只排队等播全再播。`hook.sh` 也已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip` 承担）。
 
-Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh claude`）：assistant 消息流式显示时按行批触发，hook 按 `message_id` **攒成整页**（`final=True` 那一批到齐才交出去），交由助理自己切句排队。一页早先被拆成十几批碎片依次入队，听着不像一页，队列顺序也被切碎（2026-10-19 改）。
+Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh`，无参数）：assistant 消息流式显示时按行批触发，hook 按 `message_id` **攒成整页**（`final=True` 那一批到齐才交出去），交由助理自己切句排队。一页早先被拆成十几批碎片依次入队，听着不像一页，队列顺序也被切碎（2026-10-19 改）。
 
 ⚠️ **不再挂 `Stop` 钩子**（2026-11-02）：队列里不再有「摞」，端也不再报告「这一轮说完了」——
 **队列排空即收尾**。早先那条 Stop 收尾信号与正文赛跑，还害得最后一页被静默丢弃，整条拆掉了。
-安装器不再挂新的 Stop 钩子；存量那条（`hook.sh end claude`）留着无害——hook.sh 只认来源
-（`claude` / `wechat`），`end` 不在白名单里，静默退出。
+安装器不再挂新的 Stop 钩子；存量那条（`hook.sh end claude`）留着无害——hook.sh 只干 Claude 这一件事
+（多余的参数没人认），脚本只干「搬一页」这一件事，静默退出。
 
 ### 2. Hook 脚本
 
@@ -59,13 +59,18 @@ Claude Code 的播报**只走 `MessageDisplay`**（`hook.sh claude`）：assista
 
 播报模式：
 
-- **`hook.sh <source>`（MessageDisplay，Claude Code 交互会话主路径）**：assistant 消息流式显示时按行批触发，`delta` = 自上一批以来新完成的整行文本。hook 按 `message_id` 把各批正文追加进 `~/.config/ivox/pagebuf/`，`final=True`（这一页说完了）时把**整页**交给 daemon。**不带动作名**——收尾信号整条删除后只剩「搬一页」这一件事，再挂个 `msgdisplay` 的名字纯属多余。来源只认 `claude` / `wechat`，别的静默退出。**必须极快返回**（Claude Code 等本钩子返回才渲染该批），故攒页 + 审计用单个 python、播报用后台 `&`。走 `ivox speak --source <source> --voice <音色> -- "<整页正文>"`，一次请求 = daemon 队列里的一页。
+- **`hook.sh`（MessageDisplay，Claude Code 交互会话主路径）**：**只管 Claude 这一端**——
+  没有来源参数、没有动作名、没有微信（微信那个 claude 以 `--bare` 启动，压根不触发钩子）。
+  assistant 消息流式显示时按行批触发，`delta` = 自上一批以来新完成的整行文本。hook 按 `message_id`
+  把各批正文追加进 `~/.config/ivox/pagebuf/`，`final=True`（这一页说完了）时把**整页**交给 daemon。
+  **必须极快返回**（Claude Code 等本钩子返回才渲染该批），故攒页 + 审计用单个 python、播报用后台 `&`。
+  **音色自己查**（读 `config.toml` 的 `[playback.sourceVoices]`），拼好
+  `ivox speak --source claude --voice <音色> -- "<整页正文>"` 发出去，一次请求 = daemon 队列里的一页。
 **音色由 hook 自己取**：从 `config.toml` 的 `[playback.sourceVoices]` 里读该来源的键（取不到退回 `default` 键）——
 协议要求 source 与 voice 都必填，守护进程不再自己猜（2026-11-02）。空/过短纯西文 delta 不播。
-  ⚠️ **`<source>` 优先取环境变量 `IVOX_SOURCE`**（`${IVOX_SOURCE:-$2}`）：微信链路的 claude 由 daemon spawn，注入 `IVOX_SOURCE=wechat` → hook 把来源标成 `wechat` → daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播。hook 只标来源，不自己决定。
-  ⚠️ **hook 里调 `ivox` 用绝对路径** `~/.local/bin/ivox`：hook 由 claude 拉起、继承 claude 的环境；微信侧 claude 继承 launchd 托管 daemon 的残缺 PATH（`/usr/bin:/bin:/usr/sbin:/sbin`），裸名 `ivox` 找不到 → 播报静默失效（2026-10-26 实测）。
+  ⚠️ **hook 里调 `ivox` 用绝对路径** `~/.local/bin/ivox`：hook 由 claude 拉起、继承 claude 的环境，裸名 `ivox` 未必在 PATH 里 → 播报静默失效（2026-10-26 实测）。
 - **旧的 Stop 收尾信号**：**已删除**——收尾信号整套没了（队列排空即收尾）。
-  老配置里若还挂着 `hook.sh end claude`，它会被来源白名单挡掉，静默退出、不出声、不留痕。
+  老配置里若还挂着 `hook.sh end claude`，它带的参数没人认，脚本只干 Claude 这一件事，多余参数静默忽略。
 
 Hook 脚本不清洗内容；文本过滤统一由 daemon 侧 `TextCleaner` 执行。脚本不传配置文件路径，daemon 固定读 `~/.config/ivox/config.toml`（`config.json` 是更早的遗留格式，已不再读取）。
 
@@ -145,7 +150,7 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - **连续播放管道**：`processNext` 跨所有 job 循环，逐句合成→连续排队，句间不 drain，设备零停顿
 - **队列 = 页的 FIFO**（2026-11-02）：一页 = 一条 assistant 消息，页里装若干句（合成单位）。
   页按**到达顺序**排，谁都不插队；**没有轮次、没有分组、没有墓碑、没有收尾信号**。
-  一次请求（Claude 的一整页 / pi 的一个长度帧）= 一页。（容器与游标见
+  一次请求（Claude 的一整页 / pi 的一页）= 一页。（容器与游标见
   [playback/queue.md](playback/queue.md)：游标指向当前句但不把它弹出容器。）
 - **收尾 = 队列排空**：等设备把已排队音频播完（声音真停下）→ 收字幕、还汽水音乐音量，
   打「播报结束: 队列已空，字幕收起」。**不需要端报「说完了」**，也没有空闲宽限。
@@ -156,8 +161,8 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
   | 划词翻译 | Opt+Z → `speakUserInitiated`（播报暂停 + 译文走独立播放节点，念完从原处接着播；不进队列）；另有 `{now:1}` / `ivox speak --now` 同一条路 | 无（不是打断：译文走独立节点，队列内容一条不删） |
   | 全掀 | Ctrl+2 → `cancelAll` | `全掀·键盘 ctrl+2` |
   | 掀页 | Ctrl+1 → `skipCurrentPage` | `掀页·键盘 ctrl+1` |
-  归因 = **档位 × 入口**（`InterruptOrigin`，见 `Sources/iVox/Playback/InterruptOrigin.swift`）：**档位只写一处**，由「调用哪个方法」决定（掀页的方法配了全掀的档位就是自相矛盾），别的层只负责把**入口**带下来。**入口有三种**：键盘（带**实际生效的键位**——键位可配，写死 "Ctrl+2" 就是句假话）、外部请求（`ivox skip` 发的 `{type:skip,…,by:ivox-skip}`，**请求方自报**身份；查内核里的对端 pid 不可靠——`ivox skip` 发完就退，帧到时进程早没了）、系统（退出清场）。接入方自己发的 `{cancel}` 记 `撤回来路·请求方 <source>`。
-  这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。**旧的停止帧 `{type:stop}` 已完全失效且无发送方**（`hook.sh interrupt` 已摘、`ivox quiet` 已删），daemon 收到只记日志忽略、不再打断（这一支留作护栏：它走正文分支，删掉会把旧脚本发来的帧当内容念出来）。接入方放弃自己送来的那几页（`{cancel}` → `discardPages`）只撤它自己那几页，不掐在播、也不动别人的页。**agent 回复到达时一律排队，不抢麦**。
+  归因 = **档位 × 入口**（`InterruptOrigin`，见 `Sources/iVox/Playback/InterruptOrigin.swift`）：**档位只写一处**，由「调用哪个方法」决定（掀页的方法配了全掀的档位就是自相矛盾），别的层只负责把**入口**带下来。**入口有三种**：键盘（带**实际生效的键位**——键位可配，写死 "Ctrl+2" 就是句假话）、外部请求（`ivox skip` 发的 `{type:skip,…,by:ivox-skip}`，**请求方自报**身份；查内核里的对端 pid 不可靠——`ivox skip` 发完就退，帧到时进程早没了）、系统（退出清场）。（曾有「接入方自己发的 `{cancel}` → 撤回来路」这一档，随「唯一入口」删除。）
+  这个标识与 `PlaybackJob.source`（这段播报是谁发的）成对——前者回答「谁在说」，后者回答「这次是谁打断的」。**旧的停止帧 `{type:stop}` 已完全失效且无发送方**（`hook.sh interrupt` 已摘、`ivox quiet` 已删），daemon 收到只记日志忽略、不再打断（这一支留作护栏：它走正文分支，删掉会把旧脚本发来的帧当内容念出来）。（旧的 `{cancel}` 撤页机制随「唯一入口」删除——现在没有流，也就没有「这一轮」可撤。）**agent 回复到达时一律排队，不抢麦**。
 
 ### 7. MediaController
 

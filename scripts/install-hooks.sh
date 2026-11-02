@@ -20,19 +20,20 @@ if [[ -f "$SRC/hook.sh" ]]; then
 fi
 
 # ── 公共函数：用 jq 或 python3 安全写入 hook 配置 ──
-# 用法：write_hook <config> <source> <timeout> [event] [action]
+# 用法：write_hook <config> <timeout> [event]
 #   event  = settings.json 里的事件键。**只认 Claude Code 认识的名字**——自造 End 之类
 #            不认的名字会把整条 hook 静默丢弃（2026-10-16 修的就是这个）。
 # 认不得的 event 直接失败，不猜——猜出来的是一条没人要的 hook。
+#
+# hook.sh **只管 Claude 这一端**（2026-11-02），所以命令不带任何来源参数：
+# 它自己知道「我是 Claude 的钩子」，拼好 `ivox speak --source claude …` 交出去。
 write_hook() {
   local config_path="$1"
-  local tool_name="$2"
-  local timeout="$3"
-  local event="${4:-MessageDisplay}"
+  local timeout="$2"
+  local event="${3:-MessageDisplay}"
   local cmd
-  # hook 只有一个动作（搬整页正文），**不带动作名**——`hook.sh <source>` 即可。
   case "$event" in
-    MessageDisplay)   cmd="bash $HOOK_SH $tool_name" ;;
+    MessageDisplay)   cmd="bash $HOOK_SH" ;;
     *)                return 1 ;;
   esac
 
@@ -73,10 +74,33 @@ write_prompt_hook() {
 # 不按 turn 分组。**本脚本只写不删**：遗留的旧 Stop（`hook.sh speak claude`）请人工摘除，
 # 否则重复播报。
 CLAUDE_JSON="$HOME/.claude/settings.json"
+# 「已存在」要**只看 MessageDisplay 这一段**：整份文件里 grep 'hook.sh' 会把存量那条
+# Stop（`hook.sh end claude`）也当成「已有」→ 反而把该装的 MessageDisplay 漏掉。
+has_message_display_hook() {
+  if command -v jq &>/dev/null; then
+    # any(生成器; 条件)：生成器是 `.[]`（MessageDisplay 下的每个 hook 组），
+    # 条件再看该组里的 command 有没有 hook.sh。
+    jq -e '(.hooks.MessageDisplay // []) | any(.[]; ((.hooks // [])[] | .command? // "") | test("hook\\.sh"))' \
+      "$CLAUDE_JSON" >/dev/null 2>&1
+  else
+    python3 -c "
+import json, sys
+try:
+    d = json.load(open(sys.argv[1]))
+except Exception:
+    sys.exit(1)
+groups = d.get('hooks', {}).get('MessageDisplay', [])
+ok = any('hook.sh' in (h.get('command') or '')
+         for g in groups for h in (g.get('hooks') or []))
+sys.exit(0 if ok else 1)
+" "$CLAUDE_JSON" >/dev/null 2>&1
+  fi
+}
+
 if [[ -f "$CLAUDE_JSON" ]]; then
-  if grep -q 'hook.sh claude' "$CLAUDE_JSON" 2>/dev/null; then
+  if has_message_display_hook; then
     echo "[i] Claude MessageDisplay hook 已存在"
-  elif write_hook "$CLAUDE_JSON" "claude" 10 MessageDisplay; then
+  elif write_hook "$CLAUDE_JSON" 10 MessageDisplay; then
     echo "✓  Claude MessageDisplay hook"
   else
     echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"

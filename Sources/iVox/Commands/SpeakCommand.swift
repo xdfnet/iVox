@@ -10,11 +10,13 @@ struct SpeakCommand: AsyncParsableCommand {
         abstract: "朗读一段文本"
     )
 
-    @Option(name: .shortAndLong, help: "来源（claude/pi/wechat…）——谁在说话")
+    @Option(name: .shortAndLong, help: "来源（claude/pi/…）——谁在说话")
     var source: String
 
-    @Option(name: .shortAndLong, help: "音色 ID（用 ivox voice list 查看）")
-    var voice: String
+    /// 音色 ID（用 `ivox voice list` 查看）。**可省**：省了就走默认音色
+    /// （`[playback.sourceVoices].default`）。各端通常自己在配置里查好再带上。
+    @Option(name: .shortAndLong, help: "音色 ID（省了走默认音色）")
+    var voice: String?
 
     @Flag(name: .customLong("now"), help: "现在就念（插队）：播报只暂停（队列一条不删），这句从独立播放节点出声，念完从原处接着播")
     var isNow: Bool = false
@@ -24,7 +26,8 @@ struct SpeakCommand: AsyncParsableCommand {
 
     func run() async throws {
         let socketPath = AppPaths.socketPath
-        var parts: [String] = ["source:\(source)", "voice:\(voice)"]
+        var parts: [String] = ["source:\(source)"]
+        if let voice, !voice.isEmpty { parts.append("voice:\(voice)") }
         if isNow { parts.append("now:1") }
         let prefix = "{\(parts.joined(separator: ","))}"
         try SocketClient.send(prefix + text, to: socketPath)

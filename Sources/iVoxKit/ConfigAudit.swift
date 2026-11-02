@@ -74,6 +74,7 @@ public enum ConfigAudit {
         "captions.position": "浮窗统一贴底，落点不再可配（把这行删掉即可）",
         "overlay.lingerSeconds": "内容空了就立刻收窗，不再等（把这行删掉即可）",
         "playback.idleGraceSeconds": "队列里不再有「摞」，也不再有收尾信号——队列排空即收尾（把这行删掉即可）",
+        "wechat.speak": "微信永远不播报（那个 claude 不挂钩子，回复不进播报队列）——这个开关没有存在理由了（把这行删掉即可）",
     ]
 
     /// 某段的已知键（动态段返回空集——不检查内层）。

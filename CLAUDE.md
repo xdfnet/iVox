@@ -80,7 +80,7 @@ docs/                  — README.md（索引 + 分类规则）· architecture.m
 scripts/               — 装机与部署：runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）· hotkey.py（用 ESP32 真键盘按热键，测热键用）
                         接入资产（各外部 agent 的对接层，安装时由 install-hooks.sh cp，不编进二进制）：
                         · hook.sh（Claude Code 的播报 hook：**`hook.sh <source>`，不带动作名**——按 message_id 攒成整页送一次；收尾信号整条删除）
-                        · pi/ivox.ts（pi coding agent 流式扩展）
+                        · pi/ivox.ts（pi coding agent 扩展：每页调一次 ivox speak）
 ```
 
 ## 架构
@@ -91,7 +91,7 @@ scripts/               — 装机与部署：runtime.sh（部署）· download-m
 
 ```
 Claude Code → hook.sh                   ┐
-pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬─ PlaybackQueue (actor)
+pi 扩展(scripts/pi, 每页一次 speak)  ├→ Unix Socket → Daemon ─┬─ PlaybackQueue (actor)
 微信 ilink 长轮询 → WeChatPlatform（**只发消息**，回复本身不播；⚠️ 但它 spawn 的 claude
   **照样触发上面那套 hook**（hook 配在 user 级 settings.json，谁启动 claude 都吃）——
   微信回复会不会在本机念，由 `[wechat] speak` 决定，默认 false＝不念）
@@ -124,15 +124,6 @@ pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬�
   **没有收尾信号**（端不再报「说完了」——`Stop` 钩子整条摘掉，`hook.sh` 不再有 `end` 分支）——
   **队列排空即收尾**（等设备静了 → 字幕收起、汽水音量还回）。原「空闲宽限」配置项
   `idleGraceSeconds` 随收尾信号一起删了（配置审计会点名它）。
-- **流式协议（pi 侧）**：pi 扩展经一条长连接按 `\n` 分帧：首帧 `{type:stream,source:pi}`
-  （`turn` 可省，只进日志）→ 正文帧（**一个长度帧 `L<n>` + n 字节正文 = 一页**，
-  一条 assistant 消息一帧）→ `{end}` 结束 / `{cancel}` 撤掉**这条连接送来的那几页**
-  （`ConnectionHandler` 按连接记住页号，`StreamPageTracker`），EOF=end。
-  **这条连接的边界是「用户的一次输入」（pi 的一个 agent run）**——pi 一次输入会拆成 N 个 turn
-  （每个 turn 恰好一条 assistant 消息、工具调用就再来一轮），所以 `agent_start` 开流、
-  `agent_end` 关流，页的边界由**每条 assistant 消息**给出。
-  连接内的操作经 `ConnectionHandler.StreamOpChain` **按帧序执行**（乱序会让 `{cancel}` 先撤了个空、
-  后到的帧又把页入队，撤不掉）。详见 `docs/socket-api.md`。
 - **打断只有两档**（2026-11-02，原三档）：**掐** = 断在播的那一句，**掀** = 丢弃某一层的全部内容：
   **Ctrl+1 = 掀页**（`skipCurrentPage`：掐掉在播的那一句 + 丢掉用户此刻正在听的那一页的剩余内容，
   从下一页接着念）、**Ctrl+2 = 全掀**（`cancelAll`：取消在播 + 清空全部排队内容，**不留墓碑**——
@@ -151,32 +142,34 @@ pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬�
   ~~"assistant"~~（一会儿指回复、一会儿指会话）、~~"一叠 = 一轮、一张 = 一句"~~、~~"跳这句"~~、
   ~~"摞"~~（2026-11-02 作废）、~~"块"~~（现在叫**句**）都已作废。
 
-- **协议必填：source 与 voice（2026-11-02）**：对外 socket 协议的播报类请求
-  （一次性正文 / 流式首帧 / `{type:tts}` 合成回传）**都必须带 `source:` 与 `voice:`**，
-  缺任一 → 守护进程**拒收**并记日志说明缺哪个（`播报请求缺必填字段（voice），已拒`）。
-  **守护进程不再自己猜**「这个来源该用什么音色」——猜错的后果是**整页用错音色念出来**，
-  而现场没人发现。`ivox speak` 的 `--source`/`--voice` 因此也是必填（缺了在命令行就报错）。
+- **来源与音色是客户端的事，服务端不管（2026-11-02）**：客户端说清「谁在说话」「用哪个音色」，
+  **服务端照单念——不猜、不管、不拒**（`voice` 缺了就走默认音色，`source` 缺了就按 `default` 记）。
+  猜错的后果是**整页用错音色念出来**，而现场没人发现，所以这个选择权归客户端。
+  `ivox speak` 的 `--source` **必填**（缺了在命令行就报错，请求根本发不出去）；
+  `--voice` **可省**（省了走默认音色）——这道检查在客户端，正好符合「各端做好各端的事」。
   **音色的真源仍是 `config.toml` 的 `[playback.sourceVoices]`**，只是**读它的人从守护进程换成了客户端**：
   `hook.sh` 与 pi 扩展各自读它（该来源自己的键 → 取不到退回 `default` 键 → 都没有就不出声）。
   守护进程只留用这张表的 `default` 键（译文朗读兜底、`ivox voice list` 的「默认」标记）。
   ⚠️ 这意味着**改这张表要同时看两个客户端**（`scripts/hook.sh` 与 `scripts/pi/ivox.ts`），
   它们各自手写了一份 TOML 取值逻辑（不引第三方库）。
-- **播报通路（hook / 微信 / pi）**：①Claude Code 交互会话的播报**只靠 `MessageDisplay` 钩子**
-  （`hook.sh claude`）：assistant 消息按行批送来，hook 按 `message_id` **攒成整页**
-  （`final=True` 那一批到齐才交），一次 `ivox speak --source claude --voice <音色> -- "<整页正文>"`
-  送出去 = 队列里的一页。**不再挂 Stop / UserPromptSubmit**：Stop 收尾信号整套作废（队列排空即收尾，
-  不需要端报「说完了」）；UserPromptSubmit 因打断权只归快捷键。
-  **收尾 = 队列排空**：等设备把尾音播完（声音真停下）→ 收字幕、还汽水音乐音量。
-  `hook.sh` 已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip --page|--all` 两档承担，
-  `ivox quiet` 已删除）。②**微信链路默认不发声**：`WeChatPlatform` 只有 `sendMessage` /
-  `sendTyping` / 长轮询，回复本身不进播报队列——聊天窗口里已经有文字了，再念一遍是打扰
-  （见 `docs/playback/purpose.md` 的裁决）。⚠️ **但它 spawn 的 claude 照样触发 Claude Code 那套 hook**
-  （hook 配在 user 级 `~/.claude/settings.json`，**谁启动 claude 都吃**，不止 Claude Code 自己的会话）——
-  早先它「碰巧没出声」是因为 hook.sh 里调 `ivox` 用了裸名，而微信侧 claude 继承 launchd 托管 daemon
-  的残缺 PATH（`/usr/bin:/bin:/usr/sbin:/sbin`，没有 `~/.local/bin`）→ 找不到二进制、静默失败
-  （2026-10-26 实测）。**那是巧合不是机制**：hook 现在一律用绝对路径 `~/.local/bin/ivox`；
-  微信侧 spawn claude 时注入 `IVOX_SOURCE=wechat`，hook 据此标来源；**播不播由 daemon 按
-  `[wechat] speak` 裁决（默认 false＝不念）**，真源在 config.toml，hook 不猜。③pi 走流式（见上）。
+- **播报只有一个入口：`ivox speak`**（2026-11-02）：各端自己拼好命令
+  （`ivox speak --source <来源> --voice <音色> -- "<正文>"`）再发出去，一次请求 = 队列里的一页。
+  **将来接新的端，照这个模板来**：自己攒页 → 自己读 `config.toml` 的 `[playback.sourceVoices]`
+  查音色 → 自己拼好上面这条命令调过去（查不到音色就不带 `--voice`，服务端会走默认音色）。
+  **不要新开协议、不要新开 socket 协议分支**
+  （曾经有第二条入口——pi 的流式连接——两条入口就是两套语义，各自在漂）。
+  **服务端只管照单念**，不猜来源、不猜音色。三个接入方各自做好各自的事：
+  ①**Claude Code**：`MessageDisplay` 钩子 → `hook.sh`（**只管 Claude 这一端**：按 `message_id`
+  攒成整页 → 自己查音色 → 拼 `ivox speak --source claude --voice <音色>`）。
+  **不再挂 Stop / UserPromptSubmit**：Stop 收尾信号整套作废（队列排空即收尾，不需要端报「说完了」）；
+  UserPromptSubmit 因打断权只归快捷键。**收尾 = 队列排空**：等设备把尾音播完 → 收字幕、还汽水音量。
+  手动打断走命令行 `ivox skip --page|--all` 两档（`ivox quiet` 已删除）。
+  ②**微信：永不出声**——微信那个 claude 以 **`--bare`** 启动（跳过所有钩子，实测 hook 不再触发，
+  模型与接口配置照旧），所以它的回复**压根不进播报队列**。聊天窗口里已经有文字了，再念一遍是打扰
+  （见 `docs/playback/purpose.md` 的裁决）。**没有开关**：微信不播报是结构性的，不是配置出来的。
+  ③**pi**：每页（一条 assistant 消息）调一次 `ivox speak --source pi --voice <音色>`。
+  ⚠️ 代价：以前 pi 走流式连接能 `{cancel}` 撤掉这一轮的页，现在没有流也就撤不回来
+  （已送出的页照念完；要立刻闭嘴用 `ivox skip --all`）。
 
 - **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者：右⌘（默认；配置可改成右⌃ 或两者）→ `SpeechInputService`，`Opt+Z` → `TranslationService`，`Opt+Q/A/X/S/C` → `QuickActionsService`，`Ctrl+2`/`Ctrl+1` → `PlaybackQueue`（手动打断两档：掐+全掀 / 掐+掀页）（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `iVoxKit/HotKeySpec.swift` 的 `HotKeyAction` 加一个动作 + `defaultChord` 给默认键位 + 在 `setUpHotKeys` 加一个消费者**（`GlobalKeyTap` 里不再有键位表，它只消费）。**键位可在配置 `hotkeys` 段按动作名改**（TOML 写法 `translate = "opt+z"`；首次安装会写全量默认键位）；⚠️ 默认键位有**两份副本**：代码兜底 `HotKeySpec.defaultChord` 与模板 `iVoxKit/ConfigTemplate.swift`（安装脚本不再内嵌第三份，改默认要同步这两处）；配错时启动日志会写明（哪个动作、错在哪、退回哪个默认），生效的键位逐行打「热键: 动作 = 键位」。改完跑 `ivox restart`（只重启进程，不动登录自启开关）。 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Opt+Z 毫无反应"。
 - **防误触也在 tap 层判，一处判完**：① **同键冷却，按键分档**——`Opt+Z` 0.2s（它靠后写胜出连按，冷却只挡连击）、两个打断键 0.3s（掀页全掀本就该能连按）、其余 1s；冷却中**仍然吃掉事件**只是不执行（漏给目标 app 更糟），走 `systemUptime`，只在 tap 线程读写。② **语音键（右⌘，默认只有它）有 150ms 长按阈值**——按下不足就松开判为误触，按下沿直接丢弃（很多 App 用右⌘，碰一下就打断播报+暂停音乐+开麦代价太大）。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」的第二句吃掉。
@@ -219,7 +212,7 @@ pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬�
   `enabled`（播报总开关）与音色（`[playback.sourceVoices]` + `[[playback.voices]]`，2026-10-29 从
   顶层挪进来——音色只服务播报；老位置照读不失效，加载时自动搬家）。
   ⚠️ `[playback.sourceVoices]` 这张「来源→音色」表**由客户端读**（hook.sh 与 pi 扩展），
-  守护进程不再拿它兜底（协议要求 voice 必填）——它只用 `default` 键。⚠️ `idleGraceSeconds`
+  守护进程不再拿它兜底——它只用 `default` 键（客户端查不到音色时走的就是这个）。⚠️ `idleGraceSeconds`
   已删（收尾信号整套作废，队列排空即收尾）——还写着它会被配置审计点名；③ **用户数据**——录音、微信
   context_token 等程序写出的东西。**写错的键不会静默**：`ConfigAudit` 在解码后对照各段已知键
   打日志，还能猜「是不是想写 allowFrom？」（已知键从各类型 `CodingKeys` 派生，不另抄清单）。
@@ -372,12 +365,16 @@ make check-tts                      # 播报黑盒自检：压真实 daemon，20
 make check-tts ARGS="-f tail"       # 只跑匹配用例；--strict 让 advisory 计入失败；--managed 自行重启守护进程
 ```
 
-`scripts/tts-check.mjs`（零依赖 Node，仅用 `node:` 内置模块）经 Unix socket 发流式帧、`GET /health` 探运行态、增量 tail `daemon.log` 断言：协议正确性、合成时长、轮次隔离、取消丢弃迟到帧、EOF 残尾、并行取消不拖垮在跑的轮（pi 复现）、停止哨兵作废在跑的轮、多轮交错时队首轮等块不得空转（`E8`）、密集打断压测、打断后活性、尾音完整（`needsAudio`，无设备自动 skip）。断言要数「队列状态」等 DEBUG 行，而 daemon 默认只留 INFO 及以上（`Logger` 的级别门限），所以脚本自己 `launchctl setenv IVOX_LOG_LEVEL=debug` + `kickstart` 重启 daemon，跑完 unset 环境变量——**这是它跟普通 `ivox on` 唯一的区别，别把它改回附加到已在跑的 daemon**（2026-10-17：日志门限一落地，`E3`/`A-tail` 两条靠 DEBUG 行吃饭的断言直接假红）。**它是排障工具，不是每次改动都要跑的回归**：日常改动用 `make test` + 单点验证（临时脚本压真实 socket、看 `daemon.log`）；只有正常播报出问题（没声音/卡住/串音/未收尾）时才用它定位。**但改播报队列核心（`PlaybackQueue` / `ConnectionHandler` 的收尾·打断·入队）时必须跑一次全量**——2026-10-16 踩过：三个用例悄悄腐烂成假绿（两条正则与日志格式失配、一条断言过严、一条被自检自己的噪声检测抓成 skip），全靠一次全量才暴露；修完全量 13/13。**2026-10-19 拆成三进程后又跑全量：19 pass / 0 fail / 1 advisory**；
+`scripts/tts-check.mjs`（零依赖 Node，仅用 `node:` 内置模块）经 Unix socket 发**一次请求 = 一页**的
+播报请求（与 `ivox speak` 同一个入口）、`GET /health` 探运行态、增量 tail `daemon.log` 断言：
+一次请求只成一页（`N1`）、服务端不管来源与音色（`N2`）、合成时长、队列见底不得空转（`E8`）、
+密集打断压测、打断后活性、尾音完整（`needsAudio`，无设备自动 skip）。断言要数「队列状态」等 DEBUG 行，而 daemon 默认只留 INFO 及以上（`Logger` 的级别门限），所以脚本自己 `launchctl setenv IVOX_LOG_LEVEL=debug` + `kickstart` 重启 daemon，跑完 unset 环境变量——**这是它跟普通 `ivox on` 唯一的区别，别把它改回附加到已在跑的 daemon**（2026-10-17：日志门限一落地，`E3`/`A-tail` 两条靠 DEBUG 行吃饭的断言直接假红）。**它是排障工具，不是每次改动都要跑的回归**：日常改动用 `make test` + 单点验证（临时脚本压真实 socket、看 `daemon.log`）；只有正常播报出问题（没声音/卡住/串音/未收尾）时才用它定位。**但改播报队列核心（`PlaybackQueue` / `ConnectionHandler` 的收尾·打断·入队）时必须跑一次全量**——2026-10-16 踩过：三个用例悄悄腐烂成假绿（两条正则与日志格式失配、一条断言过严、一条被自检自己的噪声检测抓成 skip），全靠一次全量才暴露；修完全量 13/13。**2026-10-19 拆成三进程后又跑全量：19 pass / 0 fail / 1 advisory**；
 2026-10-20 审计补两条用例（`F-pcm-duration`、`S3-skip-stack-plain-stacks-are-separate`），同日补
 `R1`（誊清员崩了 → 该块作废 / 队列继续 / 监督者重拉，v6.0.0 的招牌能力，此前只有一次手工验收撑着），
-现共 **20 条**（`S3-skip-stack-*` 随「摞」一起删掉了）。
+现共 **16 条**（`S3-skip-stack-*` 随「摞」一起删掉了；6 条流式用例随「唯一入口」一起删掉，
+补了 `N1`/`N2` 两条盯新契约）。
 **2026-11-02 队列改版后重跑全量：20 pass / 0 fail / 0 skip / 0 advisory**（用例按新协议重写，
-旧断言一律不算数——它们会假绿）。
+旧断言一律不算数——它们会假绿）。**同日「唯一入口」改版后用例重写为 16 条，全量 16 pass / 0 fail / 0 skip / 0 advisory**。
 **手动起的 daemon 必须以 `IVOX_LOG_LEVEL=debug` 起**，否则脚本切不动它的日志级别——它认得出
 DEBUG 不可见，会把靠 DEBUG 行吃饭的 `E3`/`A-tail` 降级为 skip 并写明原因（2026-10-20 加这道保护：
 原先只打一行警告就往下跑，那两条直接假红，报「入队块数(0)」这种看着像产品坏了的数）。

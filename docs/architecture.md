@@ -425,6 +425,7 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
 
 ```
 1. Hook 脚本 → `ivox speak -s claude -v <音色> -- "<整页正文>"`（音色由 hook 自己从配置取）
+   —— **各端自己拼命令，播报只有一个入口**
 2. SpeakCommand → Unix Socket `{source:claude,voice:taozi}整页正文`
 3. ConnectionHandler.handle():
    - 解析前缀 → source="claude"、voice="taozi"（**两者都必填，缺一即拒**）
@@ -441,18 +442,21 @@ Swift 6 严格并发下，`@Sendable` 闭包不能捕获 actor 内的 `var`。�
    浮窗一消失才恢复），打「播报结束: 队列已空，字幕收起」
 ```
 
-### pi 流式播报（第二层流式）
+### pi 播报（走唯一入口）
 
-pi 扩展（`scripts/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）**一条 assistant 消息 = 一页**，在 `message_end` 时把整页原文一次发出（不逐字转发、不攒缓冲），经一条长连接按 `\n` 分帧送入 socket。**这条连接的边界是一个 agent run（= 一次输入）**——pi 的结构是 `agent_start` 之后 N 个 turn 循环、每个 turn 恰好一条 assistant 消息（`packages/agent/src/agent-loop.ts`），整轮回复都落在同一个 `agent_start … agent_end` 之间；**页的边界就是那条 assistant 消息**，一个长度帧一页：
+pi 扩展（`scripts/pi/ivox.ts` → `~/.pi/agent/extensions/ivox.ts`）**一条 assistant 消息 = 一页**，
+在 `message_end` 时把整页原文交给 `ivox speak`（不逐字转发、不攒缓冲）：
+自己查音色（读 `config.toml` 的 `[playback.sourceVoices]`）→ 拼命令 → 调 CLI。
 
 ```
-{type:stream,source:pi}\n     首帧开流（声明来源；turn 可省，只进日志）
-L<字节数>\n<整页正文>          一个长度帧 = 一页
-{end}\n                      agent_end 收尾      或  {cancel}\n（Escape：撤掉这条连接送来的页）
+ivox speak --source pi --voice wanwan -- "<整页正文>"
 ```
 
-`ConnectionHandler.handleStream` 收到一个长度帧就**当成一页**：清洗 → 切句 → 入队（`enqueuePage`）。
-切句/清洗真源只在 Swift 一份，TS 绝不切句（否则破坏 Markdown AST 块末补句号与跨行规则）。
+**与 Claude 那边同一条路**（唯一入口）。切句/清洗真源只在 Swift 一份，客户端绝不切句
+（否则破坏 Markdown AST 块末补句号与跨行规则）。
+
+> ⚠️ 代价：以前 pi 走长连接，能用 `{cancel}` 撤掉这一轮送来的页；现在没有流也就撤不回来
+> （已送出的页照念完；要立刻闭嘴用 `ivox skip --all`）。
 
 ### 微信消息
 
@@ -460,12 +464,14 @@ L<字节数>\n<整页正文>          一个长度帧 = 一页
 1. WeChatPlatform 长轮询 getupdates（每 ~35 秒）
 2. 收到消息 → 去重 → 白名单过滤 → 提取文本
 3. Daemon.handleWeChatMessage()
-   → ClaudeAskService.askStreaming()（常驻 `claude`，走 stream-json 双工，非 --print）
+   → ClaudeAskService.askStreaming()（常驻 `claude`，走 stream-json 双工，**带 --bare**）
    → WeChatPlatform.sendMessage() 发回微信
 ```
 
-**这条链路默认不发声**：回复以文字发回微信，不进 `PlaybackQueue`（裁决见
+**这条链路永不发声**：回复以文字发回微信，不进 `PlaybackQueue`（裁决见
 [playback/purpose.md](playback/purpose.md)）——聊天窗口里已经有文字了，再念一遍是打扰。
+**怎么保证的**：那个 claude 以 `--bare` 启动（跳过 settings 与插件里的所有钩子），
+所以它**压根不触发 `MessageDisplay`**——它的回复不会流到播报队列。没有开关，是结构性的。
 
 ⚠️ 但它**照样会触发 Claude Code 的 hook 体系**：hook 配在 user 级
 `~/.claude/settings.json`，**谁启动 claude 都吃**，不止 Claude Code 自己的会话。微信侧的
@@ -561,11 +567,13 @@ hook.sh / pi 扩展:
 
 | 工具 | 配置/挂载 | 回复播报 |
 |------|----------|----------|
-| Claude Code（交互会话） | `~/.claude/settings.json` | **MessageDisplay → `hook.sh claude`**（assistant 行批增量，hook 攒成整页，final 批到齐才整页交出） |
-| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_end` 整页一次（一个长度帧一页；`agent_settled` 兜底） |
+| Claude Code（交互会话） | `~/.claude/settings.json` | **MessageDisplay → `hook.sh`**（assistant 行批增量，hook 攒成整页，final 批到齐才整页交出） |
+| PI coding agent | `~/.pi/agent/extensions/ivox.ts` | `message_end` 整页一次（每页调一次 `ivox speak`） |
 
 由 `install-hooks.sh` 统一安装（Claude 只挂 MessageDisplay）；它**不再挂 UserPromptSubmit interrupt**（`write_prompt_hook` 已被置为 no-op），**也不再挂 Stop**（2026-11-02：队列排空即收尾，端不再报告「这一轮说完了」）。它**只写不删**：老配置里遗留的 Claude `Stop` 播报得人工摘除（`settings.json` 的 `hooks.Stop`），否则与 MessageDisplay 同播会把整条回复念两遍。
-`hook.sh` 现在**只认来源、不带动作名**（用法 `hook.sh <source>`，来源只认 `claude` / `wechat`，别的静默退出）：提取 `delta` 增量、按 `message_id` 攒成整页，经 `ivox speak -s <来源> -v <音色>` 排队入队（不打断；音色由 hook 自己从 `[playback.sourceVoices]` 取）。存量那条 `hook.sh end claude` 无害——`end` 不在来源白名单里，静默退出。
+`hook.sh` 现在**只管 Claude 这一端**（用法 `hook.sh`，无参数）：提取 `delta` 增量、按 `message_id` 攒成整页，
+自己从 `[playback.sourceVoices]` 查音色，拼 `ivox speak -s claude -v <音色>` 排队入队（不打断）。
+微信那一端不走 hook（那个 claude 以 `--bare` 启动，压根不触发钩子），所以这里没有微信。
 
 **`~/.config/ivox/pagebuf/`** 是 hook 链的一小块状态：hook 按 `message_id` 把每批正文追加进去，
 `final=True` 时把整页取出交出去。**队列侧不认它**（页号由助理自编）。

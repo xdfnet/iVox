@@ -102,6 +102,14 @@ actor ClaudeAskService {
         let p = Process()
         p.executableURL = URL(fileURLWithPath: Self.resolveClaude(preferred: claudePath))
         var args = [
+            // **--bare：微信不走 hook**（2026-11-02）。这个 claude 是打印模式，
+            // 但它照样会触发 user 级 settings.json 里的 `MessageDisplay` 钩子
+            // （谁启动 claude 都吃）——于是微信的回复会被当成 Claude 的回复搬进播报队列。
+            // `--bare` 让它跳过所有钩子（settings 与插件里的都跳），
+            // 而模型与接口配置照旧（env 仍从 user settings 来，实测回复正常）。
+            // 微信**永远不播报**：聊天窗口里已经有文字了，再念一遍是打扰
+            // （docs/playback/purpose.md 的裁决）。
+            "--bare",
             "--input-format", "stream-json",
             "--output-format", "stream-json",
             "--verbose",
@@ -110,12 +118,6 @@ actor ClaudeAskService {
         if !sessionID.isEmpty { args += ["--resume", sessionID] }
         p.arguments = args
         p.currentDirectoryURL = URL(fileURLWithPath: workDir)
-        // 标出「这个 claude 是微信链路起的」：它照样触发 Claude Code 那套 hook
-        // （hook 配在 user 级 settings.json，谁启动 claude 都吃），hook 靠这个环境变量
-        // 把来源标成 wechat 传回 daemon，由 daemon 按 `wechat.speak` 开关裁决要不要念。
-        var env = ProcessInfo.processInfo.environment
-        env["IVOX_SOURCE"] = VoiceSource.wechat
-        p.environment = env
 
         let inPipe = Pipe(), outPipe = Pipe(), errPipe = Pipe()
         p.standardInput = inPipe
