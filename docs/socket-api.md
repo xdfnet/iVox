@@ -29,22 +29,18 @@
 |------|------|------|
 | `source` | 否 | 来源标识，默认 `default`。**`wechat` 是保留来源**：微信链路的 hook 会标它，daemon 按 `[wechat] speak`（默认 false＝不念）裁决要不要播 |
 | `voice` | 否 | 音色 ID，默认按 `config.toml` 的 `[playback.sourceVoices]` 映射 |
-| `group` | 否 | 分组号 = **一摞**（一次回复）：同一摞分多次发时带上同一个值（Claude 传 `turn_id`），服务端把它们并进**同一摞**；掀摞时按它拦住"这一摞的后续批次"。⚠️ **下一条 `group` 到来不会自动盖上前一摞**——盖印（判「说完了」）只有两条路：发 `end:1`，或等满 60 秒空闲宽限 |
-| `end` | 否 | **必须写成 `key:value` 形式**（如 `end:1`；裸 `end` 不生效——字段按 `,` 切分再按第一个 `:` 拆成键值，只认成对的；值本身不校验）。`end:1` 表示**这是该分组的最后一批**，收尾该摞（段可前移）。漏发它这摞会一直「还在说」，直到 60 秒空闲宽限兜底 |
-| `page` | 否 | 外部页标识：同一个 `page` 值的内容会被并进**同一页**（Claude 传 `message_id`）。缺省时服务端自编页号；外部 `page` 只作「算不算同一页」的线索，不取代自编页号 |
-| `now` | 否 | **必须写成 `key:value` 形式**（如 `now:1`；裸 `now` 不生效，同上）。表示**现在就念**：播报**暂停**（缓冲原样留着，一条不删），这句从**独立播放节点**出声，念完从原处接着播。**与 source 无关**——Opt+Z 划词译文走的就是这条路；它**不进队列**，所以队列顺序一点没变、其余排队的一个不丢、也不立墓碑。⚠️ 同时带 `group` 时以 `group` 为准，`now` 被忽略 |
+| `now` | 否 | **必须写成 `key:value` 形式**（如 `now:1`；裸 `now` 不生效——字段按 `,` 切分再按第一个 `:` 拆成键值，只认成对的；值本身不校验）。表示**现在就念**：播报**暂停**（缓冲原样留着，一条不删），这句从**独立播放节点**出声，念完从原处接着播。**与 source 无关**——Opt+Z 划词译文走的就是这条路；它**不进队列**，所以队列顺序一点没变、其余排队的一个不丢 |
 
 **无响应**（fire-and-forget）
 
-**`group` 用法**（Claude 的 MessageDisplay 走的就是这条：一次回复分多次送来）
+**一次请求 = 一页**（一条 assistant 消息的全文）。服务端清洗、切句后入队为**一页**，
+页与页之间**先来先进**，不分组、不排队次：
+
 ```bash
-echo "{source:claude,group:turn-1}第一段" | nc -U ~/.config/ivox/ivox.sock
-echo "{source:claude,group:turn-1}第二段" | nc -U ~/.config/ivox/ivox.sock
-# 一次回复说完要**显式收尾**（end:1）：下一条 group 到来不会自动盖掉 turn-1
-echo "{source:claude,group:turn-1,end:1}说完了" | nc -U ~/.config/ivox/ivox.sock
-echo "{source:claude,group:turn-2}下一轮" | nc -U ~/.config/ivox/ivox.sock
+echo "{source:claude}一整页的正文" | nc -U ~/.config/ivox/ivox.sock
 ```
-`group` 里不要出现 `,`（协议按它切分字段）。
+
+⚠️ 字段里不要出现 `,`（协议按它切分字段）。
 
 **示例（bash）**
 ```bash
@@ -68,9 +64,9 @@ func speak(_ text: String, source: String? = nil, voice: String? = nil) {
 }
 ```
 
-### 1b. 流式 TTS — 边生成边播报（turn）
+### 1b. 流式 TTS — 一条连接送一页页的正文
 
-整轮回复边生成边投递，服务端在安全边界切句，第一句生成完即开播，不必等整轮。
+接入方自己开一条连接，边生成边把**一页**交过来。**一个长度帧 = 一页**（一条 assistant 消息的全文）。
 一条连接多帧，连接保持打开。帧分两类：
 
 **正文帧用自描述长度帧**（v3.6.2 起，pi 已采用）：
@@ -83,30 +79,26 @@ L<UTF-8 字节数 N>\n   ← 帧头：大写 L + 纯 ASCII 十进制字节数 + 
 **控制帧仍裸行**（以 `\n` 结尾）：
 
 ```
-{type:stream,source:pi,turn:<唯一id>}   首帧：开流（声明来源/音色/轮次）
-{page}                                   分页帧：一条 assistant 消息开始 = 一页
-                                         （pi 每个 turn 恰好一条 assistant 消息）
-{end}                                    结束帧：flush 残尾并结束该轮保活（允许空段前移）
-{cancel} / {cancel:<turn>}               取消帧（用户中断）
-                                         ⚠️ 后缀的 turn **不参与判断**：取消的是本连接首帧声明的那一轮
+{type:stream,source:pi}          首帧：开流（声明来源；可选带 voice / turn）
+{end}                             结束帧：这条连接送完了
+{cancel}                          取消帧（用户中断）：撤掉**这条连接送来的那几页**
 ```
 
-客户端直接断开（EOF）等价于 `{end}`。
+客户端直接断开（EOF）等价于 `{end}`（正文已经整帧送出，EOF 只补发残尾）。
 
 ⚠️ **每条连接有 10 秒读超时**（`SocketServer.swift` 的 `SO_RCVTIMEO`）：连接上连续 10 秒没有新字节，
-服务端把它当 EOF 处理——收尾该轮并结束保活。所以**长间隔的流式客户端（超过 10 秒才发下一帧）会被静默掐断**；
+服务端把它当 EOF 处理。所以**长间隔的流式客户端（超过 10 秒才发下一帧）会被静默掐断**；
 要么保持心跳，要么把间隔压到 10 秒内。
 
-> **为何引入 L 帧**：旧协议正文帧靠 `\n` 定界、控制帧是裸 `{end}`，于是正文中独立成行的 `{end}`/`{cancel}` 会被误判成控制帧（协议注入），正文里的换行也和帧定界符混淆。L 帧按字节精确切，正文可含任意内容。服务端**向后兼容**：行首不是 `L<数字>` 的仍按旧裸文本帧解析（裸文本 + `\n`），旧客户端无需改造。
+> **为何引入 L 帧**：旧协议正文帧靠 `\n` 定界、控制帧是裸 `{end}`，于是正文中独立成行的 `{end}`/`{cancel}` 会被误判成控制帧（协议注入），正文里的换行也和帧定界符混淆。L 帧按字节精确切，正文可含任意内容。服务端**向后兼容**：行首不是 `L<数字>` 的仍按旧裸文本帧解析（裸文本 + `\n`），攒到 `{end}`/EOF 时当一页发出去。
 
 **关键约定**
 
-- 客户端**只转发原文增量，不要自己切句/清洗**。切句（`splitSentences`）与降噪（`cleanText`）真源只在服务端：按句末/段落边界（`。！？!?…；;` 及换行；不含英文 `.`，以免切碎小数/缩写）、且保证吐出前缀的代码围栏（```` ``` ````）自身配平后才抽出整段清洗，避免念出 Markdown/代码残片。
-- 过短句块（「好的。」「明白。」）不立即开播：服务端 `StreamBuffer` 有最小 flush 颗粒（`minFlushChars`=24 字），边界只标记、攒够长度才在最近边界一次吐出（常含多句）；残尾由 `{end}`/EOF 兜底全播。客户端无需关心，照常逐 delta 转发即可。
-- `turn` 必填且一次连接内不变。**新 turn 不打断旧 turn**——按到达序排入独立段，播完前一段才接；同一 turn 的帧顺序追加。
-- **`turn` 的边界是「用户的一次输入」，不是接入方的内部循环单元**。pi 里一次输入会拆成 N 个 turn（每个 turn 恰好一条 assistant 消息、工具调用就再来一轮），整摞回复都在同一个 run 内——所以那条连接要跨完整个 run（`agent_start` 开流 / `agent_end` 关流），中途用 `{page}` 帧分页。**踩过的坑**：早先按 pi 的 turn 开合连接，等于把一次输入切成 N 摞，Ctrl+2 掀一次只掀掉一页、后面几页照播（与「多摞被焊成一摞」那类事故是同一问题的两面：那边掀过头、这边掀不到）。
-- turn 未收到 `{end}` 前，句间队列瞬时排空也不判收尾（不盖章）、不退管道，继续等下一批块。
-- 服务端**保证同一连接内按帧序执行**（首帧 → 各正文帧 → `{end}`/`{cancel}`，内部用 `StreamOpChain` 串成一链）。顺序是协议语义的一部分：`{end}` 之后该 turn 不再有帧可关，若内部执行乱序（关闭先落地、迟到的同轮分块后落地并把轮次重新打开），整条管道会在分块播完后永久挂起（`/health` 恒 `playing=true`）。
+- 客户端**只转发原文，不要自己切句/清洗**。切句（`splitSentences`）与降噪（`cleanText`）真源只在服务端：按句末/段落边界（`。！？!?…；;` 及换行；不含英文 `.`，以免切碎小数/缩写）切句，并保证吐出前缀的代码围栏（```` ``` ````）自身配平后才抽出整段清洗，避免念出 Markdown/代码残片。
+- **一帧 = 一页**。服务端把整帧当一页：清洗 → 切句 → 入队为**一页**，页与页之间先来先进。
+- `turn` **可省**（首帧里带不带都行）：它**只进日志**，不参与排队、不落库。
+- `{cancel}` 撤的是**这条连接送来的那几页**（服务端按连接记住页号），不碰别人的页、也不掐在播。
+- 服务端**保证同一连接内按帧序执行**（首帧 → 各正文帧 → `{end}`/`{cancel}`，内部用 `StreamOpChain` 串成一链）。顺序是协议语义的一部分：`{cancel}` 必须落在那些页入队之后，否则撤了个空、后到的帧又把页入队（撤不掉）。
 - **优雅半关**：发 `{end}`/`{cancel}` 用 `sock.end(...)`（等内核发完再 FIN），不要 `destroy()` 强杀——后者随 RST 可能丢掉最后一两个字。
 
 **示例（Node，pi 扩展即此实现）**
@@ -114,11 +106,11 @@ L<UTF-8 字节数 N>\n   ← 帧头：大写 L + 纯 ASCII 十进制字节数 + 
 ```js
 import { createConnection } from "node:net";
 const sock = createConnection(`${process.env.HOME}/.config/ivox/ivox.sock`);
-sock.write(`{type:stream,source:pi,turn:${turnId}}\n`);
-const body = Buffer.from(deltaText, "utf8");
-sock.write(`L${body.length}\n`);   // 长度帧头
+sock.write(`{type:stream,source:pi}\n`);
+const body = Buffer.from(pageText, "utf8");   // 一条 assistant 消息的全文
+sock.write(`L${body.length}\n`);   // 长度帧头（一帧 = 一页）
 sock.write(body);                  // 正文（任意字节，无需转义）
-sock.end("{end}\n");               // turn 结束，优雅半关
+sock.end("{end}\n");               // 送完了，优雅半关
 ```
 
 ### 2. ASR — 语音识别
@@ -233,32 +225,28 @@ pcm = b"".join(frames)               # 48kHz Int16 mono 流式合成结果
 
 权限状态由 daemon 进程自查，反映 daemon 自身授权（非调用方终端）。`ivox status` 即此接口的中文渲染。
 
-### 5. 打断三档 — 掐 + 掀
+### 5. 打断两档 — 掐 + 掀
 
 请求头，无 body：
 
 ```
-{type:skip,mode:page,by:ivox-skip}    # 掐 + 掀页（同 Ctrl+1）：掐断在播的，丢掉这一页剩下的块
-{type:skip,mode:stack,by:ivox-skip}   # 掐 + 掀摞（同 Ctrl+2）：掐断在播的，丢掉这一摞全部段并立墓碑拦后续增量
-{type:skip,mode:all,by:ivox-skip}     # 掐 + 全掀（同 Ctrl+3）：停当前 + 清空排队
+{type:skip,mode:page,by:ivox-skip}    # 掐 + 掀页（同 Ctrl+1）：掐断在播的，丢掉正在听的那一页剩下的内容
+{type:skip,mode:all,by:ivox-skip}     # 掐 + 全掀（同 Ctrl+2）：停当前 + 清空排队
 ```
 
 另有一个可选字段 `tag`（自报标签，会打进打断归因的日志），如 `{type:skip,mode:page,by:ivox-skip,tag:selftest}`。
 
-无回复。`mode` 缺省按 `page`。**头的尾随 `\n` 是必需的路由依据**——没有它，服务端会把整条请求当传统整段播报体交给 `handleTTS`（`{type:stop}` 正踩在这条边界上：它现在发无换行裸串，走的就是 handleTTS 分支）。
+无回复。`mode` 缺省按 `page`。**头的尾随 `\n` 是必需的路由依据**——没有它，服务端会把整条请求当传统整段播报体交给 `handleTTS`。
 
-**`by`：请求方自报的身份**（可选，缺省记「未署名」），记进打断归因（`掀摞·请求方 ivox-skip`）——「谁打断的」要答得出来，就得有个人报名。**为什么不查内核里的对端 pid**：`ivox skip` 这种发完就退的短命进程，等服务端读到帧时它早没了（实测 `getsockopt(LOCAL_PEERPID)` 返回 -1），查出来是残值更糟。自报是唯一稳的渠道。
+**`by`：请求方自报的身份**（可选，缺省记「未署名」），记进打断归因（`全掀·请求方 ivox-skip`）——「谁打断的」要答得出来，就得有个人报名。**为什么不查内核里的对端 pid**：`ivox skip` 这种发完就退的短命进程，等服务端读到帧时它早没了（实测 `getsockopt(LOCAL_PEERPID)` 返回 -1），查出来是残值更糟。自报是唯一稳的渠道。
 
-给热键一个命令行对应物（`ivox skip --page` / `--stack` / `--all`），供自检脚本、压测、远程排查使用；热键路径本身不经过这里。三个 mode 落到的是 `PlaybackQueue.skipCurrentPage` / `skipCurrentBucket` / `cancelAll`，与热键完全同一条代码路径。三档都**只碰播报、不碰背景音乐**（音乐只归语音输入）。
+给热键一个命令行对应物（`ivox skip --page` / `--all`），供自检脚本、压测、远程排查使用；热键路径本身不经过这里。两个 mode 落到的是 `PlaybackQueue.skipCurrentPage` / `cancelAll`，与热键完全同一条代码路径。两档都**只碰播报、不碰背景音乐**（音乐只归语音输入）。
 
 > `{type:stop}` 停止帧（旧的 `ivox quiet`）已删除，服务端收到只记日志忽略——那一支保留作护栏，防止旧脚本发来的停止帧落进正文分支被念出来。
 
-翻页的靶心是**资料室自编的页号**（`PlaybackPage.localID`）：掀页总是掀得掉，
-不依赖来源给不给外部页号。外部 `page`（Claude 的 `message_id`）只作**并页线索**——
-两个内容块的外部 `page` 相同就并进同一页，不影响自编页号本身。2026-10-18 改：早先这里写着「非 Claude 路径没有页号，
-`mode:page` 会退化成只掐在播」——**这条已经作废**，页号一律由助理自编，
-`ivox speak` 这类不带 `pageID` 的来源照样掀得掉整页，只是掀在同一摞内（它们通常一摞一页，
-于是掀页与掀摞等价）。
+掀页的靶心是**资料室自编的页号**（`PlaybackPage.localID`）：掀页总是掀得掉，
+不依赖来源给不给外部编号。2026-11-02 起队列里只有页，页号自编，掀页掀得干净。
+全掀**不留墓碑**：这一下之后再来的内容照常入队照常播。
 
 ### 6. 播报总开关 — 单独关掉播报
 
@@ -341,10 +329,9 @@ ivox listen < 录音.wav                     # stdin
 ivox listen -f 录音.wav                    # 文件
 ivox listen -l en < english.wav           # 英文
 
-# 打断三档（掐 + 掀；三个参数对应三个快捷键，缺省 --page）
+# 打断两档（掐 + 掀；两个参数对应两个快捷键，缺省 --page）
 ivox skip --page                           # 掀页（Ctrl+1）
-ivox skip --stack                          # 掀摞（Ctrl+2）
-ivox skip --all                            # 全掀（Ctrl+3）
+ivox skip --all                            # 全掀（Ctrl+2）
 
 # 快速操作（= {type:quick}，daemon 不在则静默返回）
 ivox quick terminal                        # Opt+Q

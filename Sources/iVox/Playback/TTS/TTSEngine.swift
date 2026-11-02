@@ -145,7 +145,7 @@ actor TTSEngine: TTSProviding {
         try await loadModel()
     }
 
-    /// - Parameter trace: 摞/页/块三个号。进程内引擎用不上（自家日志在同一份文件里），
+    /// - Parameter trace: 句号（这一句的唯一身份）。进程内引擎用不上（自家日志在同一份文件里），
     ///   但保留同名参数，让 `TSPRemote` 能顶替本类而不动调用方 —— 见 TTSTrace。
     func synthesizeStream(text: String, voiceID: String, trace: TTSTrace?) -> AsyncThrowingStream<Data, Error> {
         AsyncThrowingStream { continuation in

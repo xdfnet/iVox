@@ -12,6 +12,6 @@ struct CaptionFrame: Sendable {
     let lines: [String]
     /// 正在念的是第几句（`lines` 的下标）
     let index: Int
-    /// 属于哪一摞（助理自编的摞号）：**变了就是换了一轮**，字幕据此画分界线
-    let stack: Int
+    /// 属于哪一页（助理自编的页号）：**变了就是换了一条消息**，字幕据此画分界线
+    let page: Int
 }

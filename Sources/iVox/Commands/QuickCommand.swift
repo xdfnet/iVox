@@ -7,7 +7,7 @@ import iVoxKit
 /// 动作**由 daemon 执行**，不在本进程里做——它们要摸主线程（AppleScript 取 Finder 选中项、
 /// `NSPasteboard` 写剪贴板）。这条命令还有一个实际用处：`copy-path` 会调 AppleScript，
 /// 与 TTS 合成并发时曾把 MLX 撞崩过（2026-10-18 实测两次 `mutex lock failed`），
-/// 而崩溃在 daemon 里、外面只表现为「一摞没念完」。有这条命令就能自动复现，不必手按热键。
+/// 而崩溃在 daemon 里、外面只表现为「一页没念完」。有这条命令就能自动复现，不必手按热键。
 struct QuickCommand: ParsableCommand {
     static let configuration = CommandConfiguration(
         commandName: "quick",

@@ -7,31 +7,6 @@ import iVoxKit
 actor ConnectionHandler: SocketConnectionHandler {
     private let queue: PlaybackQueue
 
-    /// **跑腿侧的衔接表**：「外部 group/turn ↔ 播报站自编的摞号」。
-    ///
-    /// 播报站只认自己发的号（`PlaybackBlock` / `PlaybackSegment` 上没有任何外部编号做身份），
-    /// 所以「这批材料属于哪一摞」这张对照表归**跑腿的**记。2026-10-18 起从助理内部
-    /// 挪到这里：原先助理靠 `turnID == group` 去容器里检索，等于承认「外部号就是身份」，
-    /// 于是「无编号 ⇒ 可以合并」这种推断长了出来，把同一来源的两次回复焊成一摞
-    /// （Ctrl+2 掀一次 34 块，其中只有 6 块是新回复）。
-    private var stackOfExternalGroup: [String: Int] = [:]
-
-    /// 递一批分组材料：第一次自开一摞，之后同 group 的续批拿**助理发的号**并进去。
-    ///
-    /// 三态必须分开处理：`dead`（用户已放弃这一摞）**直接丢弃**，
-    /// 只有 `gone`（摞号被回收）才另开一摞。把两者混同等于让已放弃的摞重新开口。
-    private func deliverGrouped(_ jobs: [PlaybackJob], group: String, page: String?) async {
-        if let stack = stackOfExternalGroup[group] {
-            switch await queue.appendToStack(stack, jobs, group: group, page: page) {
-            case .appended: return
-            case .dead: return                       // 墓碑已立：这批增量不开口（丢弃原因由资料室打日志）
-            case .gone: stackOfExternalGroup[group] = nil
-            }
-        }
-        if let fresh = await queue.enqueueGrouped(jobs, group: group) {
-            stackOfExternalGroup[group] = fresh
-        }
-    }
     private let config: Config
     private let asrEngine: ASREngine
     private let engine: any TTSProviding
@@ -136,33 +111,34 @@ actor ConnectionHandler: SocketConnectionHandler {
         }
     }
 
-    /// 流式播报：首帧 `{type:stream,source:x,voice:y,turn:<id>}`，其后逐帧增量原文，
-    /// `{end}` 结束（flush 残尾），`{cancel}` 取消。帧以 \n 分隔；delta 内含的 \n
-    /// 被切成帧边界（补回后正好作为句末 flush 触发）。EOF 也按结束兜底。
+    /// 流式播报：首帧 `{type:stream,source:x,turn:<id>}`，其后逐帧原文，
+    /// `{end}` 结束，`{cancel}` 取消（撤掉这条连接送来的页）。帧以 \n 分隔。
+    ///
+    /// **页的边界 = 一个长度帧**（`L<n>` + n 字节正文）：扩展把一条 assistant 消息的
+    /// 全文装进一帧，于是「一帧 = 一页」，与 Claude 那边「一个 MessageDisplay = 一页」同构。
+    /// 帧内再切句（合成单位），切句真源只在 Swift 一份（`splitSentences`）。
+    ///
+    /// **turn_id 只进日志**：它不参与排队、不落库（队列是页的 FIFO，先来先进）。
+    /// 它的用处只有一个——`{cancel}` 时按连接撤页（一条流 = 一轮 = 一条连接）。
     private nonisolated func handleStream(fd: Int32, header: String, leftover: Data,
                                           buf: inout [UInt8]) {
         defer { Darwin.close(fd) }
         let meta = parseMetaKV(header)
         let source = meta["source"] ?? VoiceSource.default
         let voiceID = meta["voice"] ?? config.voice(forSource: source)
-        guard let turn = meta["turn"], !turn.isEmpty else {
-            Log.warn("stream 缺少 turn，丢弃连接")
-            return
-        }
+        let turn = meta["turn"] ?? "-"
         Log.info("流式开始: source=\(source) voice=\(voiceID) turn=\(turn)")
         // 本连接的入队/结束/取消全部串到同一根链上：帧序 = 执行序（见 StreamOpChain）
         let chain = StreamOpChain()
-        chain.hop { await self.queue.beginTurn(turn, source: source) }
+        // 本连接送来的页号（`{cancel}` 时按它撤回来路）
+        let tracker = StreamPageTracker()
 
-        let sb = StreamBuffer()
         var acc = Data()
         var closed = false
-        // 页号：扩展在每条 assistant message 开始时发一帧 `{page}`（一条 message = 一页，
-        // 与 Claude 那边"一页 = 一个 MessageDisplay"同构）。服务端自己数就行——页号只要保证
-        // 「同一页的块相等、不同页不等」，不需要扩展给 id。Ctrl+1「读下一页」靠它当靶心。
-        var pageSeq = 0
         // 长度帧状态：读到 "<n>\n" 后，记录还差多少字节正文；非 nil 时不按行解析。
         var expectBytes: Int? = nil
+        // 旧裸文本（没有长度帧的老客户端）：攒起来，{end} 时当一页发出去。
+        var legacyText = ""
 
         // 返回 false 表示收到结束/取消控制帧，停止读取。
         func feed(_ chunk: Data) -> Bool {
@@ -180,10 +156,7 @@ actor ConnectionHandler: SocketConnectionHandler {
                     acc.removeFirst(need)
                     expectBytes = nil
                     if let text = String(data: payload, encoding: .utf8), !text.isEmpty {
-                        for block in sb.append(text) {
-                            emitStreamBlock(block, source: source, voiceID: voiceID,
-                                            turn: turn, page: "\(turn)#\(pageSeq)", chain: chain)
-                        }
+                        emitStreamPage(text, source: source, voiceID: voiceID, turn: turn, chain: chain, tracker: tracker)
                     }
                     continue
                 }
@@ -202,25 +175,23 @@ actor ConnectionHandler: SocketConnectionHandler {
                 // 控制帧 / 旧裸文本（兼容老客户端）
                 guard let frame = String(data: line, encoding: .utf8) else { continue }
                 if frame == "{end}" {
-                    finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn,
-                                 page: "\(turn)#\(pageSeq)", chain: chain)
+                    if !legacyText.isEmpty {
+                        emitStreamPage(legacyText, source: source, voiceID: voiceID,
+                                       turn: turn, chain: chain, tracker: tracker)
+                        legacyText = ""
+                    }
+                    Log.info("流式结束: turn=\(turn)")
                     return false
                 }
                 if frame.hasPrefix("{cancel") {
                     Log.info("流式取消: turn=\(turn)")
                     // 归因记「是哪个接入方取消的」——`source` 是这条流自己报的身份。
-                    chain.hop { await self.queue.cancelTurn(turn, .request(source)) }
+                    chain.hop { await self.cancelStreamPages(source: source, tracker: tracker) }
                     return false
                 }
-                // 翻页：扩展在每条 assistant message 开始时发。此后 flush 出来的块都归这一页
-                if frame == "{page}" {
-                    pageSeq += 1
-                    continue
-                }
-                for block in sb.append(frame + "\n") {
-                    emitStreamBlock(block, source: source, voiceID: voiceID,
-                                    turn: turn, page: "\(turn)#\(pageSeq)", chain: chain)
-                }
+                // 旧分页标记：现在页边界由长度帧承担，这个标记只作兼容（忽略）。
+                if frame == "{page}" { continue }
+                legacyText += frame + "\n"
             }
         }
 
@@ -230,9 +201,8 @@ actor ConnectionHandler: SocketConnectionHandler {
             if n <= 0 { break }
             if !feed(Data(buf[0..<n])) { closed = true; break }
         }
-        if !closed {  // EOF 兜底：正常结束 flush 残尾
-            finishStream(sb: sb, source: source, voiceID: voiceID, turn: turn,
-                         page: "\(turn)#\(pageSeq)", chain: chain)
+        if !closed, !legacyText.isEmpty {  // EOF 兜底：正常结束 flush 残尾
+            emitStreamPage(legacyText, source: source, voiceID: voiceID, turn: turn, chain: chain, tracker: tracker)
         }
     }
 
@@ -249,27 +219,17 @@ actor ConnectionHandler: SocketConnectionHandler {
         return n <= Self.maxFrameBytes ? n : nil
     }
 
-    /// - Parameter page: 这一页的页号（`页序` 由 `{page}` 帧驱动），Ctrl+1「读下一页」的靶心
-    private nonisolated func emitStreamBlock(_ raw: String, source: String,
-                                             voiceID: String, turn: String, page: String,
-                                             chain: StreamOpChain) {
+    /// 一个长度帧 = 一页（一条 assistant 消息）：清洗 → 切句 → 入队。
+    private nonisolated func emitStreamPage(_ raw: String, source: String,
+                                            voiceID: String, turn: String,
+                                            chain: StreamOpChain, tracker: StreamPageTracker) {
         let cleaned = cleanText(raw)
         guard !cleaned.isEmpty else { return }
         let jobs = splitSentences(cleaned).map {
-            PlaybackJob(text: $0, voiceID: voiceID, source: source, turnID: turn, pageID: page)
+            PlaybackJob(text: $0, voiceID: voiceID, source: source)
         }
-        Log.info("流式入队: source=\(source) turn=\(turn) page=\(page) 分块=\(jobs.count) chars=\(cleaned.count)")
-        // pi 一轮的首帧自开一摞，后续帧拿这张对照表里的号并进去（见 `deliverGrouped`）
-        chain.hop { await self.deliverGrouped(jobs, group: turn, page: page) }
-    }
-
-    private nonisolated func finishStream(sb: StreamBuffer, source: String, voiceID: String,
-                                          turn: String, page: String, chain: StreamOpChain) {
-        if let tail = sb.finish() {
-            emitStreamBlock(tail, source: source, voiceID: voiceID, turn: turn, page: page, chain: chain)
-        }
-        chain.hop { await self.queue.endTurn(turn) }
-        Log.info("流式结束: turn=\(turn)")
+        Log.info("流式入队: source=\(source) turn=\(turn) 句=\(jobs.count) chars=\(cleaned.count)")
+        chain.hop { await self.enqueuePage(text: cleaned, jobs: jobs, tracker: tracker) }
     }
 
     private nonisolated func handleTTS(fd: Int32, data: Data) {
@@ -295,8 +255,8 @@ actor ConnectionHandler: SocketConnectionHandler {
         // 现在要停 daemon 走**正经信号**：读实例锁里的 pid，发 SIGTERM →
         // 走的是信号那条退出路径（有日志、有清理、有退出栈）。
         
-        let (source, voiceID, content, group, isFinal, page, isNow) = extractVoicePrefix(text, config: config)
-        Log.info("请求解析: source=\(source) voice=\(voiceID) group=\(group ?? "-") final=\(isFinal) raw_chars=\(content.count)")
+        let (source, voiceID, content, isNow) = extractVoicePrefix(text, config: config)
+        Log.info("请求解析: source=\(source) voice=\(voiceID) raw_chars=\(content.count)")
         // 微信链路的播报开关：默认**不念**（聊天窗口里已经有文字，再念是打扰）。
         // 微信侧的 claude 由 daemon spawn，它照样吃 Claude Code 那套 hook（hook 配在
         // user 级 settings.json，谁启动 claude 都吃），hook 把来源标成 wechat 传回来，
@@ -307,10 +267,7 @@ actor ConnectionHandler: SocketConnectionHandler {
         }
         Log.debug("请求原始内容: source=\(source) raw=\(logPreview(content))")
         let cleaned = cleanText(content)
-        // 分组请求、以及不带分组的收尾信号（Stop），即使清洗后为空也不能直接 return：
-        // 它们可能一丁点内容都没有，但承载的是"这几页属于同一摞"/"这一摞完了"的结构信息，
-        // 漏掉就会让空桶卡在队首把后面所有播报堵死。
-        if cleaned.isEmpty, group == nil, !isFinal {
+        if cleaned.isEmpty {
             Log.info("清洗后为空，跳过")
             return
         }
@@ -321,42 +278,48 @@ actor ConnectionHandler: SocketConnectionHandler {
         }
         Log.debug("清洗后内容: source=\(source) cleaned=\(logPreview(cleaned))")
 
-        // 分块入队：整条一次合成会长时间占住播放（且要等整段合成完才出声），逐句入队才能边合成边播
-        let chunks = cleaned.isEmpty ? [] : splitSentences(cleaned)
-        // pageID：这一块属于哪一页（Claude 的 message_id）——Ctrl+1「读下一页」的靶心
-        let jobs = chunks.map { PlaybackJob(text: $0, voiceID: voiceID, source: source, pageID: page) }
-        if let group {
-            if isFinal {
-                // 带分组的收尾信号（Stop 钩子按 session 反查到本会话的 turn_id）：精确收这一摞，不播东西
-                Log.info("收尾信号（Stop）: source=\(source) turn=\(group) chars=\(clen)")
-                Task { await queue.finishTurn(group) }
-            } else {
-                // 分组号 = Claude 的 `turn_id`（一次回复 = 一摞）；同一摞的每一页都带同一个号。
-                // **衔接在这里收口**：外部 group ↔ 助理自编摞号的对照由跑腿侧记着，
-                // 播报站不认 group、只认自己发的号（2026-10-18 起）。
-                Log.info("队列入队（摞）: source=\(source) voice=\(voiceID) turn=\(group) page=\(page ?? "-") chars=\(clen) 分块=\(jobs.count)")
-                Task { await self.deliverGrouped(jobs, group: group, page: page) }
-            }
-        } else if isFinal {
-            // 不带分组的收尾信号：查不到 session 对应的那一摞（msgdisplay 还没触发过 / 手动发）——
-            // 不猜是哪一摞（全局"最后打开的那摞"那种判据已经删掉了），交给 2 秒空闲宽限收尾。
-            Log.info("收尾信号（无分组，交空闲宽限兜底）: source=\(source) chars=\(clen)")
-        } else if isNow {
+        // 切句（合成单位）：整条一次合成会长时间占住播放（且要等整段合成完才出声），
+        // 逐句入队才能边合成边播。切句真源只在 Swift 一份（`splitSentences`）。
+        let jobs = splitSentences(cleaned).map {
+            PlaybackJob(text: $0, voiceID: voiceID, source: source)
+        }
+        if isNow {
             // 用户自己要求现在念（Opt+Z 译文 / `ivox speak --now`）：**插队**——掐掉在播的、
             // 插到最前面立刻念，其余排队内容一个不丢，念完接着播原来的。
             // 与普通的「只排队」相反：那条是 agent 自动汇报，不该抢麦（否则两个后台会话收尾会
             // 互相掐掉对方的内容）；这条是用户按的，必须立刻响。
-            Log.info("用户插队播报: source=\(source) voice=\(voiceID) chars=\(clen) 分块=\(jobs.count)")
+            Log.info("用户插队播报: source=\(source) voice=\(voiceID) chars=\(clen) 句=\(jobs.count)")
             Task { await queue.speakUserInitiated(jobs) }
         } else {
-            Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(clen) 分块=\(jobs.count)")
-            Task { await queue.enqueue(jobs) }
+            // **一次请求 = 一页**（Claude 那边：一个 MessageDisplay 完整页 = 一次请求）。
+            // 队列纯粹先来先进，不分组、不排队次。
+            Log.info("队列入队: source=\(source) voice=\(voiceID) chars=\(clen) 句=\(jobs.count)")
+            Task { await queue.enqueuePage(text: cleaned, jobs: jobs) }
         }
     }
 
-    /// 跳过请求 `{type:skip,mode:page|stack|all}`：手动打断三档的命令行入口（`ivox skip`
-    /// 及其 `--stack` / `--all`），落到的就是 Ctrl+1 / Ctrl+2 / Ctrl+3 分派的那几个方法。
-    /// 三档都**只碰播报、不碰背景音乐**（音乐只归语音输入），故与热键逐字同路径。
+    /// 入队一页并记住它的页号（`{cancel}` 时按页号撤回来路）。
+    ///
+    /// **每条流连接自己记自己送来的页号**——这是「{cancel} 撤掉本轮内容」在新模型下的实现：
+    /// 没有 turn_id 参与排队，撤的依据只剩「哪几页是这条连接送来的」。
+    private nonisolated func enqueuePage(text: String, jobs: [PlaybackJob],
+                                         tracker: StreamPageTracker) async {
+        guard let pageNo = await queue.enqueuePage(text: text, jobs: jobs) else { return }
+        tracker.append(pageNo)
+    }
+
+    /// 撤掉这条流送来的全部页（`{cancel}`：用户中断了这一轮）。
+    private nonisolated func cancelStreamPages(source: String,
+                                              tracker: StreamPageTracker) async {
+        let pages = tracker.takeAll()
+        guard !pages.isEmpty else { return }
+        let dropped = await queue.discardPages(pages, .request(source))
+        Log.info("流式取消落地: source=\(source) 撤掉 \(pages.count) 页（\(dropped) 句）")
+    }
+
+    /// 跳过请求 `{type:skip,mode:page|all}`：手动打断的命令行入口（`ivox skip`
+    /// 及其 `--all`），落到的就是 Ctrl+1 / Ctrl+2 分派的那几个方法。
+    /// 两档都**只碰播报、不碰背景音乐**（音乐只归语音输入），故与热键逐字同路径。
     ///
     /// `by`：**请求方自报**的身份（如 "ivox-skip"），记进打断归因——
     /// 「谁打断的」要答得出来，就得有个人报名。
@@ -378,8 +341,6 @@ actor ConnectionHandler: SocketConnectionHandler {
             switch mode {
             case "all":
                 await queue.cancelAll(trigger)
-            case "stack":
-                await queue.skipCurrentBucket(trigger)
             default:
                 await queue.skipCurrentPage(trigger)
             }
@@ -529,27 +490,19 @@ actor ConnectionHandler: SocketConnectionHandler {
         }
     }
 
-    nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, group: String?, isFinal: Bool, page: String?, isNow: Bool) {
+    nonisolated private func extractVoicePrefix(_ text: String, config: Config) -> (source: String, voiceID: String, content: String, isNow: Bool) {
         guard text.hasPrefix("{"), let end = text.firstIndex(of: "}") else {
-            return (VoiceSource.default, config.defaultVoice, text, nil, false, nil, false)
+            return (VoiceSource.default, config.defaultVoice, text, false)
         }
         let metaStr = String(text[text.index(after: text.startIndex)..<end])
         let pairs = metaStr.split(separator: ",").map { $0.split(separator: ":", maxSplits: 1).map(String.init) }
         var sourceID = VoiceSource.default
         var explicitVoice: String?
-        var group: String?
-        var page: String?
-        var isFinal = false
         var isNow = false
         for pair in pairs where pair.count == 2 {
             switch pair[0] {
             case "source": sourceID = pair[1]
             case "voice":  explicitVoice = pair[1]
-            // 分组号 = 一**摞**（hook 传 turn_id）：同一摞的各页并进同一桶，让跳摞/掀桌能拦住后续页
-            case "group":  group = pair[1].isEmpty ? nil : pair[1]
-            // 页号 = 一**页**（hook 传 message_id）：Ctrl+1「读下一页」按它翻页
-            case "page":   page = pair[1].isEmpty ? nil : pair[1]
-            case "end":    isFinal = true
             // now：用户自己要求现在念（Opt+Z 译文 / `ivox speak --now`）→ **插队**，不是排队。
             // 与 source 无关：Opt+Z 走这条路，自检也要能压到它，否则「唯一一条机器借道」的路径
             // 永远没有自动化回归保护。
@@ -559,7 +512,7 @@ actor ConnectionHandler: SocketConnectionHandler {
         }
         let voiceID = explicitVoice ?? config.voice(forSource: sourceID)
         let content = String(text[text.index(after: end)...])
-        return (sourceID, voiceID, content, group, isFinal, page, isNow)
+        return (sourceID, voiceID, content, isNow)
     }
 
     nonisolated private func oneLine(_ value: String) -> String {
@@ -590,5 +543,26 @@ private final class StreamOpChain {
             if let prev { _ = await prev.value }
             await op()
         }
+    }
+}
+
+/// 一条流连接送来的页号（`{cancel}` 时按它撤回来路）。
+///
+/// **每条连接一份**：`ConnectionHandler` 是 actor、多个连接共用它，
+/// 所以这袋子不能放在 actor 上（会串到别的连接去），得跟着连接走。
+/// 加锁是因为入队与取消可能落在不同的执行线程上（`chain.hop` 的 Task）。
+private final class StreamPageTracker: @unchecked Sendable {
+    private let lock = NSLock()
+    private var pages: [Int] = []
+
+    func append(_ pageNo: Int) {
+        lock.lock(); defer { lock.unlock() }
+        pages.append(pageNo)
+    }
+
+    func takeAll() -> [Int] {
+        lock.lock(); defer { lock.unlock() }
+        defer { pages.removeAll() }
+        return pages
     }
 }

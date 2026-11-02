@@ -63,24 +63,23 @@ Sources/iVoxKit/       — 共享库（无 MLX 依赖）
   TOMLDocument.swift   — TOML 就地改（保留用户自己的注释）
   HotKeySpec.swift     — 热键动作与默认键位（默认键位唯一真源）
   InstanceLock.swift   — 实例独占锁（一个 socket 只允许一个 daemon）
-  PlaybackStore.swift  — 队列落盘（SQLite，存还没播出去的块）
+  PlaybackStore.swift  — 队列落盘（SQLite，两张表：pages + sentences，存还没播出去的页与句）
   SocketStream.swift   — socket 流式读写与时间纪律（读超时是每趟 read 的上限）
   Logger.swift         — Log.{info,debug,warn,error}
   DaemonStatus.swift   — {type:status} 的返回体（七个能力域健康度）
   SocketClient.swift   — AppPaths + socket 客户端
   TextCleaner.swift    — Markdown + 噪音过滤（给 TTS 用）
-  TextSplitter.swift   — 流式文本分块
-  StreamBuffer.swift   — 流式 turn 的安全边界切分
+  TextSplitter.swift   — 切句（合成单位，≤80 字）
   StreamFrame.swift    — 长度帧协议
   AudioPipeline.swift  — 重采样
   Translation/         — 翻译服务（Google 双通道容灾 + OpenAI 兼容）、配置模型、选区清洗
 
-Tests/iVoxTests/       — 测试（22 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests、OverlayServiceTests、TSPRemoteSlowSynthesisTests 等 6 个 @testable import iVox；TestSocketServer 是共用假 socket server）
+Tests/iVoxTests/       — 测试（21 个文件：多数只依赖 iVoxKit；PlaybackSessionStoryTests、OverlayServiceTests、TSPRemoteSlowSynthesisTests 等 6 个 @testable import iVox；TestSocketServer 是共用假 socket server）
 
-docs/                  — README.md（索引 + 分类规则）· architecture.md · hook-chain.md · socket-api.md · native-bridge.md（微信链路实测依据）；playback/ 放播报五层：paper.md（比喻，**建立直觉但不裁决**）· purpose.md（取舍，**有分歧听它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；另有 proposal-drop-stop.md（**未裁决提案**，不算一层）；CHANGELOG.md；archive/ 放历史复盘与调研
+docs/                  — README.md（索引 + 分类规则）· architecture.md · hook-chain.md · socket-api.md · native-bridge.md（微信链路实测依据）；playback/ 放播报四层：paper.md（比喻，**建立直觉但不裁决**）· purpose.md（取舍，**有分歧听它**）· sources.md（接入方）· requirements.md（需求）· queue.md（实现 + 维护约束）；CHANGELOG.md；archive/ 放历史复盘与调研（未裁决的提案一旦落地就挪进来，如 `proposal-drop-stop.md`）
 scripts/               — 装机与部署：runtime.sh（部署）· download-models.sh · fetch-mlx-submodules.sh · install-*.sh · tts-check.mjs（黑盒自检）· hotkey.py（用 ESP32 真键盘按热键，测热键用）
                         接入资产（各外部 agent 的对接层，安装时由 install-hooks.sh cp，不编进二进制）：
-                        · hook.sh（Claude Code 的播报 hook：msgdisplay 送整页 / end 送收尾暗号）
+                        · hook.sh（Claude Code 的播报 hook：**`hook.sh <source>`，不带动作名**——按 message_id 攒成整页送一次；收尾信号整条删除）
                         · pi/ivox.ts（pi coding agent 流式扩展）
 ```
 
@@ -118,21 +117,59 @@ pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬�
 - **TTS 两层流水线**：
   - *第一层（切句/清洗，真源只在 Swift 一份）*：文本先 `cleanText`（Markdown AST 去噪 + URL/路径/ANSI/emoji 处理）再 `splitSentences`（句末边界 `。！？!?…；;\n`，合并到 ≤80 字；英文 `.` 不切以保小数/缩写）。TS 扩展和 hook **绝不在客户端切句**（会破坏 AST 块末补句号与跨行规则）。
   - *第二层（连续播放管道）*：`PlaybackQueue.processNext` 是跨所有 job 的循环，逐句 `synthesizeStream → player.write`，**句间不 drain**；`AudioPlayer` 用单个常驻 `AVAudioPlayerNode` 连续 `scheduleBuffer`，4s/2s 高低水位背压（`pendingFrames` 随 `dataConsumed` 核减），prime 静音仅在设备播空/取消后补一次，`drain()` 只在整轮末端调一次。改这里务必读 `docs/playback/requirements.md`（需求）与 `docs/playback/queue.md`（实现），不要重新引入逐句 drain（会导致逐字卡顿）。
-- **流式 turn 协议**：pi 扩展经一条长连接按 `\n` 分帧：首帧 `{type:stream,source,turn}` → 正文帧（**协议支持增量帧**，但 pi 现在是**一条 assistant 消息 = 一页**、`message_end` 时整页一次发出**，不再逐字转发**）→ `{end}`/`{cancel}`，EOF=end。**这条连接的边界是「用户的一次输入」（pi 的一个 agent run），不是它内部的 turn** —— pi 一次输入会拆成 N 个 turn（每个 turn 恰好一条 assistant 消息、工具调用就再来一轮），所以 `agent_start` 开流、`agent_end` 关流，中途每条 assistant `message_start` 发一个 `{page}` 帧分页。早先按 turn 开合等于把一次输入切成 N 摞、Ctrl+2 只掀得掉一页（2026-10-18 修）。`turn` 号本身是接入方自编的接力棒（只管「这批跟刚才那批是一伙的」），**外部有没有像样的 id 不重要，摞/页/块的内部号一律由助理自编**。服务端 `StreamBuffer`（iVoxKit 纯逻辑）累积原文，只在安全边界（句末/段落、代码围栏配平、≥`minFlushChars`=24）抽出整段复用同一套 cleanText→splitSentences。`PlaybackJob.turnID`：**队列按轮排队，播全播完**——同一 `turnID` 分块并入同一段顺序追加，新 turn 在队尾追加新段、**不打断**在播旧轮（这一摞播完才前移）；无 turn 的普通播报（`ivox speak`/hook.sh）同上排队。**打断的准星**：动手的只有用户，机器最多「借道」—— 队列的长期顺序只由到达顺序决定，谁都不永久插队；Opt+Z 译文是唯一的机器开口，也只是**插一脚**（走独立播放节点，主节点暂停、一条不删，念完从原处接着播；**不进队列**，队列顺序一点没变）。**打断权只归用户快捷键**，手动打断三档全是「掐 + 掀」——**掐** = 断在播的那一块，**掀** = 丢弃某一层的全部内容：**Ctrl+1** = 掐 + 掀当前页（`skipCurrentPage`：掀掉当前页的剩余块；还没来的页不拦）、**Ctrl+2** = 掐 + 掀当前摞（`skipCurrentBucket`：掀掉这一摞的全部段 + 立墓碑拦它的后续增量，下一摞接着播）、**Ctrl+3** = 掐 + 全掀（`cancelAll`，**挂墓碑**：当前存在的所有摞，不分来源，它们的后续增量也别来）/ 右⌘ 说话（**暂停不删**：设备闭嘴让麦克风干净，队列与内容一概不动，说完接着播——「你停一下」，不是「你别说了」；2026-10-23 修：它原先误用「全掀」，于是被清场顺手埋了碑，Claude 同一摞后续送来的页被静默丢弃，实测丢过 891 字 / 15 块）。Opt+Z 译文**不进队列**：主节点只是**暂停**（缓冲原样留着，和右⌘说话一个语义），
-  译文从**独立播放节点**出声，念完主节点从原处接着播（2026-10-26 改：早先是「掐断在播的那一句 +
-  译文段插到队首」，会掐掉正在念的后半截——那截不重播）。`{type:stop}` 停止帧与流式新轮**不再打断**（ConnectionHandler 对 stop 帧仅记日志忽略）。某段 sealed 才允许空段前移；流动中空段保活等下一批。连接内这四类操作经 `ConnectionHandler.StreamOpChain` **按帧序执行**（乱序会让 `{end}` 之后到达的同轮分块把已关轮次重新打开、管道永久挂起）。详见 `docs/socket-api.md`。
-- **播报的词只用这三个**，其它说法一律作废；完整术语表见 `docs/playback/requirements.md`）：
-  **摞** = **你发一条信息之后 AI 为此产生的全部回复**（夹工具调用时它会回答很多次，全算这一摞；由你按回车划分；身份是助理自编的 `PlaybackSegment.localID`，外部 `turn_id` 只作备注）；
-  **页** = 一摞里的**一次回复**（一条 assistant 消息；身份同样是助理自编的 `PlaybackPage.localID`，实测一个 turn 底下最多见过 19 页）；
-  **块** = 目标 1～80 字的合成单位（无标点的长串会硬切，最多 160）（**服务拿去播报用的，不是给用户看的**；`PlaybackBlock`，页上的文字被切开送去合成的那些条）。
-  读法：捏着队首那一摞 → 翻到当前页 → 撕下一个块去合成播放 → 这页撕完翻下一页 → 这一摞说完（下一条回复到来把它盖上）→ 换下一摞。
-  按键对应（三档都是掐 + 掀）：**Ctrl+1 = 掀页**、**Ctrl+2 = 掀摞**、**Ctrl+3 = 全掀**。
-  ~~"assistant"~~（一会儿指回复、一会儿指会话）、~~"一叠 = 一轮、一张 = 一句"~~、~~"跳这句"~~（实现里没有"句"这个单位）都已作废。
+- **队列 = 页的 FIFO**（2026-11-02 改，唯一真源）：**页** = 一条 assistant 消息 = 队列里唯一的单位；
+  页里装**句**（1~80 字的合成单位，纯实现细节，用户不感知）。页按**到达顺序**排，先来先进，谁都不插队。
+  **整套「摞」的概念没了**：一次输入引发的全部回复不再成组；`turn_id`/`session_id` **不进队列、不落库**，
+  只在日志里出现；**没有墓碑**（用户放弃之后不再拦后续内容，迟到的内容照播）；
+  **没有收尾信号**（端不再报「说完了」——`Stop` 钩子整条摘掉，`hook.sh` 不再有 `end` 分支）——
+  **队列排空即收尾**（等设备静了 → 字幕收起、汽水音量还回）。原「空闲宽限」配置项
+  `idleGraceSeconds` 随收尾信号一起删了（配置审计会点名它）。
+- **流式协议（pi 侧）**：pi 扩展经一条长连接按 `\n` 分帧：首帧 `{type:stream,source:pi}`
+  （`turn` 可省，只进日志）→ 正文帧（**一个长度帧 `L<n>` + n 字节正文 = 一页**，
+  一条 assistant 消息一帧）→ `{end}` 结束 / `{cancel}` 撤掉**这条连接送来的那几页**
+  （`ConnectionHandler` 按连接记住页号，`StreamPageTracker`），EOF=end。
+  **这条连接的边界是「用户的一次输入」（pi 的一个 agent run）**——pi 一次输入会拆成 N 个 turn
+  （每个 turn 恰好一条 assistant 消息、工具调用就再来一轮），所以 `agent_start` 开流、
+  `agent_end` 关流，页的边界由**每条 assistant 消息**给出。
+  连接内的操作经 `ConnectionHandler.StreamOpChain` **按帧序执行**（乱序会让 `{cancel}` 先撤了个空、
+  后到的帧又把页入队，撤不掉）。详见 `docs/socket-api.md`。
+- **打断只有两档**（2026-11-02，原三档）：**掐** = 断在播的那一句，**掀** = 丢弃某一层的全部内容：
+  **Ctrl+1 = 掀页**（`skipCurrentPage`：掐掉在播的那一句 + 丢掉用户此刻正在听的那一页的剩余内容，
+  从下一页接着念）、**Ctrl+2 = 全掀**（`cancelAll`：取消在播 + 清空全部排队内容，**不留墓碑**——
+  这一下之后再来的内容照播）。原 Ctrl+2 掀摞、Ctrl+3 全掀的位置空出来了，**Ctrl+3 现在没有绑定**。
+  右⌘ 说话是**暂停不删**（设备闭嘴让麦克风干净，队列与内容一概不动，说完接着播——「你停一下」，
+  不是「你别说了」）。Opt+Z 译文**不进队列**：主节点只是**暂停**（缓冲原样留着，和右⌘说话一个语义），
+  译文从**独立播放节点**出声，念完主节点从原处接着播。
+  **打断权只归用户快捷键**：机器最多「借道」——队列的长期顺序只由到达顺序决定，谁都不永久插队。
+- **播报的词只用这两个**，其它说法一律作废；完整术语表见 `docs/playback/requirements.md`）：
+  **页** = 一条 assistant 消息（= 队列里唯一的单位；身份是助理自编的 `PlaybackPage.localID`，
+  外部 `message_id` / `turn_id` 只作日志备注）；
+  **句** = 目标 1～80 字的合成单位（无标点的长串会硬切，最多 160）（**服务拿去播报用的，不是给用户看的**；
+  `PlaybackSentence.seq`，全局单调，两侧日志都打它）。
+  读法：捏着队首那一页 → 撕下一个句去合成播放 → 这页撕完翻下一页 → 队列空了就收桌。
+  按键对应（两档都是掐 + 掀）：**Ctrl+1 = 掀页**、**Ctrl+2 = 全掀**。
+  ~~"assistant"~~（一会儿指回复、一会儿指会话）、~~"一叠 = 一轮、一张 = 一句"~~、~~"跳这句"~~、
+  ~~"摞"~~（2026-11-02 作废）、~~"块"~~（现在叫**句**）都已作废。
 
-- **播报通路（hook / 微信 / MessageDisplay）**：①Claude Code 交互会话的播报**只靠 `MessageDisplay` 钩子**（`hook.sh msgdisplay claude`）——assistant 消息按行批增量播报，过程内容（分步/工具多段）逐句进段、边写边播，**不再挂 Stop / UserPromptSubmit**（摘 Stop 因 MessageDisplay 的 final 批已含完整结尾，两者同播会重复；摘 UserPromptSubmit 因打断权只归快捷键）。钩子把 payload 的 **`turn_id` 当分组号**（`ivox speak --group`）——**一摞 = 一次输入引发的全部回复**，Ctrl+2 掀的就是整摞（后续增量由墓碑拦住，另见下「弱分组」）。**收尾三个触发点，主力是 `Stop`**：①**主力** `Stop` 钩子（`hook.sh end` → `ivox speak --final` → `closeOpenGroup()`：只送「说完了」这个暗号、**不带正文**，故与 MessageDisplay 不重复；**只标 ended、不立墓碑**——在途的页还要让它播完。⚠️ 2026-10-21 修过：收尾曾顺手立墓碑，于是「Stop 早到 9 毫秒」就把随后到达的最后一段 140 字静默丢弃（用户听到的是「念到一半没了声音」）——**Stop 与正文是两条独立通路，谁先到没保证**。⚠️ 2026-10-24 再修一处同源的问题：实测 27 轮里 **14 轮 Stop 比正文早到 10~20 毫秒**，于是最后一页正文落在 Stop 之后、**自成一摞**（用户按 Ctrl+2 想掀整轮，掀不到最后这页），字幕与音量还会在中途收一次又起一次。修法在**钩子侧**：`hook.sh end` 把收尾信号**延后 300ms 再发**（后台 sleep，钩子照常立刻返回），让正文先落地。⚠️ **延后只是减少竞态、不是消除**——实测正文与收尾只差 1 毫秒的情形照样发生（黑盒 `I1` 踩中）。**服务端因此加了一道终判**（2026-10-24）：收尾过的摞记在 `PlaybackSession.finishedTurns` 里，**后到的正文照念（一个字不丢），但不再把这一摞拽回「还在说」**。早先它会把印揭开（`sealed = false`），于是这一摞永远停在「还在说」→ `anyUnsealed` 恒为真 → **队列永不结算 → 字幕不收、汽水音量不还**（黑盒 `I1` 干等 60 秒超时）。宽限封的印**照旧可揭**（宽限只是猜「说完了」，不是判死）。现在**内容生死只由用户主动放弃决定**（掀/全掀/取消才埋碑；**右⌘说话不是放弃，只是暂停**），收尾只管「什么时候收字幕」）；②「新的 turn 来了就把上一个盖上」——**清场与兜底**（盖上即可，不埋碑）；③**最后兜一层 60 秒空闲宽限**（`idleGraceSeconds`：队列见底又仍有未结束的轮，**先等设备把已排队音频播完**——声音真停下才开始数，否则会在尾音还没念完时就判完、把字幕收掉——再静候 60 秒没新内容即判说完）。**它只是兜底，不是常态**：常态是端说完了就立刻收（Claude 的 Stop / pi 的 `{end}`）。⚠️ 2026-10-24 从 5 秒改成 60 秒：Claude 一轮里的多页之间常隔 20~130 秒（跑工具、想事情），5 秒一到就误判「说完了」→ **一轮被切成好几摞**（用户按 Ctrl+2 想掀整轮，掀不到最后那页）、字幕提前收、汽水音乐音量一升一降；页级的 `final` 只说明"这一页说完"，认不得"整摞说完"（一次回复夹工具调用会有好几页），所以不拿它收尾。`hook.sh` 已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip --page|--stack|--all` 三档承担，`ivox quiet` 已删除）。②**微信链路默认不发声**：`WeChatPlatform` 只有 `sendMessage` / `sendTyping` / 长轮询，回复本身不进播报队列——聊天窗口里已经有文字了，再念一遍是打扰（见 `docs/playback/purpose.md` 的裁决）。⚠️ **但它 spawn 的 claude 照样触发 Claude Code 那套 hook**（hook 配在 user 级 `~/.claude/settings.json`，**谁启动 claude 都吃**，不止 Claude Code 自己的会话）——早先它「碰巧没出声」是因为 hook.sh 里调 `ivox` 用了裸名，而微信侧 claude 继承 launchd 托管 daemon 的残缺 PATH（`/usr/bin:/bin:/usr/sbin:/sbin`，没有 `~/.local/bin`）→ 找不到二进制、静默失败（2026-10-26 实测）。**那是巧合不是机制**：hook 现在一律用绝对路径 `~/.local/bin/ivox`；微信侧 spawn claude 时注入 `IVOX_SOURCE=wechat`，hook 据此标来源；**播不播由 daemon 按 `[wechat] speak` 裁决（默认 false＝不念）**，真源在 config.toml，hook 不猜。③pi 走流式（见下）。
+- **播报通路（hook / 微信 / pi）**：①Claude Code 交互会话的播报**只靠 `MessageDisplay` 钩子**
+  （`hook.sh claude`）：assistant 消息按行批送来，hook 按 `message_id` **攒成整页**
+  （`final=True` 那一批到齐才交），一次 `ivox speak --source claude -- "<整页正文>"` 送出去 =
+  队列里的一页。**不再挂 Stop / UserPromptSubmit**：Stop 收尾信号整套作废（队列排空即收尾，
+  不需要端报「说完了」）；UserPromptSubmit 因打断权只归快捷键。
+  **收尾 = 队列排空**：等设备把尾音播完（声音真停下）→ 收字幕、还汽水音乐音量。
+  `hook.sh` 已**移除 interrupt 分支**（手动打断改由命令行 `ivox skip --page|--all` 两档承担，
+  `ivox quiet` 已删除）。②**微信链路默认不发声**：`WeChatPlatform` 只有 `sendMessage` /
+  `sendTyping` / 长轮询，回复本身不进播报队列——聊天窗口里已经有文字了，再念一遍是打扰
+  （见 `docs/playback/purpose.md` 的裁决）。⚠️ **但它 spawn 的 claude 照样触发 Claude Code 那套 hook**
+  （hook 配在 user 级 `~/.claude/settings.json`，**谁启动 claude 都吃**，不止 Claude Code 自己的会话）——
+  早先它「碰巧没出声」是因为 hook.sh 里调 `ivox` 用了裸名，而微信侧 claude 继承 launchd 托管 daemon
+  的残缺 PATH（`/usr/bin:/bin:/usr/sbin:/sbin`，没有 `~/.local/bin`）→ 找不到二进制、静默失败
+  （2026-10-26 实测）。**那是巧合不是机制**：hook 现在一律用绝对路径 `~/.local/bin/ivox`；
+  微信侧 spawn claude 时注入 `IVOX_SOURCE=wechat`，hook 据此标来源；**播不播由 daemon 按
+  `[wechat] speak` 裁决（默认 false＝不念）**，真源在 config.toml，hook 不猜。③pi 走流式（见上）。
 
-- **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者：右⌘（默认；配置可改成右⌃ 或两者）→ `SpeechInputService`，`Opt+Z` → `TranslationService`，`Opt+Q/A/X/S/C` → `QuickActionsService`，`Ctrl+3`/`Ctrl+2`/`Ctrl+1` → `PlaybackQueue`（手动打断三档：掐+全掀 / 掐+掀摞 / 掐+掀页）（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `iVoxKit/HotKeySpec.swift` 的 `HotKeyAction` 加一个动作 + `defaultChord` 给默认键位 + 在 `setUpHotKeys` 加一个消费者**（`GlobalKeyTap` 里不再有键位表，它只消费）。**键位可在配置 `hotkeys` 段按动作名改**（TOML 写法 `translate = "opt+z"`；首次安装会写全量默认键位）；⚠️ 默认键位有**两份副本**：代码兜底 `HotKeySpec.defaultChord` 与模板 `iVoxKit/ConfigTemplate.swift`（安装脚本不再内嵌第三份，改默认要同步这两处）；配错时启动日志会写明（哪个动作、错在哪、退回哪个默认），生效的键位逐行打「热键: 动作 = 键位」。改完跑 `ivox restart`（只重启进程，不动登录自启开关）。 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Opt+Z 毫无反应"。
-- **防误触也在 tap 层判，一处判完**：① **同键冷却，按键分档**——`Opt+Z` 0.2s（它靠后写胜出连按，冷却只挡连击）、三个打断键 0.3s（翻页掀摞本就该能连按）、其余 1s；冷却中**仍然吃掉事件**只是不执行（漏给目标 app 更糟），走 `systemUptime`，只在 tap 线程读写。② **语音键（右⌘，默认只有它）有 150ms 长按阈值**——按下不足就松开判为误触，按下沿直接丢弃（很多 App 用右⌘，碰一下就打断播报+暂停音乐+开麦代价太大）。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」的第二句吃掉。
+- **键盘热键分层**：`HotKey/GlobalKeyTap` 独占 CGEvent tap 与专用 run loop，**只按事件类型 / keyCode 路由**，不含业务判断——tap 回调跑在专用线程上且监听**全系统**键盘，回调里任何耗时都会拖慢整机输入，所以一律 offload。消费者：右⌘（默认；配置可改成右⌃ 或两者）→ `SpeechInputService`，`Opt+Z` → `TranslationService`，`Opt+Q/A/X/S/C` → `QuickActionsService`，`Ctrl+2`/`Ctrl+1` → `PlaybackQueue`（手动打断两档：掐+全掀 / 掐+掀页）（由 `Daemon.setUpHotKeys()` 按能力归属分派，不把逻辑揉在一起）。热键只精确匹配（四个标准修饰位全等，Cmd+Shift+D 之类的变体不误触），其余按键一律透传；`keyUp` 也一律透传（按 keyCode 宽松匹配会吞掉「单独按 D」的抬起、干扰打字）。**要加新热键：在 `iVoxKit/HotKeySpec.swift` 的 `HotKeyAction` 加一个动作 + `defaultChord` 给默认键位 + 在 `setUpHotKeys` 加一个消费者**（`GlobalKeyTap` 里不再有键位表，它只消费）。**键位可在配置 `hotkeys` 段按动作名改**（TOML 写法 `translate = "opt+z"`；首次安装会写全量默认键位）；⚠️ 默认键位有**两份副本**：代码兜底 `HotKeySpec.defaultChord` 与模板 `iVoxKit/ConfigTemplate.swift`（安装脚本不再内嵌第三份，改默认要同步这两处）；配错时启动日志会写明（哪个动作、错在哪、退回哪个默认），生效的键位逐行打「热键: 动作 = 键位」。改完跑 `ivox restart`（只重启进程，不动登录自启开关）。 注意普通键（keyDown）需要「输入监控」权限，只授辅助功能时表现为"修饰键正常、Opt+Z 毫无反应"。
+- **防误触也在 tap 层判，一处判完**：① **同键冷却，按键分档**——`Opt+Z` 0.2s（它靠后写胜出连按，冷却只挡连击）、两个打断键 0.3s（掀页全掀本就该能连按）、其余 1s；冷却中**仍然吃掉事件**只是不执行（漏给目标 app 更糟），走 `systemUptime`，只在 tap 线程读写。② **语音键（右⌘，默认只有它）有 150ms 长按阈值**——按下不足就松开判为误触，按下沿直接丢弃（很多 App 用右⌘，碰一下就打断播报+暂停音乐+开麦代价太大）。它**不套冷却**：按住说话是「按下起录、松开结束」，套冷却会把「说一句再说一句」的第二句吃掉。
 - **右⌘ 语音：副作用发生在「真的在录」之后**——按下经阈值与授权检查后**先试录**，`record()` 成功了才 `pausePlayback`（**暂停播报输出**，不删内容：麦克风要干净，用户说的却是「你停一下」不是「你别说了」）→ `pause`（暂停音乐）→ 浮窗「聆听中…」+ Tink + 波形；松开右⌘再 `resumePlayback` 从原位接着播。**不做设备预检**：耳机类麦克风按需唤醒，预检「设备在不在」会误判、把本来能用的设备焊死；按下就试这一下、试活了算数。失败时播报不动、音乐不停，只在日志写清原因（**授权层与设备层分开报**：TCC 状态 vs CoreAudio 的默认输入设备名，`AVAudioSession` 是 iOS 独有的、macOS 走 CoreAudio）。失败路径的 recorder 进**隔离区**延迟 1 秒释放——`record()` 返回 false 时 audio queue 的回调线程已经起来了，立刻析构会 `objc_loadWeak` 野指针（2026-10-19 实测 SIGSEGV）。**全项目借还背景音乐只此一家**：只有说话时借（按下 pause、松开 resume）。**播报链路不改音乐的播放状态**——它做的是另一码事：汽水音乐压音量**只跟浮层走**（浮窗在屏上就降 5 格，浮窗一消失就恢复；不看「正在出声」——声音归声音、屏幕归屏幕）。改数值不切状态，所以不会抖；判据与时机归浮窗服务 `Overlay/OverlayService.swift`，按下去的动作在 `MediaControl/SodaVolumeDucker.swift`。
 
 - **ASR 模型按需加载 + 空闲卸载**：权重 2.5G，不随 daemon 启动加载——第一次识别时才加载
@@ -147,9 +184,8 @@ pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬�
   **释放的是内存不是能力**：之后真有合成请求（别的入口直连 `{type:tts}`）会按需加载回来。
   问状态**不会把模型请回来**——那就把刚还回去的显存又占上了（引擎内部一个 `wanted` 标志管这事）。
   `TTSProviding` 上的 `releaseModel()` / `resumeModel()` 是这条规则的唯一接口
-- **两摞的分界**：换摞时插 0.6 秒静音（`AudioPlayer.writeSilence`）+ 字幕顶部亮一条细线
-  （1.5 秒后撤）。「换了一摞」按**助理自编的摞号**判（`session.stackID(forSeq:)`），
-  外部 turn_id 不参与。译文走独立播放节点，压根不进队列，所以这条静音与它无关
+- **换页的分界**：换一页时字幕顶部亮一条细线（1.5 秒后撤）。「换了一页」按**助理自编的页号**判
+  （`CaptionFrame.page`），外部 turn_id 不参与。译文走独立播放节点，压根不进队列，所以它与这条无关
 - **ESP32 注入器的 token 路径**：仓改名过（esp32-hid-lab → esp32-lab），
   路径写死会让「压音量」全程静默失效。`HidInjector` 按**候选列表**找 token，
   `HID_TOKEN_FILE` 可覆盖，失败时报错**列出找过的路径**（别再只写死一个）
@@ -160,8 +196,8 @@ pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬�
   `Daemon.cleanup` 会显式 `stopChild()`，不留孤儿（`kill -9` 主进程时它不会跟着死）。
   **合成流的三个时间纪律**（2026-10-24 修，细节见 `docs/playback/queue.md`）：① **读超时不是断流**——
   `EAGAIN` 继续等，判「断了」只有 EOF（原先沿用控制 socket 的 10 秒读超时，合成一慢就被当成
-  断流 → 那一块整块丢弃，实测真对话里连丢 4 块）；② **引擎没就绪先等就绪**（请求撞上「模型正在
-  加载」会被直接拒掉，那一块就白丢了）；③ **一帧都没送出时可重发一次**（已送出半截的不重发，
+  断流 → 那一句整句丢弃，实测真对话里连丢 4 块）；② **引擎没就绪先等就绪**（请求撞上「模型正在
+  加载」会被直接拒掉，那一句就白丢了）；③ **一帧都没送出时可重发一次**（已送出半截的不重发，
   否则会播成「前半截 + 从头再来一遍」）。时间口径集中在 `iVoxKit/SocketStream.swift`。
 
 - **配置分三层**（2026-10-21 重新规划，飞哥裁决）：① **代码内配置**——都在 `iVoxKit/Config.swift` 里：
@@ -169,9 +205,10 @@ pi 扩展(scripts/pi, 整页一次)        ├→ Unix Socket → Daemon ─┬�
   `MediaControlConfig.default`（Web 控制台开关与端口）；
   这些**不进用户配置**，外部再写会被审计点名（写了不生效）；② **外部配置**——
   `~/.config/ivox/config.toml`，**就这一个文件**，装凭据与用户会改的（开关/键位/端口/路径），
-  **键名一律驼峰**（`wechat` 段早先是蛇形，2026-10-21 统一）；**音色归在 `[playback]` 段里**
-  （`[playback.sourceVoices]` + `[[playback.voices]]`，2026-10-29 从顶层挪进来——音色只服务
-  播报；老位置照读不失效，加载时自动搬家）；③ **用户数据**——录音、微信
+  **键名一律驼峰**（`wechat` 段早先是蛇形，2026-10-21 统一）；**`[playback]` 段现在只有两类东西**：
+  `enabled`（播报总开关）与音色（`[playback.sourceVoices]` + `[[playback.voices]]`，2026-10-29 从
+  顶层挪进来——音色只服务播报；老位置照读不失效，加载时自动搬家）。⚠️ `idleGraceSeconds`
+  已删（收尾信号整套作废，队列排空即收尾）——还写着它会被配置审计点名；③ **用户数据**——录音、微信
   context_token 等程序写出的东西。**写错的键不会静默**：`ConfigAudit` 在解码后对照各段已知键
   打日志，还能猜「是不是想写 allowFrom？」（已知键从各类型 `CodingKeys` 派生，不另抄清单）。
   **格式是 TOML**（`iVoxKit/TOML.swift` 自研解析/序列化，无外部依赖）：能写注释，配置能当说明书读；
@@ -246,11 +283,22 @@ The binary at `~/.local/bin/ivox` is what hook scripts and `ivox on/off` invoke.
 ### 队列落盘：daemon 挂了，排队的东西还在
 
 **内存只是工作副本，真源在磁盘**：`~/.config/ivox/ivox-queue.db`（SQLite，系统自带
-libsqlite3）。里面**只存还没播出去的块**；daemon 起来时（**接单之前**）把它们重新排队。
+libsqlite3）。里面**只存还没播出去的东西**；daemon 起来时（**接单之前**）把它们重新排队。
 
-- 写点：入队（存那一页）、播完（删已交给合成的块）、被掀（掀页/掀摞/全掀/取消轮次 → 删）
+**两张表**（2026-11-02 起，队列里只有页）：
+
+| 表 | 列 | 一行是什么 |
+|---|---|---|
+| `pages` | `page INTEGER PRIMARY KEY`、`source TEXT`、`voice TEXT`、`text TEXT` | 一页：页号、来源（端）、音色、整页原文 |
+| `sentences` | `seq INTEGER PRIMARY KEY`、`page INTEGER`、`text TEXT` | 一句：句号、所属页号、文本 |
+
+**没有 turn_id / session_id 列**——它们只进日志。老库（一张 `blocks` 表，装的是旧的三层结构）
+启动时改名 `blocks_legacy` 保留，不删也不读。
+
+- 写点：入队（存那一页与它的每一句）、播完（删已交给合成的句，句见底时那一页也删）、
+  被掀（掀页/全掀/撤页 → 删）
 - 恢复出来的内容要**显式开管道**才有人念（`restorePersisted` 里补一次 `pumpOrSettle`）——
-  管道是「入队/收尾」时起的，恢复不经过它们
+  管道是「入队」时起的，恢复不经过它
 - 队列库路径**跟 socket 走**（`ivox-queue.db` / `ivox-debug-queue.db`），隔离实例各写各的
 - 写盘失败只记警告，不挡播报
 
@@ -293,7 +341,7 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests
 xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLeadInGetsNoPseudoPeriod
 ```
 
-测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamBuffer / StreamFrame / AudioPipeline / Config / Translation / **PlaybackSessionStory**（测摞的分段与墓碑归属）/ **OverlayService**（测浮窗落点几何与去重判据）/ **InterruptOrigin**（打断归因的措辞契约）。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
+测试仅覆盖 `iVoxKit`（无 MLX 依赖，快），位于 `Tests/iVoxTests/`：TextCleaner / TextSplitter / StreamFrame / AudioPipeline / Config / Translation / **PlaybackSessionStory**（测页的分段与丢弃归属）/ **PlaybackStore**（落盘两张表）/ **OverlayService**（测浮窗落点几何与去重判据）/ **InterruptOrigin**（打断归因的措辞契约）。主程序 iVox（含 MLX/Audio actor）无单测，靠真实 daemon + `ivox speak` / pi 实测验证。
 
 **测热键用 `scripts/hotkey.py`**（不是 osascript）：热键走 CGEvent tap，而**合成来源的键盘事件会被 app 丢弃**（汽水音乐就丢），
 所以要真按就得出真键盘——ESP32 那块板子通过 USB 把自己枚举成 HID 键盘，按下去的是**真硬件事件**。
@@ -301,21 +349,23 @@ xcrun --toolchain swift-latest swift test --filter TextCleanerTests/testColonLea
 
 ```bash
 /Users/admin/iCode/services/.venv/bin/python scripts/hotkey.py             # 列出所有热键：动作 → 键位
-/Users/admin/iCode/services/.venv/bin/python scripts/hotkey.py skipBucket  # 按下「掀摞」那个键
+/Users/admin/iCode/services/.venv/bin/python scripts/hotkey.py skipAll    # 按下「全掀」那个键
 ```
 
-按完看 `~/.config/ivox/daemon.log` 里的归因（`掀摞·键盘 ctrl+2`）。
+按完看 `~/.config/ivox/daemon.log` 里的归因（`全掀·键盘 ctrl+2`）。
 ⚠️ 脚本**会真的按键**，测试时手别放键盘上，被按下的键会打到当前前台的 App。
 
 ```bash
-make check-tts                      # 播报黑盒自检：压真实 daemon，21 个用例（需先 ivox on，模型就绪）
+make check-tts                      # 播报黑盒自检：压真实 daemon，20 个用例（需先 ivox on，模型就绪）
 make check-tts ARGS="-f tail"       # 只跑匹配用例；--strict 让 advisory 计入失败；--managed 自行重启守护进程
 ```
 
 `scripts/tts-check.mjs`（零依赖 Node，仅用 `node:` 内置模块）经 Unix socket 发流式帧、`GET /health` 探运行态、增量 tail `daemon.log` 断言：协议正确性、合成时长、轮次隔离、取消丢弃迟到帧、EOF 残尾、并行取消不拖垮在跑的轮（pi 复现）、停止哨兵作废在跑的轮、多轮交错时队首轮等块不得空转（`E8`）、密集打断压测、打断后活性、尾音完整（`needsAudio`，无设备自动 skip）。断言要数「队列状态」等 DEBUG 行，而 daemon 默认只留 INFO 及以上（`Logger` 的级别门限），所以脚本自己 `launchctl setenv IVOX_LOG_LEVEL=debug` + `kickstart` 重启 daemon，跑完 unset 环境变量——**这是它跟普通 `ivox on` 唯一的区别，别把它改回附加到已在跑的 daemon**（2026-10-17：日志门限一落地，`E3`/`A-tail` 两条靠 DEBUG 行吃饭的断言直接假红）。**它是排障工具，不是每次改动都要跑的回归**：日常改动用 `make test` + 单点验证（临时脚本压真实 socket、看 `daemon.log`）；只有正常播报出问题（没声音/卡住/串音/未收尾）时才用它定位。**但改播报队列核心（`PlaybackQueue` / `ConnectionHandler` 的收尾·打断·入队）时必须跑一次全量**——2026-10-16 踩过：三个用例悄悄腐烂成假绿（两条正则与日志格式失配、一条断言过严、一条被自检自己的噪声检测抓成 skip），全靠一次全量才暴露；修完全量 13/13。**2026-10-19 拆成三进程后又跑全量：19 pass / 0 fail / 1 advisory**；
 2026-10-20 审计补两条用例（`F-pcm-duration`、`S3-skip-stack-plain-stacks-are-separate`），同日补
 `R1`（誊清员崩了 → 该块作废 / 队列继续 / 监督者重拉，v6.0.0 的招牌能力，此前只有一次手工验收撑着），
-现共 **21 条**。
+现共 **20 条**（`S3-skip-stack-*` 随「摞」一起删掉了）。
+**2026-11-02 队列改版后重跑全量：20 pass / 0 fail / 0 skip / 0 advisory**（用例按新协议重写，
+旧断言一律不算数——它们会假绿）。
 **手动起的 daemon 必须以 `IVOX_LOG_LEVEL=debug` 起**，否则脚本切不动它的日志级别——它认得出
 DEBUG 不可见，会把靠 DEBUG 行吃饭的 `E3`/`A-tail` 降级为 skip 并写明原因（2026-10-20 加这道保护：
 原先只打一行警告就往下跑，那两条直接假红，报「入队块数(0)」这种看着像产品坏了的数）。

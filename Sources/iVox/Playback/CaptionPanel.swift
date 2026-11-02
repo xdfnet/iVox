@@ -31,9 +31,9 @@ final class CaptionPanel {
     private var charsPerSecond: Double = 4.5
     /// 推进高亮的定时器（每 100ms 一步）
     private var ticker: Task<Void, Never>?
-    /// 当前这一帧属于哪一摞：变了就是「换了一轮」
-    private var stackID: Int?
-    /// 分界线是否亮着（换摞时亮一下，提示「这是一轮新的」）
+    /// 当前这一帧属于哪一页：变了就是「换了一条消息」
+    private var pageID: Int?
+    /// 分界线是否亮着（换页时亮一下，提示「这是一条新的」）
     private var ruleVisible = false
     /// 撤掉分界线的定时器
     private var ruleTask: Task<Void, Never>?
@@ -41,7 +41,7 @@ final class CaptionPanel {
     /// 歌词窗口：当前句前后各带几句（多了占屏、少了没上下文）
     private static let contextBefore = 1
     private static let contextAfter = 1
-    /// 分界线亮多久（秒）：够看清「换了一轮」，又不至于一直挂在那儿
+    /// 分界线亮多久（秒）：够看清「换了一条」，又不至于一直挂在那儿
     private static let ruleSeconds: Double = 1.5
     /// 高亮推进的节奏
     private static let tickInterval = Duration.milliseconds(100)
@@ -55,7 +55,7 @@ final class CaptionPanel {
         guard let frame, !frame.lines.isEmpty else {
             guard !lines.isEmpty else { return }
             lines = []
-            stackID = nil
+            pageID = nil
             ruleVisible = false
             stopTicker()
             service.hide(.caption)
@@ -69,16 +69,16 @@ final class CaptionPanel {
             index = frame.index
             startedAt = Date()
         }
-        // **换了一轮**（摞号变了）→ 亮一下分界线：两摞连着读时，
-        // 屏上给个「这里开始是新一轮」的记号。第一次不算换（那只是开场）。
-        if let stack = stackID {
-            if stack != frame.stack {
-                Log.debug("换摞: 字幕亮分界线（摞 \(stack) → \(frame.stack)）")
+        // **换了一条消息**（页号变了）→ 亮一下分界线：两条消息连着读时，
+        // 屏上给个「这里开始是新的」的记号。第一次不算换（那只是开场）。
+        if let page = pageID {
+            if page != frame.page {
+                Log.debug("换页: 字幕亮分界线（第 \(page) 页 → 第 \(frame.page) 页）")
                 ruleVisible = true
                 scheduleRuleRemoval()
             }
         }
-        stackID = frame.stack
+        pageID = frame.page
         render()
         startTicker()
     }

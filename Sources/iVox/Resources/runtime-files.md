@@ -14,8 +14,7 @@ iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文�
 ├── voices/         1.7M ← 参考音频（每个音色一个 wav）
 ├── wechat/          28K ← 微信 agent 的工作区与会话
 ├── recordings/     136K ← 语音输入的录音临时文件
-├── lastturn/       132K ← 「会话 → 最后一摞」对照表
-├── pagebuf/          0  ← 攒整页正文的临时缓冲
+├── pagebuf/          0  ← 攒整页正文的临时缓冲（hook 每收完一页就删掉自己那个）
 ├── scripts/          28K ← 分发前的 hook / pi 扩展素材源
 ├── signing/          4K ← 自签证书 + 私钥（备份，钥匙串重置后照它的 README 恢复）
 ├── *.log            日志与崩溃现场
@@ -63,8 +62,7 @@ iVox 守护进程的全部运行时文件都在 `~/.config/ivox/`。**这份文�
 | `ivox.sock` | daemon 启动时 | ✅ 停了就能删 | 主 daemon 的 socket |
 | `ivox-tts.sock` | 誊清员启动时 | ✅ 停了就能删 | 誊清员的 socket；崩了会留残file，下次 bind 时自动覆盖 |
 | `ivox.lock` | daemon 启动时 | ✅ 停了就能删 | 实例独占锁：抢不到就退出，防止开成两份 daemon |
-| `ivox-queue.db` | daemon | ❌ 删了会丢排队内容 | 队列落盘（SQLite）：只存**还没播出去**的块，daemon 起来时重新排队 |
-| `lastturn/` | hook 每次 Stop | ✅ | 每个 Claude 会话一个 36 字节文件，记「这会话最后一摞是哪个」，给 Stop 反查用。**只在会话还活着时有用**，hook 里已加「超过 7 天的每次 Stop 顺手扫掉」 |
+| `ivox-queue.db` | daemon | ❌ 删了会丢排队内容 | 队列落盘（SQLite）：两张表——`pages`（页级：页号/来源/音色/整页原文）与 `sentences`（句级：句号/页号/文本），只存**还没播出去**的，daemon 起来时重新排队 |
 | `pagebuf/` | hook 攒整页正文 | ✅ | 正常情况是空的（有文件说明有一页没收完） |
 | `recordings/` | 语音输入 | ✅ | **代码里写死只保留最近 2 个**，多的自动删。看到 2 个就是正常的 |
 | `wechat/` | 微信 agent | ❌ | 删了微信 Agent 的历史会话就没了 |
@@ -108,7 +106,7 @@ pkill -9 -f 'tts --serve'    # 誊清员，daemon 挂了它不会跟着死
 | 症状 | 先看哪 |
 |---|---|
 | 没声音 | `curl -s localhost:8888/health` 看 `engine` 字段；`daemon.log` 搜「合成失败」 |
-| 某一摞没念完 | `daemon.log` 搜 `seq=`，再用同一个号去 `tts.log` 里对——三处日志都带它 |
+| 某一页没念完 | `daemon.log` 搜 `seq=`，再用同一个号去 `tts.log` 里对——两处日志都带它 |
 | 播报断了但服务还在 | `daemon.log` 搜「已拉起誊清员」，看监督者有没有重启 |
 | daemon 莫名重启 | `crash.log` 有栈；`crash.count` 是累计次数 |
 | 麦克风/快捷键没反应 | 多半是 TCC 权限掉了，去系统设置重新勾「输入监控」「辅助功能」「麦克风」。**正常更新不会再掉**（用的是固定的自签证书，见 `signing/`）；换了证书才会 |

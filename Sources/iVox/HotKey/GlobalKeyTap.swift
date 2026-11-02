@@ -56,18 +56,18 @@ final class GlobalKeyTap: @unchecked Sendable {
     }
 
     /// 同一组合键的冷却：窗口内只放行一次，防连点/手抖引发一串重复动作。
-    /// 按键各自的冷却互不相干：Opt+Z 的连点不会连带压住 Ctrl+2。
+    /// 按键各自的冷却互不相干：Opt+Z 的连点不会连带压住 Ctrl+1。
     /// 只在 tap 线程读写（handle 独占它），无需加锁。
     ///
     /// 分档而非一刀 1 秒，因为**重复一次的意义各键不同**：
     /// - 划词翻译：抢在 `TranslationCoordinator` 的提交点之前就已后写胜出（连按是
     ///   「我换了个选区」，本就该让位给最新那次），压太久反而挡路，只留 0.2s 挡连击
-    /// - 三个打断键：翻页/掀摞本来就该能连按，给 0.3s
+    /// - 两个打断键：掀页/全掀本来就该能连按，给 0.3s
     /// - 其余（开终端、复制路径）：一次就是一次，给足 1s
     private static func cooldown(for hotKey: HotKeyAction) -> TimeInterval {
         switch hotKey {
         case .translate: return 0.2
-        case .skipAll, .skipBucket, .skipPage: return 0.3
+        case .skipAll, .skipPage: return 0.3
         default: return 1.0
         }
     }

@@ -151,11 +151,11 @@ final class TOMLTests: XCTestCase {
         k = "v"
         """
         let doc = try TOMLDocument.parse(text)
-        let updated = doc.setting(.string("ctrl+1"), forKey: "hotkeys.skipBucket")
-        XCTAssertTrue(updated.contains("skipBucket = \"ctrl+1\""))
+        let updated = doc.setting(.string("ctrl+1"), forKey: "hotkeys.skipPage")
+        XCTAssertTrue(updated.contains("skipPage = \"ctrl+1\""))
         // 插在 hotkeys 段内、other 段之前
         let hotkeysIdx = try XCTUnwrap(updated.range(of: "[hotkeys]"))
-        let insertIdx = try XCTUnwrap(updated.range(of: "skipBucket"))
+        let insertIdx = try XCTUnwrap(updated.range(of: "skipPage"))
         let otherIdx = try XCTUnwrap(updated.range(of: "[other]"))
         XCTAssertTrue(hotkeysIdx.lowerBound < insertIdx.lowerBound)
         XCTAssertTrue(insertIdx.lowerBound < otherIdx.lowerBound)
@@ -165,12 +165,12 @@ final class TOMLTests: XCTestCase {
         let text = """
         [hotkeys]
         translate = "cmd+d"
-        skipBucket = "ctrl+1"
+        skipPage = "ctrl+1"
         """
         let doc = try TOMLDocument.parse(text)
         let updated = doc.removingValue(forKey: "hotkeys.translate")
         XCTAssertFalse(updated.contains("translate"))
-        XCTAssertTrue(updated.contains("skipBucket"))
+        XCTAssertTrue(updated.contains("skipPage"))
     }
 
     func testAppendingToArrayTable() throws {

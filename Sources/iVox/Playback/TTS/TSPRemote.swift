@@ -371,7 +371,7 @@ actor TSPRemote: TTSProviding {
         deadline: TimeInterval,
         onFrame: @escaping @Sendable (Data) -> Void
     ) throws {
-        // 关联 ID 随请求头递过去：誊清员那边的每行日志都带它，这一摞才串得起来
+        // 关联 ID 随请求头递过去：誊清员那边的每行日志都带它，这一页才串得起来
         var request = Data()
         request.append(contentsOf: Data(
             "{type:tts,voice:\(voiceID)\(trace?.headerFields ?? "")}\n".utf8))

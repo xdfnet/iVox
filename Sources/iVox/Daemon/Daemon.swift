@@ -53,7 +53,6 @@ actor Daemon {
         self.queue = PlaybackQueue(
             engine: ttsEngine,
             mediaController: mediaController,
-            idleGraceSeconds: config.resolvedPlayback.resolvedIdleGraceSeconds,
             enabled: config.resolvedPlayback.resolvedEnabled
         )
 
@@ -311,7 +310,6 @@ actor Daemon {
             queued: await queue.pendingCount,
             playing: await queue.isProcessing,
             playbackEnabled: await queue.isEnabled,
-            audibleTurn: await queue.audibleTurn,
             audiblePage: await queue.audiblePage
         )
     }
@@ -346,15 +344,12 @@ actor Daemon {
                      .openTerminalCodex, .openTerminalPi, .copyPath:
                     await quickActionsService.handle(hotKey, at: location)
                 case .skipAll:
-                    // 手动打断三档之「掀桌」：Ctrl+3 用户不想说话，只静音播报。
+                    // 全掀（Ctrl+2）：用户不想听播报了，一句不留。
                     // **不碰背景音乐**——播报不再借音乐，这里也就没有"还"要补（见 PlaybackQueue 文件头）。
-                    // 归因带**实际生效的键位**（键位可配，写死 "Ctrl+3" 就是句假话）。
+                    // 归因带**实际生效的键位**（键位可配，写死 "Ctrl+2" 就是句假话）。
                     await self.queue.cancelAll(.hotkey(chord))
-                case .skipBucket:
-                    // 手动打断三档之「中」：丢正在播的这一轮（连同其后分块），从下一桶接着播。
-                    await self.queue.skipCurrentBucket(.hotkey(chord))
                 case .skipPage:
-                    // 手动打断三档之「轻」：Ctrl+1 丢正在播的这一页，同一轮剩下的照常念。
+                    // 掀页（Ctrl+1）：丢正在听的那一页，同轮后面的页照常念。
                     await self.queue.skipCurrentPage(.hotkey(chord))
                 }
             }
@@ -364,7 +359,7 @@ actor Daemon {
         let speak = config.resolvedTranslation.speechEnabled ? "浮窗 + 朗读" : "仅浮窗"
         // 键位本身不写在这里：各动作实际绑了哪组键，由键盘事件层逐行打「热键: xxx = <键位>」，
         // 改过配置后那里就是真相（这里再写一遍就成了第二份、还会漂移）。
-        Log.info("热键已装配（划词翻译 \(speak)；QuickActions 五项；手动打断三档：跳整摞 / 掀桌 / 读下一页）")
+        Log.info("热键已装配（划词翻译 \(speak)；QuickActions 五项；手动打断两档：掀页 / 全掀）")
     }
 
     /// 播报字幕（配置开启才装）：把队列广播的「正在念的这句」交给浮窗服务显示。

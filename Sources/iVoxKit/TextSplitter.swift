@@ -2,16 +2,16 @@ import Foundation
 
 // 切句：按句末边界合成 ≤80 字的播报块。
 
-/// 播报分块参数
+/// 播报切句参数
 public enum PlaybackChunking {
-    /// 单个播报分块上限（字符）。太小会频繁起停合成，太大则首句开播延迟变大
+    /// 单句上限（字符）。太小会频繁起停合成，太大则首句开播延迟变大
     public static let maxChars = 80
 }
 
 /// 按句末标点切分文本，并把相邻短句合并到接近 `maxChars`。
 ///
-/// 用于播报分块：一次 `ivox speak` 拆成多段入队，句级合成
-/// 也贴合流式 turn 的「边切边播」。
+/// 用于播报：一页（一整条 assistant 消息）切成若干句，一句一次合成。
+/// **切句真源只有这一处**——Claude 侧与 pi 侧都走它，谁都不自己切。
 public func splitSentences(_ text: String, maxChars: Int = PlaybackChunking.maxChars) -> [String] {
     let limit = max(1, maxChars)
     let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -24,7 +24,7 @@ public func splitSentences(_ text: String, maxChars: Int = PlaybackChunking.maxC
 // MARK: - 私有实现
 
 /// 句末标点：连续出现（如「？！」）算作上一句的结尾。
-/// 含分号：分号隔开相对完整的并列小分句，播报时提前切可降低首句延迟（对齐 StreamBuffer）。
+/// 含分号：分号隔开相对完整的并列小分句，播报时提前切可降低首句延迟。
 private let sentenceTerminators: Set<Character> = ["。", "！", "？", "!", "?", "…", "；", ";", "\n"]
 /// 超长句优先在这些位置断开
 private let softBreaks: Set<Character> = ["，", "、", "：", ",", ":", " "]

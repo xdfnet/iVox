@@ -1,5 +1,53 @@
 # iVox 开发日志
 
+## 未发布 — 2026-11-02
+
+- **播报队列彻底简化：队列 = 页的 FIFO** — 容器从三层（段 → 页 → 块）缩到两层
+  （**页 → 句**），「摞」这个概念整套拿掉，附带的机制跟着消失一大片。
+  - **新模型**：一页 = 一条 assistant 消息 = 队列里唯一的单位；页里装若干**句**
+    （1~80 字的合成单位，纯实现细节，用户不感知）。页按**到达顺序**排，先来先进，谁都不插队。
+  - **删掉的概念**（文档里不再出现）：**摞 / stack / segment**（一次输入引发的全部回复不再成组）、
+    **turn_id / session_id**（不进队列、不落库，只在日志里出现）、**墓碑 / deadTurn**
+    （用户放弃之后不再拦后续内容，迟到的内容照播）、**Stop 收尾信号**（`Stop` 钩子整条摘掉，
+    `hook.sh` 不再有 `end` 分支）、**空闲宽限 `idleGraceSeconds`**（配置项已删，审计会点名）。
+    **队列排空即收尾**：等设备把尾音播完 → 收字幕、还汽水音乐音量。
+  - **打断从三档变两档**：**Ctrl+1 掀页**（掐掉在播的那一句 + 丢掉正在听的那一页的剩余内容）、
+    **Ctrl+2 全掀**（取消在播 + 清空全部排队内容，**不留墓碑**）。原来 Ctrl+2 掀摞、
+    Ctrl+3 全掀的位置空出来了，**Ctrl+3 现在没有绑定**。
+  - **落盘两张表**：`pages(page, source, voice, text)` 一页一条；
+    `sentences(seq, page, text)` 一句一条。**没有 turn_id / session_id 列**；
+    老库（一张 `blocks` 表）启动时改名 `blocks_legacy` 保留，不删也不读。
+  - **协议**：Claude 侧 `hook.sh <source>`（**去掉了动作名**，只剩「搬一页」这一件事）攒完一整页 →
+    `ivox speak --source claude -- "<整页正文>"` → 清洗、切句、入队为**一页**；
+    pi 侧首行 `{type:stream,source:pi}`，
+    **一个长度帧（`L<n>` + n 字节正文）= 一页**，`{end}` 结束，`{cancel}` 撤掉这条连接送来的页；
+    跳过 `{type:skip,mode:page|all}`；播报开关 `{type:playback,enabled:0|1}`。
+  - **其它**：字幕 `CaptionFrame` 的 `stack` 字段改成 `page`；`/health` 的 `audibleTurn` 删除，
+    只剩 `audiblePage`；`ivox skip --page|--all`（`--stack` 删）；`ivox speak --source|--voice|--now`
+    （`--group|--page|--final` 删）；配置 `[hotkeys]` 段 `skipPage = "ctrl+1"`、`skipAll = "ctrl+2"`
+    （`skipBucket` 删）；配置 `[playback]` 段只剩 `enabled`。
+  - **为什么**：一摞纸要归拢，就得有「外部编号 ↔ 自编号」的对照表、拦后续增量的墓碑、
+    「说完了没有」的记账、空闲宽限——**每一件都只在一个前提下才有意义，而那个前提是历史包袱**
+    （早先因为外部编号不可靠，助理不得不自编号并做映射，映射一多就打架：实测按一次键掀掉 34 块，
+    其中只有 6 块是新回复）。拿掉「摞」之后这些机制整套消失，队列排空即收尾。
+    裁决记录见 [`playback/purpose.md`](playback/purpose.md)「不凑合」一节。
+  - **文档同步改了**：`CLAUDE.md`、`docs/playback/` 四层、`docs/socket-api.md`、
+    `docs/hook-chain.md`、`docs/architecture.md`、`README.md`；未裁决的
+    [`playback/proposal-drop-stop.md`](playback/proposal-drop-stop.md) 已落地，挪进 `docs/archive/`。
+  - **黑盒自检已按新协议重写**（`scripts/tts-check.mjs`，20 条用例）：不再有 `group` / `page` /
+    `end:1` / `mode:stack`，改成整页一次送、`mode=page|all`、`{cancel}` 撤页。
+    `docs/playback/requirements.md` 的验证表已换成新用例名。
+    **已跑全量：20 pass / 0 fail / 0 skip / 0 advisory**（2026-11-02）。
+    跑全量时顺带修掉三处**自检脚本自己的毛病**（都不是产品缺陷）：
+    ① `E3` 在取消日志一出现就断言「B 那条已被合成」——队列是串行的，B 要等 A 那句念完
+    才开 synth（约 2.5 秒后），立刻数行数必然假红；改成**等**那行出现。
+    ② 脚本 `kickstart` 重启 daemon 后立刻连 socket——老进程退出时把 socket 摘了、
+    新进程还没 bind，于是 20 条用例集体报 `connect ENOENT`（那报错看着像产品坏了，
+    其实只是抢跑）；改成**等 socket 可连接**再开跑。
+    ③ `S1`（全掀）在掀完的瞬间数一次「第二页有没有被合成」——没清干净的话那页是
+    **之后**才开合成的，只数一次会漏（假绿）；改成收尾后再数一遍。
+  - `iVoxKit/StreamBuffer.swift` 及其单测一并删除——页是整块到的，不再需要「流式安全边界切分」。
+
 ## 未发布 — 2026-10-29
 
 - **代码默认值改成当前外部配置文件的实际值** — 默认值以前是「出厂预设」，

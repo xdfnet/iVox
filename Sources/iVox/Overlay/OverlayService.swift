@@ -36,7 +36,7 @@ final class OverlayService {
         /// nil = 整行一个颜色（按 `style`）。
         let highlight: Range<Int>?
 
-        /// **分界线**：不是文字，是一条细线（换摞时提示「这是一轮新的」）。
+        /// **分界线**：不是文字，是一条细线（换页时提示「这是一条新的」）。
         /// 为 true 时 `text` 忽略。
         let isRule: Bool
 

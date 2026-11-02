@@ -1,8 +1,11 @@
 #!/bin/bash
 # iVox Hook — Claude Code 播报 Hook（PI 走自己的 TS 扩展，不经过这里）
-# Usage: hook.sh <msgdisplay|end> <source>   # source: claude
-#   hook.sh msgdisplay claude  → MessageDisplay：assistant 行批增量，按 turn_id 装进同一摞
-#   hook.sh end claude         → Stop：只送「说完了」这个暗号，不出声
+# Usage: hook.sh <source>   # source: claude
+#   hook.sh claude  → MessageDisplay：一整页（一条 assistant 消息）搬一次
+#
+# **没有动作名**：收尾信号已随「摞」一起删了，只剩「搬一页」这一件事，
+# 再挂个 msgdisplay 的名字纯属多余。
+#
 # 协议：stdout 必须保持干净；exit 0 = 继续，非 0 = 停止
 # 手动静音（IVOX_SKIP=1，如 Samantha 内部调用）或 reflexio 后台学习调用（CLAUDE_SMART_INTERNAL=1）→ 不播报
 [[ "${IVOX_SKIP:-}" == "1" ]] && exit 0
@@ -20,7 +23,7 @@
 # `wechat.speak` 裁决（真源在配置里，hook 不猜）。
 # 早先微信侧没出声是「碰巧」：hook 触发了，却因为 PATH 里没有 ~/.local/bin 找不到
 # ivox 而静默失败（2026-10-26 实测）——那是巧合不是机制，不能当规则。
-SOURCE="${IVOX_SOURCE:-$2}"
+SOURCE="${IVOX_SOURCE:-${1:-}}"
 # 给 python 段用：审计行要写来源。用 export 而不是 `VAR=x meta=$(...)` 前缀赋值——
 # 前缀环境对**纯赋值语句**里的命令替换不生效（实测 source= 写成空）。
 export IVOX_HOOK_SOURCE="$SOURCE"
@@ -44,37 +47,39 @@ rotate_hook_log() {
 }
 rotate_hook_log
 
-# 必须两个参数：动作（msgdisplay|end）+ 来源。来源与动作一个都不能猜，宁缺毋滥。
-# 注：interrupt 分支已移除——打断权只归快捷键（右⌘/Opt+Z/Ctrl+2）与命令行 `ivox skip`，
-# 不再经 hook.sh 自动打断。（`ivox quiet` 已随停止帧一起删除。）
-if [[ "$#" -lt 2 ]]; then exit 0; fi
-if [[ "$1" == "msgdisplay" ]]; then
-  # MessageDisplay：assistant 消息流式显示时按行批触发，delta = 自上一批以来新完成的整行文本。
-  # 这就是「过程内容逐句进桶」的载体——Claude 分步/工具多段回复，各段写出来时各播一次，
-  # 不再只等 Stop 终了一次。**必须极快返回**：交互模式下 Claude Code 等本钩子返回才渲染该批。
-  # python 只做「delta 提取 + 审计写 hook.log」两件事且要快；播报用后台 & 不阻塞。
-  # python 依次吐三行：分组号（摞）、页号、delta。delta 放最后是因为它可能含换行。
-  payload="$(cat)"
-  IVOX_HOOK_SOURCE="$SOURCE" meta=$(printf '%s' "$payload" | python3 -c "
+# 来源只认 claude / wechat 两个：别的（多半是配置没更新干净）一律不出声——宁缺毋滥，不猜。
+# 注：打断与收尾都不再经 hook——打断权只归快捷键（Ctrl+1 掀页 / Ctrl+2 全掀）与命令行
+# `ivox skip`；「这一轮说完了」也不再由端报告（队列排空即收尾）。
+case "$SOURCE" in
+  claude|wechat) ;;
+  *) exit 0 ;;
+esac
+
+# MessageDisplay：assistant 消息渲染时按行批触发，delta = 自上一批以来新完成的整行文本。
+# **整页搬运**：MessageDisplay 会把一页拆成十几批增量送来，这里按 message_id 攒着，
+# 等 final=True（这一页说完了）再把整页一次性交给播报助理，由它自己切句排队。
+# 一页 = 一条 assistant 消息 = 队列里的一个单位；页与页之间**先来先进**，
+# 不再按 turn 分组（turn_id 只留在日志里，不参与排队）。
+# **必须极快返回**：交互模式下 Claude Code 等本钩子返回才渲染该批。
+# python 只做「攒页 + 审计写 hook.log」两件事；播报用后台 & 不阻塞。
+# python 吐两行：页号（message_id）、整页文本。文本放最后是因为它可能含换行。
+payload="$(cat)"
+IVOX_HOOK_SOURCE="$SOURCE" meta=$(printf '%s' "$payload" | python3 -c "
 import json, os, sys, re
 s = sys.stdin.read()
 d = json.loads(s) if s.strip() else {}
 delta = d.get('delta', '') or ''
 final = d.get('final', False)
-san = lambda v: re.sub(r'[^A-Za-z0-9_.-]', '', str(v or ''))   # header 按 , 和 : 切分，脏字符会切坏 meta
-grp = san(d.get('turn_id','') or d.get('message_id',''))
+san = lambda v: re.sub(r'[^A-Za-z0-9_.-]', '', str(v or ''))   # 文件名用的清洗
 pg  = san(d.get('message_id',''))
 from pathlib import Path
 from datetime import datetime
 home = Path.home()
 home.joinpath('.config/ivox/hook.log').open('a').write(
-    '%s hook.sh msgdisplay source=%s turn=%s mid=%s index=%s final=%s delta=%s\n' % (
+    '%s hook.sh source=%s turn=%s mid=%s index=%s final=%s delta=%s\n' % (
     datetime.now().strftime('%Y-%m-%d %H:%M:%S.%f')[:-3], os.environ.get('IVOX_HOOK_SOURCE',''),
     d.get('turn_id',''), d.get('message_id',''), d.get('index',''), final, delta[:40]))
 
-# **整页搬运**：MessageDisplay 会把一页拆成十几批增量送来，这里先攒着，
-# 等 final=True（这一页说完了）再把整页一次性交给播报助理，由它自己切句排队。
-# 早先每批都立刻发，一页会涌进十几个碎片，队列顺序被切碎、也不像「一页」。
 bufdir = home/'.config/ivox/pagebuf'
 if pg:
     bufdir.mkdir(parents=True, exist_ok=True)
@@ -95,86 +100,14 @@ if isinstance(page, str):
     if len(page) <= 5 and not re.search(r'[一-鿿]', page):
         page = ''
 
-# 按 session_id 记下「这条会话最后一次是哪一摞」——**Claude 的 Stop payload 里没有 turn_id**
-# （只有 prompt_id 与 last_assistant_message，见官方 hooks reference），收尾信号要靠这一笔
-# 反查才能精确指认。
-# 分文件存是为了两个会话并行时互不覆盖（一个文件按 session 一键）。
-sid = san(d.get('session_id',''))
-if sid and grp:
-    _d = home/'.config/ivox/lastturn'
-    _d.mkdir(parents=True, exist_ok=True)
-    (_d/sid).write_text(grp)
-print(grp)
 print(pg)
 print(page)
 " 2>/dev/null)
-  grp="$(printf '%s' "$meta" | sed -n 1p)"
-  pg="$(printf '%s' "$meta" | sed -n 2p)"
-  delta="$(printf '%s' "$meta" | tail -n +3)"
-  if [[ -n "${delta// }" ]]; then
-    args=(speak --source "$SOURCE")
-    [[ -n "$grp" ]] && args+=(--group "$grp")
-    [[ -n "$pg" ]] && args+=(--page "$pg")
-    # 后台 &：走 socket 短连 O(ms)，不阻塞本批渲染
-    "$IVO" "${args[@]}" -- "$delta" 2>/dev/null &
-  fi
-  echo '{"continue": true}'
-  exit 0
+pg="$(printf '%s' "$meta" | sed -n 1p)"
+page="$(printf '%s' "$meta" | tail -n +2)"
+if [[ -n "${page// }" ]]; then
+  # 后台 &：走 socket 短连 O(ms)，不阻塞本批渲染
+  "$IVO" speak --source "$SOURCE" -- "$page" 2>/dev/null &
 fi
-if [[ "$1" == "end" ]]; then
-  # 回复真正结束（Claude 的 Stop 钩子）：只发一个**收尾信号**——不带一个字、不出声。
-  # 作用：让队列立刻判「这一摞说完了」→ 收尾（收字幕），不必再等空闲宽限那 2 秒。
-  # 与 msgdisplay 的分工：那条送**内容**，这条只说**完了**。
-  # 当年摘 Stop（57179ae）是因为它连正文一起送、与 MessageDisplay 重复播两遍；现在只送暗号，不重复。
-  # Claude 的 Stop **没有 turn_id**（官方 hooks reference 的 Stop 事件专属字段只有
-  # stop_hook_active / last_assistant_message / background_tasks / session_crons，
-  # 通用字段里是 prompt_id 不是 turn_id），只能按 session_id 反查 msgdisplay 记下的那一笔。
-  # 先试 payload 里万一有 turn_id，没有再反查；两条都取不到就不带 group（服务端退化成「收最后打开的那摞」）。
-  # 另注：按 Esc 中断与 API 报错（走 StopFailure）时本钩子**不会触发**，那两种情形交给 2 秒空闲宽限兜底。
-  payload="$(cat)"
-  grp=$(printf '%s' "$payload" | python3 -c "
-import json, sys, re
-import time
-from pathlib import Path
-try:
-    d = json.load(sys.stdin)
-except Exception:
-    d = {}
-tid = re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('turn_id') or ''))
-if tid:
-    print(tid)
-else:
-    sid = re.sub(r'[^A-Za-z0-9_.-]', '', str(d.get('session_id','')))
-    p = Path.home()/'.config/ivox/lastturn'/sid if sid else None
-    print(p.read_text().strip() if p and p.exists() else '')
-# 顺手给 lastturn/ 扫一遍：Stop 一轮一次，一天几十次，便宜。这张表只存「session →
-# 最后一摞」的对照，回复结束就不再有用，留着只是白占目录（实测已堆到 30 个文件）。
-# 七天是下限：七天内的会话还有可能被 Stop 反查，更早的不可能还在对话里。
-try:
-    _dir = p.parent if p else Path.home()/'.config/ivox/lastturn'
-    _cut = time.time() - 7*86400
-    for _f in _dir.iterdir():
-        if _f.is_file() and _f.stat().st_mtime < _cut:
-            _f.unlink()
-except Exception:
-    pass
-" 2>/dev/null)
-  args=(speak --source "$SOURCE")
-  [[ -n "$grp" ]] && args+=(--group "$grp")
-  # **延后 300ms 再发收尾信号**：Stop 与 MessageDisplay 是两次独立的钩子调用，谁先抵达 socket
-  # 并不保证——实测 27 轮里 14 轮 Stop 比正文早到 10~20 毫秒。Stop 先到就把这一摞盖了印，
-  # **最后一页正文落在它之后**，于是那一页自成一摞（用户按 Ctrl+2 想掀整轮，掀不到最后这页），
-  # 字幕与汽水音量还会在中途收一次又起一次。
-  # 延后一点让正文先落地，两条通路就按「先内容、后收尾」的顺序到。
-  # 放在后台：钩子必须立刻返回（Claude Code 等它返回才继续），不能在这儿睡。
-  ( sleep 0.3; "$IVO" "${args[@]}" --final -- "" 2>/dev/null ) &
-  echo '{"continue": true}'
-  exit 0
-fi
-
-# 认不得的动作：不处理、不出声（Claude Code 收到空输出 + exit 0 当作「hook 无话可说」，
-# 不会阻塞它），但**留一行痕**。旧版配置可能还挂着已删的 `speak`，那会静默地不播报——
-# 没有这行日志时，用户看到的现象与「hook 没触发」一模一样，既不念也查不出是谁的锅。
-rotate_hook_log
-echo "$(date '+%F %T') hook.sh 未知动作 action=$1 source=$SOURCE" >> "$HOME/.config/ivox/hook.log"
+echo '{"continue": true}'
 exit 0

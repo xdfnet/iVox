@@ -17,9 +17,8 @@ public enum HotKeyAction: String, CaseIterable, Sendable {
     case openTerminalPi       // 开终端跑 pi
     case copyPath             // 复制 Finder 选中路径
     case translate            // 划词翻译
-    case skipPage             // 读下一页（掀页）
-    case skipBucket           // 跳整摞
-    case skipAll              // 闭嘴（全掀）
+    case skipPage             // 掀页（Ctrl+1）：丢掉正在听的那一页
+    case skipAll              // 全掀（Ctrl+2）：清空全部排队内容
 }
 
 /// 修饰键集合。用自有位掩码而非 CGEventFlags，好让解析与测试都不依赖 CoreGraphics。
@@ -147,8 +146,7 @@ public enum HotKeySpec {
         case .copyPath:           return chord(keyName: "c", modifiers: .option)    // Opt+C
         case .translate:          return chord(keyName: "z", modifiers: .option)    // Opt+Z
         case .skipPage:           return chord(keyName: "1", modifiers: .control)   // Ctrl+1 掀页
-        case .skipBucket:         return chord(keyName: "2", modifiers: .control)   // Ctrl+2 掀摞
-        case .skipAll:            return chord(keyName: "3", modifiers: .control)   // Ctrl+3 全掀
+        case .skipAll:            return chord(keyName: "2", modifiers: .control)   // Ctrl+2 全掀
         }
     }
 

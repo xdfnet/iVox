@@ -47,7 +47,7 @@ final class AudioPlayer: @unchecked Sendable {
     /// （合成领先播放一两句，字幕会早到）。由 PlaybackQueue 在 init 时一次性注入，之后只读。
     var onSentenceStarted: (@Sendable (String, UInt) -> Void)?
     /// 「块 `seq` 的这一批已被设备读出」回调（发声点用）。
-    /// 由 PlaybackQueue 在 init 时注入，之后只读。播放层只报事实——**不知道摞/页，也不推导起点**。
+    /// 由 PlaybackQueue 在 init 时注入，之后只读。播放层只报事实——**不知道页，也不推导起点**。
     var onBlockConsumed: (@Sendable (UInt) -> Void)?
     /// 已经上报过发声的最大块号：同一块的多个 buffer 只报一次，
     /// 不给 actor 制造可观测抖动（一次 80 字块的 PCM 可能分好几个 buffer）。
@@ -175,7 +175,7 @@ final class AudioPlayer: @unchecked Sendable {
         }
     }
 
-    /// 排一段静音（**换气**：两摞之间留个空隙，听着像换了一段）。
+    /// 排一段静音（**换气**：两段之间留个空隙，听着像换了一段）。
     ///
     /// 走 write 的同一条路：背压、世代校验、prime 唤醒全都一样。
     /// 全是零字节且不带 seq → 不报字幕、不报发声点——它不是内容，只是一段停顿。
@@ -424,7 +424,7 @@ final class AudioPlayer: @unchecked Sendable {
             interruptionWaiters.removeAll()
             for w in waiters { w.resume() }
             // **暂停中不唤醒**：用户还在说话，播报不该又出声。`paused` 是「用户正在说话」
-            // 这个全局状态，只由 resumeOutput() 解除——管道被掐断也不解除（那摞内容已被丢弃，
+            // 这个全局状态，只由 resumeOutput() 解除——管道被掐断也不解除（那页内容已被丢弃，
             // 但剩下的队列仍要等用户说完才出声）。
             if engine.isRunning, !paused {
                 node.play()

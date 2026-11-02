@@ -39,7 +39,6 @@ final class ConfigTests: XCTestCase {
         [playback]
         captions = true
         captionScreen = "D6F7A473-6F62-468C-8698-1B1944615CF7"
-        idleGraceSeconds = 60
         """
         let path = NSTemporaryDirectory() + "ivox-legacy-captions.toml"
         try toml.write(toFile: path, atomically: true, encoding: .utf8)
@@ -49,7 +48,6 @@ final class ConfigTests: XCTestCase {
         XCTAssertTrue(config.resolvedCaptions.resolvedEnabled, "老键 playback.captions 应照常生效")
         XCTAssertEqual(config.resolvedOverlay.resolvedScreen, "D6F7A473-6F62-468C-8698-1B1944615CF7",
                        "老键 playback.captionScreen 应照常生效（经 captions 段再落到 overlay 段）")
-        XCTAssertEqual(config.resolvedPlayback.resolvedIdleGraceSeconds, 60, "同段里的别的键不该受影响")
     }
 
     /// 新段优先：老键与新键同时存在时，用新键（老键只是兜底迁移）。

@@ -14,7 +14,7 @@
 |---|---|
 | [architecture.md](architecture.md) | 整体架构：actor 模型、守护进程生命周期、各子系统 |
 | [hook-chain.md](hook-chain.md) | 从 AI 助手回复到出声的完整 Hook 链路（含踩坑清单） |
-| [socket-api.md](socket-api.md) | Unix Socket IPC 协议：TTS 播报、ASR 识别、打断三档 |
+| [socket-api.md](socket-api.md) | Unix Socket IPC 协议：TTS 播报（整页一次）、流式分页、ASR 识别、打断两档 |
 | [native-bridge.md](native-bridge.md) | 微信链路「Swift 直连 claude」的实测依据（v3.4.0 已实施） |
 | [runtime-files.md](../Sources/iVox/Resources/runtime-files.md) | 运行时家当：`~/.config/ivox/` 里每个文件是谁写的、能不能删、删了会怎样。**装机时由 `ivox init-config` 拷到 `~/.config/ivox/`** |
 
@@ -24,17 +24,11 @@
 
 | 顺序 | 文档 | 回答 |
 |---|---|---|
-| 1 | [playback/paper.md](playback/paper.md) | **比喻层**（先读这个）：一摞纸 / 一张纸 / 一个字条，播报到底怎么跑起来的。**它不做裁决** |
+| 1 | [playback/paper.md](playback/paper.md) | **比喻层**（先读这个）：一张纸 / 一条字条，播报到底怎么跑起来的。**它不做裁决** |
 | 2 | [playback/purpose.md](playback/purpose.md) | **目的层**：播报为什么存在，遇到取舍听谁的 |
 | 3 | [playback/sources.md](playback/sources.md) | 接入方层：谁在说话，各拿得出什么身份 |
 | 4 | [playback/requirements.md](playback/requirements.md) | 需求层：必须做到什么、场景清单、底线 |
 | 5 | [playback/queue.md](playback/queue.md) | 实现层：今天代码怎么写的、改它有什么坑 |
-
-### 提案 — 待裁决，代码未动
-
-| 文档 | 内容 |
-|---|---|
-| [playback/proposal-drop-stop.md](playback/proposal-drop-stop.md) | 提案：拆掉 Stop 收尾信号（**未裁决**。现状是 Stop 通路完整保留；本文只把「拆掉它」摊开给飞哥看） |
 
 **先读第 1 份建立直觉，冲突的裁决在第 2 份。** 两者分工：paper.md 讲「播报怎么跑起来的」，
 purpose.md 讲「取舍时听谁的」——每条原则下面都记着它裁决过什么，只有带裁决记录的原则才算数，
@@ -48,7 +42,8 @@ purpose.md 讲「取舍时听谁的」——每条原则下面都记着它裁决
 ## archive/ — 历史归档
 
 已定案、只供追溯，**不再更新**。命名规范：
-`incident-` 事故复盘、`guide-` 手册流程、`research-` 调研、`review-` 评估快照。
+`incident-` 事故复盘、`guide-` 手册流程、`research-` 调研、`review-` 评估快照、
+`proposal-` 已落地的提案（决策记录）。
 
 | 文档 | 内容 |
 |---|---|
@@ -62,6 +57,7 @@ purpose.md 讲「取舍时听谁的」——每条原则下面都记着它裁决
 | [research-qwen3-voice-design.md](archive/research-qwen3-voice-design.md) | VoiceDesign 在 MLX 上的失败尝试（结论：维持 Base + 参考音频克隆） |
 | [research-auk.md](archive/research-auk.md) | 腾讯混元 AuK 语音模型调研（2026-09-22） |
 | [review-stability-2026-07.md](archive/review-stability-2026-07.md) | 架构稳定性评估快照（2026-07-01） |
+| [proposal-drop-stop.md](archive/proposal-drop-stop.md) | 提案：拆掉 Stop 收尾信号（**已落地**，2026-11-02 与「摞」一起拿掉；本文留作决策记录） |
 
 ## 三条规则（分类的依据，也是防止再次漂移的护栏）
 

@@ -37,7 +37,6 @@ final class ConfigAuditTests: XCTestCase {
           "hotkeys": { "translate": "cmd+d", "voice": "rightcmd" },
           "playback": {
             "enabled": true,
-            "idleGraceSeconds": 60,
             "sourceVoices": { "default": "taozi", "claude": "taozi" },
             "voices": [ { "id": "x" } ]
           }
@@ -126,6 +125,14 @@ final class ConfigAuditTests: XCTestCase {
         // 不能让它混进「没人认领」里（那会让人以为是键名写错了）
         let issues = audit(#"{"captions": {"position": "top"}}"#)
         XCTAssertEqual(issues.map(\.path), ["captions.position"])
+        XCTAssertNotNil(issues.first?.note)
+        XCTAssertTrue(ConfigAudit.describe(issues).contains("已作废"))
+    }
+
+    func testObsoleteIdleGraceSecondsIsReportedAsObsolete() {
+        // playback.idleGraceSeconds 这个能力已经没了（队列排空即收尾）——要明确说「作废」
+        let issues = audit(#"{"playback": {"idleGraceSeconds": 60}}"#)
+        XCTAssertEqual(issues.map(\.path), ["playback.idleGraceSeconds"])
         XCTAssertNotNil(issues.first?.note)
         XCTAssertTrue(ConfigAudit.describe(issues).contains("已作废"))
     }

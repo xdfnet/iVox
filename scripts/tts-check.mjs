@@ -12,7 +12,12 @@
 //
 // 只依赖 node: 内置模块，零 npm 依赖。串行执行（暂停/恢复日志无 source，只能靠时间窗关联）。
 //
-// 日志级别：断言大量依赖 DEBUG 行（如「队列状态: pending=… turn=…」数入队块数），
+// **队列模型（2026-11-02 起）**：队列 = 页的 FIFO。一页 = 一条 assistant 消息。
+// 容器两层：页 → 句（句是合成单位，≤80 字，纯实现细节，用户不感知）。
+// 不再有的概念：摞/stack、turn 参与排队、group、墓碑/tombstone、sealed、收尾信号（end:1）、
+// idleGraceSeconds。**没有收尾信号**——队列排空即收尾，脚本不再发任何收尾帧。
+//
+// 日志级别：断言大量依赖 DEBUG 行（如「队列状态: pending=… 页=…」），
 // 而 daemon 默认只留 INFO 及以上（Logger 的级别门限），不特意放出 DEBUG 就会让断言
 // 读不到依据、假红。所以自检一律以 IVOX_LOG_LEVEL=debug 拉起 daemon（见 ensureDebugLogging），
 // 跑完**把它复原**（见 restoreLogEnv）：unset 变量 + 再 kickstart 一次回到 INFO。
@@ -36,11 +41,11 @@ const HEALTH_URL = "http://127.0.0.1:8888/health";
 const SR = 48000;
 const LABEL = "com.ivox.daemon";
 
-// 以 debug 级日志拉起 daemon：断言要读 DEBUG 行（如「队列状态:」数入队块数），而 daemon
+// 以 debug 级日志拉起 daemon：断言要读 DEBUG 行（如「队列状态:」数入队句数），而 daemon
 // 默认只留 INFO 及以上。环境变量走 `launchctl setenv`——LaunchAgent 跑在 launchd 下，
 // 不继承当前 shell 的环境，父进程 execFileSync 传 env 是没用的（曾在这里想当然过）。
 // 只设变量不改 daemon 已在跑的进程，必须 kickstart 才生效。
-function ensureDebugLogging() {
+async function ensureDebugLogging() {
   try {
     execFileSync("/bin/launchctl", ["setenv", "IVOX_LOG_LEVEL", "debug"]);
     execFileSync("/bin/launchctl", ["kickstart", "-k", `gui/${process.getuid()}/${LABEL}`]);
@@ -56,6 +61,27 @@ function ensureDebugLogging() {
     // 设不成不算致命：断言会因读不到 DEBUG 行而失败，但那属于诊断信号、不该让自检无法启动
     console.error(`⚠️ 切 debug 日志失败（断言可能假红）: ${e.message}`);
   }
+  // **必须等 daemon 重新把 socket 挂上来**：kickstart 是 SIGKILL 再拉起，
+  // 老进程退出时把 socket 摘了，新进程要过一会儿才 bind。
+  // 不等就直接跑 → 20 条用例集体报「connect ENOENT」，
+  // 那报错看着像「产品坏了」，其实只是抢跑（2026-11-02 实测踩到）。
+  await waitForSocket();
+}
+
+// 等 socket 可连接（daemon 起来并 bind 完）
+async function waitForSocket(timeout = 30000) {
+  const deadline = nowMs() + timeout;
+  while (nowMs() < deadline) {
+    const ok = await new Promise((res) => {
+      const s = net.connect(SOCKET);
+      s.on("connect", () => { s.destroy(); res(true); });
+      s.on("error", () => { s.destroy(); res(false); });
+    });
+    if (ok) return true;
+    await sleep(200);
+  }
+  console.error(`⚠️ ${timeout / 1000} 秒内没等到 daemon 的 socket（${SOCKET}），用例会全部失败`);
+  return false;
 }
 
 // 跑完撤掉会话级环境变量，**并把 daemon 重启回 INFO 级**。
@@ -123,6 +149,7 @@ const RUN_FATAL = [/CONTINUATION MISUSE/, /Fatal error/, /non-empty mlx/];
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
 const nowMs = () => Date.now();
+const escapeRe = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
 // ───────────────────────── 原子能力 ─────────────────────────
 
@@ -141,29 +168,14 @@ function writeFrame(s, text) {
   s.write(body);
 }
 
-// 普通整段播报：{source:x}+正文，EOF 触发
-async function speak(source, text) {
-  const s = await conn();
-  await new Promise((res) => s.write(`{source:${source}}${text}`, res));
-  s.end();
-}
-
-// 带摞与页的一次性入队（Claude 路径的形态：{source,group,page}正文）。
-// group = 摞号（一次输入引发的全部回复），page = 页号（一条 assistant 消息）。
+// 一次性入队（Claude 形态）：**一个 socket 请求 = 一页**。
+// {source:x} + 正文，然后 end()。服务端把这一整条当一页：清洗 → 切句 → 入队。
+// 没有 group/page 字段——新模型里队列纯粹先来先进，页号由资料室自编。
 // 不等 write 回调：实测在打断动作刚发生的那一刻，回调可能迟迟不触发，整条请求
 // 根本发不出去（曾让 P3 干等 41 秒）。小报文直接 write 后 end，由 socket 自己 flush。
-async function speakGrouped(source, group, page, text) {
+async function speakPage(source, text) {
   const s = await conn();
-  s.write(`{source:${source},group:${group},page:${page}}${text}`);
-  s.end();
-}
-
-// 收尾信号（`end:1`）= 真实 hook 的 Stop：这一摞说完了。
-// **用例必须发它**：空闲宽限是「端说完了没有」的兜底（60 秒），常态判据是端自己的收尾信号。
-// 不发就等于拿 60 秒等一次结算——用例的 30~60 秒超时必然踩空。
-async function finishGroup(source, group) {
-  const s = await conn();
-  s.write(`{source:${source},group:${group},end:1}`);
+  s.write(`{source:${source}}${text}`);
   s.end();
 }
 
@@ -175,20 +187,23 @@ async function speakNow(source, text) {
   s.end();
 }
 
-// 掐 + 掀某一档：mode=page | stack | all，逐字对应 Ctrl+1 / Ctrl+2 / Ctrl+3。
+// 掐 + 掀某一档：mode=page（掀页，同 Ctrl+1）| all（全掀，同 Ctrl+2）。
+// **没有 stack 这一档**：摞这个概念已经不存在了（mode 落到 default 会被当成掀页）。
 async function skip(mode) {
   const s = await conn();
   s.end(`{type:skip,mode:${mode},tag:${runId},by:tts-check}\n`);
 }
 
-// 全场打断：停当前 + 清空排队（同 Ctrl+3），命令是 `ivox skip --all`。
-// 历史的 `ivox quiet`（发 `{type:stop}`）已随该帧一起退役，改用 `{type:skip,mode:all}`。
+// 全场打断：停当前 + 清空排队（同 Ctrl+2），命令是 `ivox skip --all`。
 async function skipAll() {
-  const s = await conn();
-  s.end(`{type:skip,mode:all,tag:${runId},by:tts-check}\n`);
+  await skip("all");
 }
 
 // 流式连接句柄。登记到 openSocks，用例结束统一清理，避免连接泄漏压垮 daemon。
+//
+// **一帧 = 一页**：长度帧（`L<n>` + n 字节正文）里装的是一条 assistant 消息的全文，
+// 与 Claude 那边「一个 MessageDisplay = 一页」同构。帧内再切句（合成单位）。
+// turn 只进日志、不参与排队，但脚本保留它是为了日志里能对账。
 const openSocks = new Set();
 async function openStream(turn, source) {
   const s = await conn();
@@ -196,7 +211,9 @@ async function openStream(turn, source) {
   s.on("close", () => openSocks.delete(s));
   await new Promise((res) => s.write(`{type:stream,source:${source},turn:${turn}}\n`, res));
   return {
-    sendText: (t) => writeFrame(s, t),
+    // 一整个长度帧 = 一页
+    sendPage: (t) => writeFrame(s, t),
+    // 旧裸文本行（没有长度帧的老客户端）：攒到 {end} 一起发，成一页
     sendRawLine: (line) => s.write(line.endsWith("\n") ? line : line + "\n"),
     endFrame: () => s.end("{end}\n"),
     cancel: () => s.end("{cancel}\n"),
@@ -340,6 +357,7 @@ async function waitReady(log) {
 // 等播放管道收尾：health 空闲 且 窗口内出现「播报结束」（双条件）
 // 锚点原先是 `媒体控制: 恢复`——播报不再借还背景音乐后那条日志不再出现，
 // 改用 PlaybackQueue 显式打的收尾标记（语义更准：它只在"队列真收尾"时打）。
+// **新模型里没有收尾信号**：队列排空即收尾，所以这条日志就是唯一的收敛锚点。
 async function waitSettled(log, sinceTs, { timeout = 60000 } = {}) {
   const deadline = nowMs() + timeout;
   let settledAt = 0;
@@ -369,13 +387,14 @@ async function runCase(c) {
   const ctx = {
     source, turn, log, t0,
     sleep,
-    speak: (text) => speak(source, text),
-    speakGrouped: (group, page, text) => speakGrouped(source, group, page, text),
-    finishGroup: (group) => finishGroup(source, group),
+    // 默认来源的一次性入队（一页）
+    speak: (text) => speakPage(source, text),
+    // 指定来源的一次性入队（一页）
+    speakPage,
     speakNow,
     skip,
     skipAll,
-    openStream: (t = turn) => openStream(t, source),
+    openStream: (t = turn, src = source) => openStream(t, src),
     ttsPcm,
     health,
     ids,
@@ -384,8 +403,35 @@ async function runCase(c) {
     check(cond, msg) { if (!cond) this.failures.push(msg); },
     async settled(timeout = 60000) {
       const r = await waitSettled(log, t0, { timeout });
-      if (!r) this.failures.push("播放管道未在超时内收尾（无恢复日志或 health 未空闲）");
+      if (!r) this.failures.push("播放管道未在超时内收尾（无「播报结束」或 health 未空闲）");
       return r;
+    },
+    // 队列里的页（资料室自编页号）：每入队一页打一行「资料室收下：第N页 …」
+    pages(src) {
+      const out = [];
+      for (const l of log.grep(/资料室收下：第\d+页 /, t0)) {
+        const m = /资料室收下：第(\d+)页 来源=(\S+) 字数=(\d+) 句=(\d+)/.exec(l.msg);
+        if (m) out.push({ ts: l.ts, pageNo: +m[1], source: m[2], chars: +m[3], sentences: +m[4] });
+      }
+      return src ? out.filter((p) => p.source === src) : out;
+    },
+    // 等某个模式出现够多行（轮询新日志）
+    async waitCount(re, n, timeout = 15000) {
+      const deadline = nowMs() + timeout;
+      while (nowMs() < deadline) {
+        await log.poll(t0);
+        const c = log.grep(re, t0).length;
+        if (c >= n) return c;
+        await sleep(150);
+      }
+      return log.grep(re, t0).length;
+    },
+    // 某个来源的「TTS 合成开始」行数（批次号在后面，用前缀匹配）
+    synthStarts(src, sinceTs = t0) {
+      return log.grep(new RegExp(`TTS 合成开始 \\[${escapeRe(src)}-`), sinceTs);
+    },
+    synthDones(src, sinceTs = t0) {
+      return log.grep(new RegExp(`TTS 合成完成 \\[${escapeRe(src)}-`), sinceTs);
     },
     // 用例窗口内否定断言
     noBad(extra = []) {
@@ -407,12 +453,11 @@ async function runCase(c) {
   // 外部播报干扰：run 期间别的 agent（Claude 的 hook、用户手动 speak）恰好开口，
   // 会插进用例自己的音频窗口，尾音/收尾/时长类断言失真。检测到则把失败降级为 skip 并显式
   // 打出证据——只降级失败，通过的不动；不掩盖，也别把它当产品缺陷。
-  //（普通播报已不再 bargeIn，因此不再作废用例的流式轮次；保留此项是因为它仍会插播。）
-  const foreign = log.grep(new RegExp(`队列入队: source=(?!c\\d\\d${runId})`), t0);
-  // 外部全场打断（别的终端跑 `ivox skip --all` / 手动按 Ctrl+3）会在用例播到一半时
+  // 判据：入队日志里的来源不含本 run 的 runId → 不是本脚本自己送的。
+  const foreign = log.grep(/队列入队: source=|流式入队: source=/, t0)
+    .filter((l) => !l.msg.includes(runId));
+  // 外部全场打断（别的终端跑 `ivox skip --all` / 手动按 Ctrl+2）会在用例播到一半时
   // 掐掉本轮，尾音/收尾/恢复类断言必然失真——同样降级为 skip 并给出证据。
-  // 判据是「跳过请求」而非旧的「收到停止播放指令」：那句文案早在停止帧退役时就没了，
-  // 旧正则从此永不命中（一条沉默的假绿检测，本次一并修掉）。
   const sentinel = log.grep(new RegExp(`跳过请求: mode=(?!.*tag=${runId})`), t0);
   const hit = foreign[0] ?? sentinel[0];
   // 誊清员（合成子进程）崩了或正在被重拉：MLX 的 Metal 命令编码器析构会 SIGABRT，
@@ -462,18 +507,22 @@ const cases = [
   },
 
   // ───────── E1：长度帧防控制帧注入 ─────────
+  // 一帧 = 一页。帧里的 {end}/{cancel} 只是正文，绝不能被当成控制帧。
   {
     name: "E1-length-frame-injection",
     async run(ctx) {
       const st = await ctx.openStream();
       // 正文里独立成行的 {end}/{cancel} 必须被当正文，不得提前结束/取消
-      st.sendText("{end}\n{cancel}\n🎉你好，世界🇨🇳");
-      await sleep(400);
-      let lines = ctx.log.grep(new RegExp(`流式(结束|取消).*${ctx.turn}`), ctx.t0);
-      ctx.check(lines.length === 0, `注入的控制帧被误判，提前结束/取消: ${lines.map((l) => l.msg).join(";")}`);
-      // 连接仍可写：第二帧应入队
-      st.sendText("这是第二帧正文内容，用来确认连接还活着。");
-      await sleep(400);
+      st.sendPage("{end}\n{cancel}\n🎉这句话一定要被当正文念出来，不能当成控制帧。");
+      await sleep(500);
+      const early = ctx.log.grep(new RegExp(`流式(结束|取消).*${ctx.turn}`), ctx.t0);
+      ctx.check(early.length === 0, `注入的控制帧被误判，提前结束/取消: ${early.map((l) => l.msg).join(";")}`);
+      // 连接仍可写：第二帧应入队（两帧 = 两页）
+      st.sendPage("这是第二帧正文内容，用来确认连接还活着。");
+      const enq = await ctx.waitCount(/流式入队: source=/, 2, 10000);
+      ctx.check(enq >= 2, `两帧应各自成一页，实际入队 ${enq} 次`);
+      const pages = ctx.pages();
+      ctx.check(pages.length === 2, `应收下 2 页，实际 ${pages.length}`);
       st.endFrame();
       const settled = await ctx.settled(40000);
       ctx.check(!!settled, "未收尾");
@@ -484,6 +533,7 @@ const cases = [
   },
 
   // ───────── E2：旧裸文本帧后向兼容 ─────────
+  // 裸文本行攒起来，等 {end} 一起发，成**一页**（不是每行一页）。
   {
     name: "E2-legacy-bare-text",
     async run(ctx) {
@@ -493,96 +543,98 @@ const cases = [
       st.sendRawLine("{end}");
       const settled = await ctx.settled(40000);
       ctx.check(!!settled, "未收尾");
-      const enq = ctx.log.grep(new RegExp(`流式入队: .*turn=${ctx.turn}`), ctx.t0);
-      ctx.check(enq.length >= 1, "裸文本帧未入队");
+      const pages = ctx.pages();
+      ctx.check(pages.length === 1, `裸文本应攒成一页，实际 ${pages.length} 页`);
+      ctx.check(pages[0] && pages[0].sentences >= 1, "裸文本页没有句子");
+      ctx.check(pages[0] && pages[0].chars > 0, "裸文本页没有内容");
       ctx.noBad();
     },
   },
 
-  // ───────── E3：轮次隔离，旧轮迟到帧不反杀 ─────────
+  // ───────── E3：两条流连接互不干扰 ─────────
+  // 回归：取消只撤**这条连接送来的页**（撤的依据是「哪几页是这条连接送来的」），
+  // 不牵连别的连接。新模型里 turn 不参与排队，页归属只靠连接自己记。
   {
-    name: "E3-turn-isolation",
-    needsDebug: true,
+    name: "E3-two-connections-independent",
     async run(ctx) {
-      const tA = ctx.turn;
-      const A = await ctx.openStream(tA);
-      A.sendText("这是第一轮的一句比较长的播报内容，确保它真正进入模型开始合成。");
-      // 等 A 真正开始合成再开 B，消除竞态
-      const aStart = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
-      ctx.check(!!aStart, "A 轮未开始合成");
-      await sleep(800);
-      const { turn: tB } = ctx.ids();
-      const B = await ctx.openStream(tB);
-      const tBstart = nowMs();
-      B.sendText("这是第二轮的新内容，应该接管播报。");
-      // 等 B 真正被队列接受（成为当前轮）再发 A 的迟到帧：否则「B 尚未接管」时 A 帧合法，
-      // 断言会随 beginTurn/enqueue 的 Task 调度时序抖动。
-      const bAccepted = await ctx.log.waitFor(new RegExp(`队列状态: .*turn=${tB}`), { sinceTs: tBstart, timeout: 15000 });
-      ctx.check(!!bAccepted, "B 轮未被队列接受");
-      // 给旧连接 A 发迟到正文 + {end}，必须被静默丢弃
-      A.sendText("第一轮迟到的残句不应该被念出来。");
-      A.endFrame();
-      await sleep(600);
+      const srcB = ctx.ids().source;
+      const A = await ctx.openStream(ctx.turn, ctx.source);
+      A.sendPage("第一条连接送来的内容，这一句足够长以便真正进入合成。");
+      const aStart = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
+        { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!aStart, "A 连接的内容未开始合成");
+      const B = await ctx.openStream(ctx.ids().turn, srcB);
+      B.sendPage("第二条连接送来的内容，同样应当被合成并播出来。");
+      const enq = await ctx.waitCount(/资料室收下：/, 2, 15000);
+      ctx.check(enq >= 2, "两条连接的内容没有各自成一页");
+      // A 取消：只撤 A 自己的页
+      A.cancel();
+      const withdrawn = await ctx.log.waitFor(/撤回来路|流式取消落地/, { sinceTs: ctx.t0, timeout: 8000 });
+      ctx.check(!!withdrawn, "A 的 {cancel} 没有撤回来路");
+      // B 的页照播——这是本用例的核心断言。
+      // **必须等**：队列是串行的，A 那句合成完 B 才开 synth，所以取消日志一出现时
+      // B 还没开始合成是正常的。立刻数行数会假红（2026-11-02 实测：撤回来路 2.5s 后
+      // B 才开合成，行为完全正确，是断言没等）。
+      const bStart = await ctx.waitCount(new RegExp(`TTS 合成开始 \\[${escapeRe(srcB)}-`), 1, 30000);
+      ctx.check(bStart >= 1, "B 连接的内容没有被合成（A 的取消牵连了别的连接）");
       B.endFrame();
-      await sleep(200);
-      try { A.destroy(); B.destroy(); } catch {}
+      await sleep(300);
       const settled = await ctx.settled(45000);
       ctx.check(!!settled, "未收尾");
-      // tB 开始后，tA 的迟到帧不得被队列接受（handler 的「流式入队」只是收到帧，无条件打印，不作数）
-      const aLateAcc = ctx.log.grep(new RegExp(`队列状态: .*turn=${tA}`), tBstart);
-      ctx.check(aLateAcc.length === 0, `旧轮 A 在 B 开始后仍被队列接受 ${aLateAcc.length} 条`);
+      const bDone = ctx.synthDones(srcB);
+      ctx.check(bDone.length >= 1, "B 连接的内容没有播完");
       ctx.noBad();
     },
   },
 
-  // ───────── E4：cancel 后迟到帧丢弃 ─────────
+  // ───────── E4：cancel 撤掉这条连接自己的页 ─────────
   {
-    name: "E4-cancel-drops-late",
+    name: "E4-cancel-withdraws-own-pages",
     async run(ctx) {
       const st = await ctx.openStream();
-      st.sendText("第一句先发出去。");
-      await sleep(300);
+      st.sendPage("第一句先发出去，这一页要够长以便还有剩余内容可撤。第二句也在这一页里。");
+      const enq = await ctx.waitCount(/资料室收下：/, 1, 8000);
+      ctx.check(enq >= 1, "第一页未入队");
       st.cancel();
-      await sleep(300);
+      const cancel = await ctx.log.waitFor(new RegExp(`流式取消: turn=${ctx.turn}`), { sinceTs: ctx.t0, timeout: 8000 });
+      ctx.check(!!cancel, "缺流式取消日志");
+      const drop = await ctx.log.waitFor(/撤回来路|流式取消落地/, { sinceTs: ctx.t0, timeout: 8000 });
+      ctx.check(!!drop, "取消没有撤回来路（这条连接送来的页还留在队列里）");
+      await sleep(600);
+      const after = ctx.log.grep(/流式入队: source=/, cancel ? cancel.ts : ctx.t0);
+      ctx.check(after.length === 0, "取消后仍有入队");
       // 取消后连接可能已被服务端关闭，写入报错要容错
       try { st.sendRawLine("取消后迟到的句子不应入队。"); } catch {}
       try { st.halfClose(); } catch {}
-      const cancel = await ctx.log.waitFor(new RegExp(`流式取消: turn=${ctx.turn}`), { sinceTs: ctx.t0, timeout: 8000 });
-      ctx.check(!!cancel, "缺流式取消日志");
-      await sleep(800);
-      const after = ctx.log.grep(new RegExp(`流式入队: .*turn=${ctx.turn}`), cancel ? cancel.ts : ctx.t0);
-      ctx.check(after.length === 0, "取消后仍有入队");
       // 取消轮也要走收尾流程，等它收尾避免污染后续用例窗口
       await ctx.settled(20000);
       ctx.noBad([/drain 超时强制返回/]);
     },
   },
 
-  // ───────── E5：EOF 等价 {end}，残尾 flush ─────────
+  // ───────── E5：EOF 等价 {end}，残尾 flush 成一页 ─────────
+  // EOF 兜底：没发 {end} 就断开，攒着的裸文本按一页发出去。
   {
     name: "E5-eof-flush-tail",
     async run(ctx) {
       const st = await ctx.openStream();
-      st.sendText("这是一句完整的话。");
-      st.sendText("最后半句没有结束符");
-      st.halfClose(); // 不发 {end}
-      const end = await ctx.log.waitFor(new RegExp(`流式结束: turn=${ctx.turn}`), { sinceTs: ctx.t0, timeout: 10000 });
-      ctx.check(!!end, "EOF 未触发流式结束");
+      st.sendPage("这是一句完整的话，走长度帧，一帧一页。");   // → 1 页
+      st.sendRawLine("最后半句没有结束符，走裸文本，EOF 时应被 flush 成一页。"); // → EOF 时 1 页
+      st.halfClose();                                          // 不发 {end}
+      const pages = await ctx.waitCount(/资料室收下：/, 2, 15000);
+      ctx.check(pages >= 2, `EOF 残尾未 flush 成页（只收到 ${pages} 页）`);
       const settled = await ctx.settled(40000);
       ctx.check(!!settled, "未收尾");
-      const enq = ctx.log.grep(new RegExp(`流式入队: .*turn=${ctx.turn}`), ctx.t0);
-      ctx.check(enq.length >= 1, "残尾未 flush 入队");
       ctx.noBad();
     },
   },
 
-  // ───────── E6：并行流的 {cancel} 不拖垮真正在跑的轮（pi 会开两条流，其中一条刚开就被 {cancel}）─────────
+  // ───────── E6：并行连接的 {cancel} 不拖垮另一条在跑的连接（pi 会开两条流）─────────
   // 回归：曾把「见过」当「被顶掉」——并行那条空流一取消，就把真正在跑的这条判成过期旧轮，
-  // 后续正文全部静默丢弃（整轮没声音，日志里连「队列状态」都没有）。
-  // 注：客户端不再在同一步发全场打断（pi 开新轮前的清场改由首帧 beginTurn 的 bargeIn 承担）——
-  // 全场打断如今是「你开口 = 全场作废」，会连在跑的轮一起作废，故不适用于本用例（见 E7）。
+  // 后续正文全部静默丢弃（整轮没声音，日志里连入队记录都没有）。
+  // 新模型里更简单：取消只撤**自己送来的页**，别的连接压根不在它的账上。
   {
-    name: "E6-parallel-cancel-keeps-live-turn",
+    name: "E6-parallel-cancel-keeps-other-connection",
     async run(ctx) {
       const t1 = ctx.turn;              // 真正承载正文的连接
       const t2 = ctx.ids().turn;        // 并行的第二条流
@@ -590,83 +642,85 @@ const cases = [
       await sleep(60);
       const B = await ctx.openStream(t2);
       await sleep(60);
-      B.cancel();                       // 它立刻 {cancel}：只作废自己，不碰在跑的 t1
-      await sleep(260);
-      A.sendText("并行那条空流取消之后，这条正文仍应被完整念出来。");
+      B.cancel();                       // 它立刻 {cancel}：只作废自己，不碰在跑的那条
+      await sleep(300);
+      A.sendPage("并行那条空流取消之后，这条正文仍应被完整念出来。");
       A.endFrame();
-      const start = await ctx.log.waitFor(new RegExp(`合成开始 \\[${ctx.source}-`), { sinceTs: ctx.t0, timeout: 30000 });
-      ctx.check(!!start, "新轮正文被静默丢弃（入队后无合成开始）：并行取消把在跑的轮次一起作废了");
-      await sleep(500);
-      const stray = ctx.log.grep(new RegExp(`流式入队: turn=${t2}`), ctx.t0);
-      ctx.check(stray.length === 0, "被取消的并行轮次不该入队");
+      const start = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
+        { sinceTs: ctx.t0, timeout: 30000 });
+      ctx.check(!!start, "在跑的连接被空连接的取消拖累了（入队后无合成开始）");
+      const stray = ctx.log.grep(new RegExp(`流式入队: source=.*turn=${t2}`), ctx.t0);
+      ctx.check(stray.length === 0, "被取消的并行连接不该入队");
       const settled = await ctx.settled(40000);
       ctx.check(!!settled, "未收尾");
       ctx.noBad();
     },
   },
 
-  // ───────── E7：全场打断作废全部流式轮（你开口 = 全场闭嘴）─────────
-  // 语义：全场打断（`ivox skip --all`，同 Ctrl+3）不只停当场，还作废此前所有流式轮。
-  // 场景：在 Claude 里提交 prompt 时，pi 手里正在生成的那一轮后续增量不该再开口
-  //（否则「我说话电脑就不说了」不成立——当场静音了，下一句生成出来照样念）。
+  // ───────── E7：全掀清空排队内容，但之后到达的新页照常播 ─────────
+  // 语义：全掀（`ivox skip --all`，同 Ctrl+2）清空**当下**排队的一切。
+  // **不立墓碑**：这一下之后再来的内容照常入队照常播——
+  // 「内容生死只由用户当下这一按决定」，用户放弃不该拦下后来的回复。
   {
-    name: "E7-stop-sentinel-buries-live-turn",
+    name: "E7-skip-all-clears-queue",
     async run(ctx) {
-      const st = await ctx.openStream(ctx.turn);
-      st.sendText("全场打断之前这句照常开始合成，用作对照。");
-      await sleep(1200);                 // 让对照句确实已进模型（其「合成开始」落在打断之前）
-      await ctx.skipAll();                 // 你开口
-      await sleep(200);
-      const tAfter = nowMs();
-      st.sendText("全场打断之后这整句都不该被念出来：它属于已被作废的那一轮。");
-      st.endFrame();                     // 正常收尾（{end} 对已作废轮是空操作）
-      const settled = await ctx.settled(40000);
+      const srcB = ctx.ids().source;
+      await ctx.speakPage(ctx.source, "第一页内容，句子足够多以便打断时还有剩余。第二句。第三句。");
+      await ctx.speakPage(srcB, "第二页内容，应该排在第一页之后。");
+      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
+        { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "第一页未开始合成");
+      await sleep(400);
+      await ctx.skipAll();
+      const skipLine = await ctx.log.waitFor(/作废全部排队内容/, { sinceTs: ctx.t0, timeout: 8000 });
+      ctx.check(!!skipLine, "缺全掀日志");
+      // 全掀之后到达的新页照常播
+      await ctx.speakPage(srcB, "全掀之后才到的新页，必须照常播出来。");
+      const after = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(srcB)}-`),
+        { sinceTs: skipLine ? skipLine.ts : ctx.t0, timeout: 30000 });
+      ctx.check(!!after, "全掀之后到达的新页没有被播（新模型不该立墓碑）");
+      const settled = await ctx.settled(45000);
       ctx.check(!!settled, "未收尾");
-      const late = ctx.log.grep(new RegExp(`TTS 合成开始 \\[${ctx.source}-`), tAfter);
-      ctx.check(late.length === 0, `全场打断后该轮不该再有合成开始，实得 ${late.length} 条`);
       const h = await ctx.health();
       ctx.check(h && h.queued === 0 && h.playing === false, `未收敛空闲: ${JSON.stringify(h)}`);
       ctx.noBad();
     },
   },
 
-  // ───────── E8：队首轮播空等下一批块时不得紧循环（曾独占总 actor → 播报永久瘫痪）─────────
-  // 回归：`guard let job = frontBucket?.jobs.first else { continue }` 没有挂起点——队首桶已播空
-  //（它那句 job 已被 claim 走）、该轮尚未 endTurn（还在等下一批块），而其后已排了别的桶时，
-  // 上面 `!hasPendingBuckets` 分支进不去，于是无 await 地空转：独占 PlaybackQueue actor 且永不
-  // 释放，enqueue/endTurn/cancelAll 一律被饿死（连快捷键打断都进不来）→ 队尾内容永不播、
-  // CPU 烧满一核、/health 无响应，连 10s 读超时的 EOF 兜底也救不回（endTurn 进不了僵死的 actor）。
-  // 场景用「流式轮已播空未收尾 + 队尾排一条普通播报」精确压出来（多 agent 交错即此形态）。
+  // ───────── E8：队列排空后管道必须退出（不空转烧 CPU）─────────
+  // 回归：老实现里队首播空未收尾时会无 await 地空转，独占 PlaybackQueue actor 且永不释放，
+  // enqueue/打断一律被饿死（连快捷键打断都进不来）→ 队尾内容永不播、CPU 烧满一核、
+  // /health 无响应，连 EOF 兜底都救不回。
+  // 新模型里没有「轮未收尾」这回事：队列排空管道就该退出。
   {
-    name: "E8-head-bucket-wait-no-spin",
+    name: "E8-idle-queue-no-spin",
     needsAudio: true,
     async run(ctx) {
-      const tail = ctx.ids();          // 队尾那条：普通播报（无 turn）
       const A = await ctx.openStream();
-      A.sendText("这是一段用来触发复现的测试文本，长度足够越过最小切句门槛。");
-      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${ctx.source}-`),
+      A.sendPage("这是一段用来触发复现的测试文本，长度足够越过最小切句门槛。");
+      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
         { sinceTs: ctx.t0, timeout: 20000 });
       ctx.check(!!started, "首块未开始合成");
-      // 队尾排一条别的播报：此刻本轮 job 已被 claim（桶空、轮未收尾）→ 正是触发条件
-      await speak(tail.source, "这条排在队尾，应该等前一轮收尾之后才播出来。");
-      await sleep(3500);               // 越过首块合成（≈2.5s），让 producer 回到循环顶部
       A.endFrame();
-      // ① 活性：actor 被紧循环独占时 /health 直接超时（health() 返回 null）
-      let alive = 0;
-      for (let i = 0; i < 3; i++) { if (await ctx.health()) alive += 1; await sleep(600); }
-      ctx.check(alive === 3, `紧循环僵死：${3 - alive}/3 次 /health 无响应（需 ivox off && ivox on 重启）`);
-      // ② 队尾那条最终必须被合成（旧实现永不播）
-      const tailStart = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${tail.source}-`),
-        { sinceTs: ctx.t0, timeout: 30000 });
-      ctx.check(!!tailStart, "队首轮收尾后，队尾播报仍未被合成（管道被卡死）");
       const settled = await ctx.settled(45000);
       ctx.check(!!settled, "未收尾");
-      // ③ 空转的直接表征：收尾后应完全空闲，紧循环则把一个核烧满
+      // ① 空转的直接表征：队列排空后应完全空闲，紧循环则把一个核烧满
       const cpus = [];
       for (let i = 0; i < 8; i++) { cpus.push(daemonCpu()); await sleep(150); }
       const nums = cpus.filter((x) => x != null).sort((a, b) => a - b);
       const median = nums.length ? nums[Math.floor(nums.length / 2)] : 0;
-      ctx.check(median < 50, `收尾后 daemon CPU 仍居高位 median=${median}%（紧循环空转）`);
+      ctx.check(median < 50, `队列排空后 daemon CPU 仍居高位 median=${median}%（紧循环空转）`);
+      // ② 排空之后到达的新页仍能被合成并播出（管道退出了，得能重开）
+      const t2 = nowMs();
+      await ctx.speak("队列排空之后送来的新内容，必须照常播出来。");
+      const start2 = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: t2, timeout: 30000 });
+      ctx.check(!!start2, "排空后到达的新页没有被合成（管道没有重开）");
+      const settled2 = await ctx.settled(45000);
+      ctx.check(!!settled2, "新页未收尾");
+      // ③ 活性：actor 被紧循环独占时 /health 直接超时（health() 返回 null）
+      let alive = 0;
+      for (let i = 0; i < 3; i++) { if (await ctx.health()) alive += 1; await sleep(600); }
+      ctx.check(alive === 3, `紧循环僵死：${3 - alive}/3 次 /health 无响应（需 ivox off && ivox on 重启）`);
       ctx.noBad();
     },
   },
@@ -677,15 +731,15 @@ const cases = [
     async run(ctx) {
       const longText = "这是第N轮密集打断测试，句子足够长以保证真正进入模型推理，占用若干秒合成时间。";
       for (let i = 1; i <= 8; i++) {
-        const { turn } = ctx.ids();
-        const st = await ctx.openStream(turn);
-        st.sendText(longText.replace("第N轮", `第${i}轮`));
+        const { turn, source } = ctx.ids();
+        const st = await ctx.openStream(turn, source);
+        st.sendPage(longText.replace("第N轮", `第${i}轮`));
         await sleep(i === 4 ? 0 : 250);
         if (i === 4) {
-          await ctx.skipAll();       // 中间插一次全局停止
+          await ctx.skipAll();       // 中间插一次全掀
           await sleep(250);
         }
-        // 真实客户端开新轮前会关掉旧连接；最后一轮发 {end}，其余直接销毁
+        // 真实客户端开新连接前会关掉旧连接；最后一轮发 {end}，其余直接销毁
         if (i === 8) st.endFrame(); else st.destroy();
       }
       // 健康探针：全程 daemon 必须存活
@@ -693,7 +747,6 @@ const cases = [
       ctx.check(h0 && h0.status === "ok", `压测中 /health 异常: ${JSON.stringify(h0)}`);
       const settled = await ctx.settled(90000);
       ctx.check(!!settled, "压测后未收敛空闲");
-      // 不允许旧轮残句在被顶掉后「合成完成」之外又开口：检查最后一轮之外没有迟到入队（宽松：只查致命）
       const h1 = await ctx.health();
       ctx.check(h1 && h1.queued === 0 && h1.playing === false, "收敛后非空闲");
       ctx.noBad(); // 含 Fatal/non-empty/CONTINUATION MISUSE/合成失败
@@ -706,9 +759,9 @@ const cases = [
     async run(ctx) {
       // 5 轮快速打断，每轮开新连接前销毁旧连接（贴近真实客户端）
       for (let i = 0; i < 5; i++) {
-        const { turn } = ctx.ids();
-        const st = await ctx.openStream(turn);
-        st.sendText("快速打断活性测试用的一句中等长度内容。");
+        const { turn, source } = ctx.ids();
+        const st = await ctx.openStream(turn, source);
+        st.sendPage("快速打断活性测试用的一句中等长度内容。");
         await sleep(180);
         st.destroy();
       }
@@ -720,7 +773,7 @@ const cases = [
       ctx.check(!!settled, "普通 speak 未收尾");
       // 播报生命周期仍在：该 source 有新的合成开始 → 之后队列收尾。
       // （原先还断言「媒体控制: 暂停 → 恢复」这对音乐动作；播报不再借还背景音乐，那对已不存在。）
-      const synthStart = ctx.log.grep(new RegExp(`TTS 合成开始 \\[${ctx.source}`), tSpeak)[0];
+      const synthStart = ctx.synthStarts(ctx.source, tSpeak)[0];
       const settle = ctx.log.grep(/播报结束: 队列已空/, tSpeak).at(-1);
       ctx.check(!!synthStart, "打断后没有新的合成开始（队列死了）");
       ctx.check(!!settle && (!synthStart || settle.ts >= synthStart.ts), "收尾早于合成开始（生命周期错乱）");
@@ -746,16 +799,22 @@ const cases = [
       const tail = await ctx.ttsPcm(sentences[2]);
       ctx.check(tail.seconds > 0.5, `尾句合成时长异常: ${tail.seconds}`);
       const st = await ctx.openStream();
-      for (const s of sentences) st.sendText(s);
+      for (const s of sentences) st.sendPage(s);   // 一帧 = 一页
       st.endFrame();
       const settled = await ctx.settled(60000);
       ctx.check(!!settled, "未收尾");
-      // StreamBuffer 会按 ≥24 字合并句块，1 句 ≠ 1 个 job；断言「每个入队块都被完整合成」即可
-      const accepted = ctx.log.grep(new RegExp(`队列状态: .*turn=${ctx.turn}`), ctx.t0).length;
+      // 入队页数按「资料室收下：第N页」数（旧的「队列状态: … turn=」行没了）；
+      // 句数按各页的「句=N」加起来——合成单位是句，一次合成对一句。
+      const pages = ctx.pages();
+      const accepted = pages.length;
+      const expected = pages.reduce((a, p) => a + p.sentences, 0);
       const starts = ctx.log.grep(/TTS 合成开始/, ctx.t0);
       const dones = ctx.log.grep(/TTS 合成完成/, ctx.t0);
-      ctx.check(starts.length >= 1 && starts.length === accepted,
-        `合成开始(${starts.length}) 应等于入队块数(${accepted})`);
+      ctx.check(accepted === 3, `应收下 3 页，实际 ${accepted}`);
+      ctx.check(starts.length >= accepted,
+        `合成开始(${starts.length}) 少于入队页数(${accepted})`);
+      ctx.check(starts.length === expected,
+        `合成开始(${starts.length}) 应等于入队句数(${expected})`);
       ctx.check(dones.length === starts.length, `合成完成(${dones.length}) 应与开始(${starts.length}) 一致`);
       const tDone = dones.at(-1)?.ts ?? 0;
       const tSettled = settled?.settledAt ?? 0;
@@ -788,7 +847,7 @@ const cases = [
         `这是第${i + 1}句用来观测合成是否领先播放的中等长度播报内容。`);
       const totalPcm = await ctx.ttsPcm(sentences.join(""));
       const st = await ctx.openStream();
-      for (const s of sentences) { st.sendText(s); await sleep(100); }
+      for (const s of sentences) { st.sendPage(s); await sleep(100); }   // 5 帧 = 5 页 = 5 句
       st.endFrame();
       const settled = await ctx.settled(60000);
       ctx.check(!!settled, "未收尾");
@@ -804,167 +863,139 @@ const cases = [
 
   // ───────── P1：掀页后接着播下一页 ─────────
   // 需求：Ctrl+1 = 掐 + 掀当前页。掀完必须落到下一页，而不是把队列掀空。
+  // 新模型里没有「摞」：掀的就是**用户此刻正在听的那一页**。
   {
     name: "P1-skip-page-then-next",
     async run(ctx) {
-      const g = `pg${ctx.turn}`;
-      await ctx.speakGrouped(g, "P1", "第一页要说的话，长度够触发一次合成就好。");
-      await ctx.speakGrouped(g, "P2", "第二页要说的话，长度够触发一次合成就好。");
-      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      const srcB = ctx.ids().source;
+      await ctx.speakPage(ctx.source, "第一页的第一句。还要有第二句。第三句也在这一页里。");
+      await ctx.speakPage(srcB, "第二页要说的话，长度够触发一次合成就好。");
+      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
+        { sinceTs: ctx.t0, timeout: 20000 });
       ctx.check(!!started, "第一页未开始合成");
       await sleep(500);
       await ctx.skip("page");
       const dropped = await ctx.log.waitFor(/这页不要了，听下一页/, { sinceTs: ctx.t0, timeout: 8000 });
       ctx.check(!!dropped, "缺掀页日志");
-      await ctx.finishGroup(g);          // 端说完了（真实 hook 的 Stop）→ 立刻结算，不等空闲宽限
+      // 掀的必须是**正在听的那一页**（第一页），不是队列里的别页
+      const first = ctx.pages(ctx.source)[0];
+      if (first && dropped) {
+        ctx.check(dropped.msg.includes(`第${first.pageNo}页`),
+          `掀错页了：正在听的是第${first.pageNo}页，日志说 ${dropped.msg}`);
+      }
+      // 关键断言：第二页仍然被合成——掀掉一页不等于掀掉整个队列
+      const bStart = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(srcB)}-`),
+        { sinceTs: dropped ? dropped.ts : ctx.t0, timeout: 30000 });
+      ctx.check(!!bStart, "掀页后下一页没有被合成（掀一页等于掀光队列）");
       const settled = await ctx.settled(45000);
       ctx.check(!!settled, "未收尾");
-      // 关键断言：第二页仍然被合成——掀掉一页不等于掀掉整摞
-      const starts = ctx.log.grep(/TTS 合成开始/, ctx.t0);
-      ctx.check(starts.length >= 2, `掀页后下一页没有被合成（合成开始仅 ${starts.length} 次）`);
       ctx.noBad();
     },
   },
 
   // ───────── P2：连续掀页不炸 ─────────
-  // 需求：用户可以连按。连按最容易撞上「块刚被弹出、门控还没过」与「页被删了、
+  // 需求：用户可以连按。连按最容易撞上「句刚被取走、门控还没过」与「页被删了、
   // 游标还指着它」两个时刻，两者都得安全跳过而不是崩。
   {
     name: "P2-skip-page-repeat-safe",
     async run(ctx) {
-      const g = `pr${ctx.turn}`;
       for (let i = 1; i <= 3; i++) {
-        await ctx.speakGrouped(g, `Q${i}`, `第${i}页要说的话，长度够触发一次合成就好。`);
+        await ctx.speakPage(ctx.source, `第${i}页要说的话，长度够触发一次合成就好。`);
       }
       const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
       ctx.check(!!started, "第一页未开始合成");
       for (let i = 0; i < 3; i++) { await ctx.skip("page"); await sleep(120); }
       const h = await ctx.health();                       // 连掀之后 daemon 必须还活着
       ctx.check(!!h, "连掀三次后 daemon 不再响应");
-      await ctx.finishGroup(g);          // 端说完了 → 立刻结算
       await ctx.settled(30000);
       ctx.noBad([/EXC_BREAKPOINT/, /removeFirst from empty/, /Index out of range/]);
     },
   },
 
-  // ───────── P3：连按两下不误删后到的页（陈旧靶心回归）─────────
-  // 背景：2026-10-17 实测 bug。用户按第一下掀页后，这一摞的后续页才陆续到达；
-  // 用户以为已经跳完、没有东西可跳，又按一下——若此时仍持着上一页的页号当靶心，
-  // 刚到的新页就被误删，表现为「新的内容凭空消失」。这条钉死它不再回归。
+  // ───────── P3：掀页之后新到的页照常播（用户放弃只作用于当下那一按）─────────
+  // 背景：老模型里「用户放弃」会立墓碑，把后来的内容一起拦掉，于是「新的内容凭空消失」。
+  // 新模型**不立墓碑**：掀掉当下这一页之后，后来到的页照常入队照常播。
   {
-    name: "P3-same-page-continues-after-skip",
+    name: "P3-late-page-after-skip-still-plays",
     async run(ctx) {
-      const g = `pl${ctx.turn}`;
-      // 同一页 A 分两批到（Claude 的真实行为：一条 assistant 消息按行批增量送来）
-      await ctx.speakGrouped(g, "A", "第一页的第一部分内容，长度够触发一次合成就好。");
-      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
-      ctx.check(!!started, "第一部分未开始合成");
+      const srcB = ctx.ids().source;
+      await ctx.speakPage(ctx.source, "第一页的第一句。还要有第二句。第三句也在这一页里。");
+      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
+        { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "第一页未开始合成");
       await sleep(400);
-      await ctx.skip("page");                            // 第一下：掀掉页 A 当时的块
+      await ctx.skip("page");                            // 掀掉当下这一页
       const dropped = await ctx.log.waitFor(/这页不要了，听下一页/, { sinceTs: ctx.t0, timeout: 8000 });
-      ctx.check(!!dropped, "缺第一下掀页日志");
-      // 页 A 的续段这时才到。按需求层「掀页掀不彻底，没来的部分等它来了照样播」，
-      // 它必须照常入队并播出来——这条钉的是能力边界不被误当成 bug 修掉。
-      await ctx.speakGrouped(g, "A", "同一页后到的续段内容，按需求应当照样播出来。");
-      const resumed = await ctx.log.waitFor(/队列入队（摞）/, { sinceTs: dropped.ts, timeout: 10000 });
-      ctx.check(!!resumed, "同页续段没有入队");
-      const t2 = nowMs();
-      await ctx.skip("page");                            // 第二下：掀当前正在播的那一页
-      await ctx.finishGroup(g);          // 端说完了 → 立刻结算
+      ctx.check(!!dropped, "缺掀页日志");
+      // 掀页之后才到的一页：照常入队照常播
+      await ctx.speakPage(srcB, "掀页之后才到的新页，必须照常播出来。");
+      const bStart = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(srcB)}-`),
+        { sinceTs: dropped ? dropped.ts : ctx.t0, timeout: 30000 });
+      ctx.check(!!bStart, "掀页之后到达的新页没有被播（用户放弃被当成了拦后续）");
       const settled = await ctx.settled(45000);
       ctx.check(!!settled, "未收尾");
-      // 第二下按在续段开播之后 → 它就是「当前页」，按需求该被掀掉。
-      // 若按在开播之前，则当时没有页可掀，只掐不掀（targeting 空靶心）。
-      const after2 = ctx.log.grep(/TTS 合成开始/, t2);
-      ctx.check(after2.length === 0,
-        `第二下掀页后仍在合成 ${after2.length} 次（掀页应掐住当前页）`);
       ctx.noBad();
     },
   },
 
-  // ───────── S1：掀摞（Ctrl+2）并由墓碑拦住该摞后续增量（场景 6 + 2）─────────
+  // ───────── S1：全掀清空全部排队内容（多页全丢）─────────
   {
-    name: "S1-skip-stack-and-tombstone",
+    name: "S1-skip-all-drops-everything",
     async run(ctx) {
-      const gA = `sa${ctx.turn}`;
-      const gB = `sb${ctx.turn}`;
-      await ctx.speakGrouped(gA, "V1", "第一摞的内容，长度够触发一次合成就好。");
-      await ctx.speakGrouped(gB, "V2", "第二摞的内容，应该在第一摞掀完之后接着播。");
-      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
-      ctx.check(!!started, "第一摞未开始合成");
+      const srcB = ctx.ids().source;
+      await ctx.speakPage(ctx.source, "第一页的第一句。还要有第二句。第三句也在这一页里。");
+      await ctx.speakPage(srcB, "第二页的句子，等着被全掀清掉。");
+      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
+        { sinceTs: ctx.t0, timeout: 20000 });
+      ctx.check(!!started, "第一页未开始合成");
       await sleep(400);
-      await ctx.skip("stack");                           // 掀掉第一摞整摞
-      // 该摞的后续增量必须被墓碑静默丢弃（场景 2）
-      await ctx.speakGrouped(gA, "V1", "被掀掉那一摞的后续增量，不该再开口。");
-      await sleep(600);
-      const dead = ctx.log.grep(/队列入队（摞）/ , ctx.t0).filter((h) => /page=V1/.test(h.msg));
-      ctx.check(dead.length === 1,
-        `被掀摞的后续增量被重新入队 ${dead.length} 次（墓碑没拦住）`);
-      await ctx.finishGroup(gA);         // 端说完了 → 立刻结算
-      await ctx.finishGroup(gB);
+      await ctx.skipAll();
+      const skipLine = await ctx.log.waitFor(/作废全部排队内容/, { sinceTs: ctx.t0, timeout: 8000 });
+      ctx.check(!!skipLine, "缺全掀日志");
+      // 第二页还在排队、还没开始合成 → 全掀必须把它一起清掉
+      const bStart = ctx.synthStarts(srcB);
+      ctx.check(bStart.length === 0, `全掀后第二页仍被合成 ${bStart.length} 次（全掀没清干净）`);
+      const h = await ctx.health();
+      ctx.check(h && h.queued === 0, `全掀后队列非空: ${JSON.stringify(h)}`);
       const settled = await ctx.settled(45000);
       ctx.check(!!settled, "未收尾");
-      // 下一摞必须照播
-      const starts = ctx.log.grep(/TTS 合成开始/, ctx.t0);
-      ctx.check(starts.length >= 2, `掀摞后下一摞没有被播（合成开始仅 ${starts.length} 次）`);
+      // 收尾后再数一遍：全掀要是没清干净，B 那页会在这之后才开合成——
+      // 只在掀完的瞬间数一次会漏掉它（假绿）。
+      const bLater = ctx.synthStarts(srcB);
+      ctx.check(bLater.length === 0, `全掀后第二页仍被合成 ${bLater.length} 次（全掀没清干净）`);
       ctx.noBad();
     },
   },
 
-  // ───────── S3：无分组内容各自成摞（场景 10）─────────
-  // 回归 2026-10-18 现场：无编号来源（如 `ivox speak`）全走无分组入队，而旧实现把它们
-  // 全并进队尾那个无分组段 → 不同时间的多次回复被焊成一摞 → Ctrl+2 掀一次
-  // 连后到的一起掀掉（实测 34 块里只有 6 块是新回复）。
-  // 判据：掀完之后**后面那条还得能接着播**——这一条正是「一摞 = 一次入队」在无分组下
-  // 成立的唯一可观测证据，用带 turn_id 的 S1 永远测不到。
-  {
-    name: "S3-skip-stack-plain-stacks-are-separate",
-    async run(ctx) {
-      await ctx.speak("第一条无分组内容，长度够触发一次合成就好。");
-      await ctx.speak("第二条无分组内容，应该在第一条被掀完之后接着播出来。");
-      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
-      ctx.check(!!started, "第一条未开始合成");
-      await sleep(400);
-      await ctx.skip("stack");
-      // 必须 waitFor：skip 发完就 grep 只能看到内存里已读的字节，掀摞那行还没落盘
-      // （S1 靠后面那次 speak 的往返 + sleep 躲过了这层缓冲，本用例没有）
-      const skipLine = await ctx.log.waitFor(/这摞不要了/, { sinceTs: ctx.t0, timeout: 5000 });
-      ctx.check(!!skipLine, "掀摞动作没有落日志");
-      const settled = await ctx.settled(45000);
-      ctx.check(!!settled, "未收尾");
-      // 掀之后若再无任何合成开始 = 两条被当成一摞全丢了（这正是修复前的现场）
-      const after = skipLine ? ctx.log.grep(/TTS 合成开始/, skipLine.ts) : [];
-      ctx.check(after.length >= 1,
-        `掀掉第一条之后第二条没有被继续播（无分组内容被焊成同一摞了，掀一次全丢）`);
-      ctx.noBad();
-    },
-  },
-
-  // ───────── S2：跨来源混排，顺序只由到达决定（场景 9）─────────
-  // 两种形态混排：带摞页的一次性入队（Claude 形态）+ 流式轮（pi 形态）。
-  // 断言后到的不会插到先到的前面。
+  // ───────── S2：跨来源混排，顺序只由到达决定 ─────────
+  // 两种形态混排：流式页（pi 形态，一帧一页）+ 一次性页（Claude 形态，一个请求一页）。
+  // 断言后到的不会插到先到的前面——页号必须严格递增。
   {
     name: "S2-mixed-sources-keep-arrival-order",
     async run(ctx) {
-      const g = `sx${ctx.turn}`;
-      const first = ctx.ids().turn;                      // 流式轮（pi 形态）
-      const st = await ctx.openStream(first);
-      st.sendText("先到的流式内容，应该排在前面播。");
+      const srcOnce = ctx.ids().source;
+      const st = await ctx.openStream(ctx.turn, ctx.source);
+      st.sendPage("先到的流式内容，应该排在前面播。");
       await sleep(200);
-      await ctx.speakGrouped(g, "M2", "后到的一次性内容，应该排在流式那一条之后。");
+      await ctx.speakPage(srcOnce, "后到的一次性内容，应该排在流式那一条之后。");
       await sleep(200);
       st.endFrame();
-      await ctx.finishGroup(g);          // 端说完了 → 立刻结算
       const settled = await ctx.settled(60000);
       ctx.check(!!settled, "未收尾");
-      // 两种形态的入队日志不同名：流式写「流式入队」，带摞页的一次性写「队列入队（摞）」
-      const streamed = ctx.log.grep(/流式入队/, ctx.t0).filter((h) => /turn=/.test(h.msg));
-      const grouped = ctx.log.grep(/队列入队（摞）/, ctx.t0);
+      // 两种形态的入队日志不同名：流式写「流式入队」，一次性写「队列入队」
+      const streamed = ctx.log.grep(/流式入队: source=/, ctx.t0);
+      const once = ctx.log.grep(/队列入队: source=/, ctx.t0);
       ctx.check(streamed.length >= 1, "流式来源未入队");
-      ctx.check(grouped.length >= 1, "带摞页的一次性来源未入队");
+      ctx.check(once.length >= 1, "一次性来源未入队");
+      // 顺序只由到达决定：资料室自编的页号必须递增
+      const nums = ctx.pages().map((p) => p.pageNo);
+      ctx.check(nums.length >= 2, `应至少两页，实际 ${nums.length}`);
+      ctx.check(nums.every((n, i) => i === 0 || n > nums[i - 1]),
+        `页号非递增，顺序乱了: ${nums.join(",")}`);
       ctx.noBad();
     },
   },
+
   // ───────── I1：用户插队（Opt+Z 译文 / --now） ─────────
   // 需求：译文是唯一的机器开口——**暂停**在播的、译文走独立节点念、念完接着播，
   // 原队列一条不删、不立墓碑。译文**不进队列管道**，故它自己打「译文合成开始/完成」，
@@ -972,17 +1003,17 @@ const cases = [
   {
     name: "I1-insert-front-keeps-queue",
     async run(ctx) {
-      const g = `in${ctx.turn}`;
-      const dictSrc = ctx.ids().source;
-      await ctx.speakGrouped(g, "I1", "第一页要说的话，长度够触发一次合成就好。");
-      await ctx.speakGrouped(g, "I2", "第二页要说的话，长度够触发一次合成就好。");
-      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      const srcB = ctx.ids().source;
+      await ctx.speakPage(ctx.source, "第一页要说的话，长度够触发一次合成就好。");
+      await ctx.speakPage(srcB, "第二页要说的话，长度够触发一次合成就好。");
+      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
+        { sinceTs: ctx.t0, timeout: 20000 });
       ctx.check(!!started, "第一页未开始合成");
       await sleep(500);
+      const dictSrc = ctx.ids().source;
       await ctx.speakNow(dictSrc, "这是一句插队先念的译文。");
       await sleep(300);
-      await ctx.speakGrouped(g, "I3", "第三页要说的话，长度够触发一次合成就好。");
-      await ctx.finishGroup(g);          // 端说完了 → 立刻结算
+      await ctx.speakPage(ctx.ids().source, "第三页要说的话，长度够触发一次合成就好。");
       const settled = await ctx.settled(60000);
       ctx.check(!!settled, "未收尾");
 
@@ -999,13 +1030,13 @@ const cases = [
         ctx.check(resumed.ts > paused.ts, "恢复早于暂停，顺序反了");
       }
 
-      // 原队列一条不丢：翻译期间原内容照常合成（预取不停），且译文之后仍有原内容在合成
-      const all = ctx.log.grep(/TTS 合成开始/, ctx.t0);
-      const orig = all.filter((h) => /\[c\d\d/.test(h.msg));
+      // 原队列一条不丢：原文侧合成过，且译文之后仍有原文在合成
+      const orig = ctx.log.grep(/TTS 合成开始/, ctx.t0)
+        .filter((h) => /\[c\d\d/.test(h.msg));
       ctx.check(orig.length >= 2, `原文内容有丢失（原文侧只合成了 ${orig.length} 次）`);
       ctx.check(
         orig.some((h) => h.ts > (dict[0]?.ts ?? Infinity)),
-        "译文之后原队列没有继续播（可能被墓碑拦掉了）",
+        "译文之后原队列没有继续播",
       );
       ctx.noBad();
     },
@@ -1022,11 +1053,12 @@ const cases = [
   {
     name: "R1-scribe-crash-voids-block-queue-continues",
     async run(ctx) {
-      const g = `rc${ctx.turn}`;
+      const srcB = ctx.ids().source;
       // 内容要够长，保证合成进行到一半时还有下手的时间
-      await ctx.speakGrouped(g, "R1P0",
+      await ctx.speakPage(ctx.source,
         "第一段内容，需要足够长，好在合成进行到一半时把誊清员杀掉，看看这一块会不会被作废、后面的内容还能不能接着播出来。".repeat(3));
-      const started = await ctx.log.waitFor(/TTS 合成开始/, { sinceTs: ctx.t0, timeout: 20000 });
+      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
+        { sinceTs: ctx.t0, timeout: 20000 });
       ctx.check(!!started, "未开始合成，没机会动手");
       await sleep(300);
       ctx.check(killScribe(), "没找到誊清员进程（它不叫 tts --serve？）");
@@ -1040,8 +1072,7 @@ const cases = [
       ctx.check(!!relaunched, "监督者没有重拉誊清员");
 
       // 队列必须继续：崩溃之后送来的内容还得能播出来
-      await ctx.speakGrouped(g, "R1P1", "崩溃之后送来的内容，必须照常播出来。");
-      await ctx.finishGroup(g);          // 端说完了 → 立刻结算
+      await ctx.speakPage(srcB, "崩溃之后送来的内容，必须照常播出来。");
       const settled = await ctx.settled(90000);
       ctx.check(!!settled, "崩溃后队列没能收尾");
 
@@ -1074,10 +1105,10 @@ function killScribe() {
 // 判据不能看 ensureDebugLogging 自己的返回值——那只反映 launchctl 切没切成，
 // 而自检经常**附加到手动起的 daemon** 上（launchctl kickstart 对它无效），
 // 那个 daemon 本来可能就是对的级别。只有实测才算数（2026-10-20 踩过：非 debug 的
-// daemon 上 E3 与 A-tail 假红，报的是「入队块数(0)」这种看着像产品坏了的数）。
+// daemon 上依赖 DEBUG 行的用例假红，报的是「入队块数(0)」这种看着像产品坏了的数）。
 async function probeAudio(log) {
   const t0 = nowMs();
-  await speak("probe", "设备探测短句。");
+  await speakPage("probe", "设备探测短句。");
   const deadline = nowMs() + 20000;
   let settled = false, bad = false;
   while (nowMs() < deadline) {

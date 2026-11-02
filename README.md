@@ -19,7 +19,7 @@
 
 | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f5e3.svg"><br>**自动播报** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f39b.svg"><br>**媒体控制** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f399.svg"><br>**语音输入** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4d6.svg"><br>**划词翻译** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/26a1.svg"><br>**快速操作** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f4ac.svg"><br>**微信桥接** | <img width="44" src="https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/svg/1f512.svg"><br>**屏幕锁** |
 |---|---|---|---|---|---|---|
-| AI 回复边生成边念，跳过代码与噪音；可开屏幕字幕（贴底跟随声音）；手动打断三档：`Ctrl+1` 掀页 · `Ctrl+2` 掀摞 · `Ctrl+3` 全掀 | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 按住说话，松开识别粘贴，浮窗实时显示波形 | 选中即译，屏幕下方浮窗出译文（原文+译文）并可朗读 | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制 Finder 选中路径 | 微信消息直通常驻 Claude，回复以文字转发回微信（**默认不念**，`wechat.speak=true` 可开） | 一个滑块：右滑锁屏、左滑解锁（走 HID 真键） |
+| AI 回复整页念出来（跳过代码与噪音）；可开屏幕字幕（贴底跟随声音）；手动打断两档：`Ctrl+1` 掀页 · `Ctrl+2` 全掀 | Web 控制台：远程控制音乐播放 / 暂停 / 切歌 / 音量 | 按住说话，松开识别粘贴，浮窗实时显示波形 | 选中即译，屏幕下方浮窗出译文（原文+译文）并可朗读 | 在当前目录开终端 / 开终端跑 `claude`、`codex`、`pi` / 复制 Finder 选中路径 | 微信消息直通常驻 Claude，回复以文字转发回微信（**默认不念**，`wechat.speak=true` 可开） | 一个滑块：右滑锁屏、左滑解锁（走 HID 真键） |
 | 装好即用 | 打开 `127.0.0.1:8888`，手机同局域网用 `http://<本机IP>:8888` | 右 ⌘ / 右 ⌃ | `Opt+Z` | `Opt+Q` · `Opt+A` · `Opt+X` · `Opt+S` · `Opt+C` | `ivox wechat setup` | `ivox lock` / `ivox unlock` |
 
 ---
@@ -49,7 +49,7 @@ curl -fsSL https://raw.githubusercontent.com/xdfnet/iVox/main/scripts/install-bi
 
 ```bash
 ivox speak "你好"           # 手动播报
-ivox skip --page            # 掀页（Ctrl+1，可省）；--stack 掀摞（Ctrl+2）；--all 全掀（Ctrl+3）
+ivox skip --page            # 掀页（Ctrl+1，可省）；--all 全掀（Ctrl+2）
 ivox playback off           # 单独关掉播报（正在念的停、排队清空）；on 打开；不带参数看状态
 ivox translate "hello"      # 划词翻译（--selection 取当前选中文本，--json 结构化输出）
 ivox voice list             # 列出音色
@@ -99,7 +99,7 @@ make check-tts # 播报黑盒自检（压真实 daemon，发版前手动跑）
 make clean     # 清除 .build
 ```
 
-> `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **21 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
+> `make check-tts` 需先 `ivox on` 且模型就绪；自检脚本本身是 Node 写的，缺 node 会提示 `brew install node`（注意与微信常驻 Agent 无关——那条链路是 Swift 直连 claude，本来就不经 node）。它通过 Unix socket + `/health` + 增量 tail `daemon.log` 校验协议、合成时长、轮次隔离、密集打断、尾音完整等 **20 个用例**。它是**排障工具**——平时不必每次改动都跑，但**动播报核心（收尾 / 打断 / 入队）时必须跑全量**。常用：`make check-tts ARGS="-f tail"` 只跑某组、`ARGS="--strict"` 让 advisory 用例也计入失败、`ARGS="--managed"` 由脚本自行重启守护进程。
 
 > 构建用 `xcrun --toolchain swift-latest swift`——`swift-latest` 这个符号链接指向
 > **开发快照** `swift-6.4.x-DEVELOPMENT-SNAPSHOT-2026-06-15-a`（早期快照的编译器崩溃，见
@@ -174,9 +174,8 @@ voice = "rightcmd"
 | `openTerminalPi` | `opt+s` | 开终端跑 `pi` |
 | `copyPath` | `opt+c` | 复制 Finder 选中路径 |
 | `translate` | `opt+z` | 划词翻译 |
-| `skipPage` | `ctrl+1` | 掀页（掐断在播的，掀掉这一页剩下的块） |
-| `skipBucket` | `ctrl+2` | 掀摞（掐断在播的，掀掉这一摞全部段） |
-| `skipAll` | `ctrl+3` | 全掀（掐断在播的，全场清空） |
+| `skipPage` | `ctrl+1` | 掀页（掐断在播的，掀掉正在听的那一页剩下的内容） |
+| `skipAll` | `ctrl+2` | 全掀（掐断在播的，清空全部排队内容） |
 | `voice` | 右 ⌘ | 长按说话；可写 `rightcmd`（默认）/ `rightctrl` / `rightcmd+rightctrl` / `none` |
 
 写法：修饰键 `cmd` `ctrl` `opt` `shift`（也认 `command` `control` `option` `alt`），用 `+` 连主键；
@@ -197,7 +196,7 @@ pi 扩展（整页一次）──────────┴→ Unix Socket → 
                                             │       ├─ SpeechInput  (右 ⌘ / 右 ⌃ + ASR)
                                             │       ├─ Translation  (Opt+Z 划词翻译 + 浮窗)
                                             │       ├─ QuickActions (Opt+Q/A/X/S/C)
-                                            │       └─ 手动打断三档 (Ctrl+1 掀页 / Ctrl+2 掀摞 / Ctrl+3 全掀)
+                                            │       └─ 手动打断两档 (Ctrl+1 掀页 / Ctrl+2 全掀)
                                             └── MediaHTTPServer (Web UI)
 ```
 

@@ -4,7 +4,7 @@ import iVoxKit
 
 // 崩溃捕获：MLX 后端崩在 C++ 层时，系统日志里只有一行
 // `mutex lock failed: Invalid argument`，没有调用栈，事后无从判断是哪个路径撞上去的
-// （2026-10-18 两次「整摞没念完」都查到这里就断了）。这里把崩溃信号接住，
+// （2026-10-18 两次「一摞没念完」都查到这里就断了——那时的队列还分摞）。这里把崩溃信号接住，
 // 往 ~/.config/ivox/crash.log 写一份带**调用栈**的记录，并在下次启动时打进 daemon.log。
 //
 // ⚠️ 信号处理函数里只能用异步信号安全的调用（write/fsync/backtrace），
@@ -27,7 +27,7 @@ private nonisolated(unsafe) var crashCountPathName = ""
 private nonisolated(unsafe) var crashCount: Int = 0
 
 /// 崩溃后由系统调进来：不返回，把现场写盘再退掉，让 launchd 拉起新进程。
-/// 队列是纯内存的，进程一换全丢——所以这几行是「那一摞为什么没念完」的唯一线索。
+/// 队列落在磁盘上，进程一换全丢——所以这几行是「那一页为什么没念完」的唯一线索。
 /// 必须是顶层函数：Swift 只允许把顶层 `func` 的引用转成 C 函数指针。
 private func ivoxCrashHandler(_ sig: Int32) {
     guard crashLogFD >= 0 else { _exit(128 + sig) }

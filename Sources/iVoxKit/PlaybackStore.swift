@@ -7,45 +7,44 @@ import SQLite3
 // 一起没了——用户听到的是「念了两个字就没声了」，而那些字他还没听到
 // （2026-10-26 实测：daemon 在 15:00:33 死掉，队列随之蒸发）。
 //
-// 存什么：**还没播出去的块**。已播完的、已被用户掀掉的，都不留。
-// 恢复时把这些块重新排进队——宁可重念一遍，不丢。
+// **两张表**（2026-11-02 起：队列里只有页）：
+//   `pages`     —— 一页一条 = **队列的单位**（一条 assistant 消息）。记页号、来源、音色与整页原文。
+//   `sentences` —— 一句一条 = **合成单位**（≤80 字）。纯实现细节，用户不感知；
+//                  **播完即删**（消费掉），这一页的句子见底时那一页也删。
+//
+// **不存 turn_id / session_id**：它们只进日志，不参与排队，也不落库。
 //
 // 为什么用 SQLite：一次事务就是一次原子落盘（写到一半断电也不会写坏），
 // 而且系统自带（libsqlite3），不引新依赖。
 
-/// 一块待播文本的落盘形态。
-public struct StoredBlock: Sendable {
-    public let seq: UInt
-    public let text: String
-    public let voiceID: String
+/// 一页的落盘形态（一页 = 队列里唯一的单位 = 一条 assistant 消息）。
+///
+/// `page` 是**资料室自编的页号**：身份是容器自己的事，不由外部决定。
+public struct StoredPage: Sendable {
+    public let page: Int
     public let source: String
+    public let voiceID: String
+    /// 整页原文（这一页说了什么，拆句之前的形态）。
+    public let text: String
 
-    public init(seq: UInt, text: String, voiceID: String, source: String) {
-        self.seq = seq
-        self.text = text
-        self.voiceID = voiceID
+    public init(page: Int, source: String, voiceID: String, text: String) {
+        self.page = page
         self.source = source
+        self.voiceID = voiceID
+        self.text = text
     }
 }
 
-/// 一页的落盘形态（一页 = 一次 assistant 消息）。
-///
-/// `stack` / `page` 是**资料室自编的摞号与页号**：落盘要保住「谁跟谁是一伙的」，
-/// 外部 turn_id 只作备注（墓碑与分组另有其人）。
-public struct StoredPage: Sendable {
-    public let stack: Int
+/// 一句的落盘形态（合成单位，≤80 字）。
+public struct StoredSentence: Sendable {
+    public let seq: UInt
     public let page: Int
-    public let turnID: String?
-    public let pageExternal: String?
-    /// 可变：读回来往同一页里追加块时用（数组元素是值类型，改完写回原坐标）。
-    public var blocks: [StoredBlock]
+    public let text: String
 
-    public init(stack: Int, page: Int, turnID: String?, pageExternal: String?, blocks: [StoredBlock]) {
-        self.stack = stack
+    public init(seq: UInt, page: Int, text: String) {
+        self.seq = seq
         self.page = page
-        self.turnID = turnID
-        self.pageExternal = pageExternal
-        self.blocks = blocks
+        self.text = text
     }
 }
 
@@ -75,8 +74,8 @@ public final class PlaybackStore: @unchecked Sendable {
         var handle: OpaquePointer?
         let flags = SQLITE_OPEN_READWRITE | SQLITE_OPEN_CREATE | SQLITE_OPEN_FULLMUTEX
         guard sqlite3_open_v2(path, &handle, flags, nil) == SQLITE_OK else {
-            let message = handle.map { String(cString: sqlite3_errmsg($0)) } ?? "未知错误"
-            if let handle { sqlite3_close(handle) }
+            var message = "未知错误"
+            if let handle { message = String(cString: sqlite3_errmsg(handle)); sqlite3_close(handle) }
             throw StoreError.openFailed(message)
         }
         db = handle
@@ -84,17 +83,23 @@ public final class PlaybackStore: @unchecked Sendable {
         // NORMAL：断电可能丢最后一笔事务，但不会写坏库。队列丢一笔 = 少念一句，
         // 比每次入队都 fsync 划算得多。
         try exec("PRAGMA synchronous=NORMAL;")
+        // 老库（一张 blocks 表，装的是「摞/页/块」三层）改名留着，不删也不读。
+        // 它的内容读不出来（旧结构和新结构不是一回事），留着只是备查。
+        _ = execLocked("ALTER TABLE blocks RENAME TO blocks_legacy;")
         try exec("""
-            CREATE TABLE IF NOT EXISTS blocks(
-                seq INTEGER PRIMARY KEY,
-                stack INTEGER NOT NULL,
-                page INTEGER NOT NULL,
-                turn_id TEXT,
-                page_external TEXT,
-                text TEXT NOT NULL,
-                voice TEXT NOT NULL,
-                source TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS pages(
+                page   INTEGER PRIMARY KEY,
+                source TEXT NOT NULL,
+                voice  TEXT NOT NULL,
+                text   TEXT NOT NULL);
             """)
+        try exec("""
+            CREATE TABLE IF NOT EXISTS sentences(
+                seq  INTEGER PRIMARY KEY,
+                page INTEGER NOT NULL,
+                text TEXT NOT NULL);
+            """)
+        try exec("CREATE INDEX IF NOT EXISTS sentences_page ON sentences(page);")
     }
 
     deinit { close() }
@@ -119,124 +124,94 @@ public final class PlaybackStore: @unchecked Sendable {
 
     // MARK: - 写
 
-    /// 存一页（覆盖式）：先把这一页的旧块删掉，再写新块。
-    ///
-    /// 覆盖而不是追加：一页可能被追加新的块（同一摞的后续增量），也可能被整页替换。
-    /// 覆盖让「这一页现在有哪些块」只有一处真源。
+    /// 存一页（覆盖式）。
     public func savePage(_ page: StoredPage) {
         lock.lock(); defer { lock.unlock() }
         guard db != nil else { return }
-        guard execLocked("DELETE FROM blocks WHERE stack = ? AND page = ?;",
-                         bindings: [.int(page.stack), .int(page.page)]) else { return }
-        guard execLocked("BEGIN IMMEDIATE;") else { return }
-        var ok = true
-        for block in page.blocks {
-            ok = ok && execLocked("""
-                INSERT OR REPLACE INTO blocks
-                    (seq, stack, page, turn_id, page_external, text, voice, source)
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?);
-                """, bindings: [
-                    .int(Int(block.seq)), .int(page.stack), .int(page.page),
-                    .text(page.turnID), .text(page.pageExternal),
-                    .text(block.text), .text(block.voiceID), .text(block.source),
-                ])
-        }
-        _ = execLocked(ok ? "COMMIT;" : "ROLLBACK;")
+        _ = execLocked("""
+            INSERT OR REPLACE INTO pages (page, source, voice, text) VALUES (?, ?, ?, ?);
+            """, bindings: [.int(page.page), .text(page.source), .text(page.voiceID), .text(page.text)])
     }
 
-    /// 删掉某摞的全部块（掀摞 / 取消轮次）。
-    public func deleteStack(_ stack: Int) {
+    /// 插一句（从页面原文派生出的合成单位）。
+    public func insertSentence(_ sentence: StoredSentence) {
         lock.lock(); defer { lock.unlock() }
-        _ = execLocked("DELETE FROM blocks WHERE stack = ?;", bindings: [.int(stack)])
+        guard db != nil else { return }
+        _ = execLocked("""
+            INSERT OR REPLACE INTO sentences (seq, page, text) VALUES (?, ?, ?);
+            """, bindings: [.int(Int(sentence.seq)), .int(sentence.page), .text(sentence.text)])
     }
 
-    /// 删掉某摞里某页的块（掀页）。
-    public func deletePage(stack: Int, page: Int) {
+    /// 删掉已播完（已交给合成）的句：序号不大于给定值的那些。
+    public func deleteSentences(upTo seq: UInt) {
         lock.lock(); defer { lock.unlock() }
-        _ = execLocked("DELETE FROM blocks WHERE stack = ? AND page = ?;",
-                       bindings: [.int(stack), .int(page)])
+        _ = execLocked("DELETE FROM sentences WHERE seq <= ?;", bindings: [.int(Int(seq))])
     }
 
-    /// 删掉某摞里**序号不大于**给定值的块（掀掉「这一摞剩下的」）。
-    public func deleteStackUpTo(stack: Int, seq: UInt) {
+    /// 删掉某页的句（掀页）。
+    public func deleteSentences(page: Int) {
         lock.lock(); defer { lock.unlock() }
-        _ = execLocked("DELETE FROM blocks WHERE stack = ? AND seq <= ?;",
-                       bindings: [.int(stack), .int(Int(seq))])
+        _ = execLocked("DELETE FROM sentences WHERE page = ?;", bindings: [.int(page)])
+    }
+
+    /// 删掉某页（这一页与它的句一起清掉）。
+    public func deletePage(_ page: Int) {
+        lock.lock(); defer { lock.unlock() }
+        _ = execLocked("DELETE FROM sentences WHERE page = ?;", bindings: [.int(page)])
+        _ = execLocked("DELETE FROM pages WHERE page = ?;", bindings: [.int(page)])
     }
 
     /// 全清（全掀）。
     public func deleteAll() {
         lock.lock(); defer { lock.unlock() }
-        _ = execLocked("DELETE FROM blocks;")
-    }
-
-    /// 删掉已播完的块（序号不大于给定值）。
-    public func deleteUpTo(seq: UInt) {
-        lock.lock(); defer { lock.unlock() }
-        _ = execLocked("DELETE FROM blocks WHERE seq <= ?;", bindings: [.int(Int(seq))])
+        _ = execLocked("DELETE FROM sentences;")
+        _ = execLocked("DELETE FROM pages;")
     }
 
     // MARK: - 读
 
-    /// 读出所有还没播的块（按序号排）。
-    public func loadBlocks() -> [StoredBlock] {
+    /// 读出所有页（按页号排 = 队列顺序）。
+    public func loadPages() -> [StoredPage] {
         lock.lock(); defer { lock.unlock() }
         guard let db else { return [] }
-        let sql = "SELECT seq, text, voice, source FROM blocks ORDER BY seq ASC;"
+        let sql = "SELECT page, source, voice, text FROM pages ORDER BY page ASC;"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(stmt) }
-        var result: [StoredBlock] = []
+        var result: [StoredPage] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            result.append(StoredBlock(
-                seq: UInt(sqlite3_column_int64(stmt, 0)),
-                text: columnText(stmt, 1),
+            result.append(StoredPage(
+                page: Int(sqlite3_column_int64(stmt, 0)),
+                source: columnText(stmt, 1),
                 voiceID: columnText(stmt, 2),
-                source: columnText(stmt, 3)))
+                text: columnText(stmt, 3)))
         }
         return result
     }
 
-    /// 读出所有页（按摞号、页号排；同页的块按序号排）。
-    public func loadPages() -> [StoredPage] {
+    /// 读出所有还没播完的句（按句号排 = 队列顺序）。
+    public func loadSentences() -> [StoredSentence] {
         lock.lock(); defer { lock.unlock() }
         guard let db else { return [] }
-        let sql = """
-            SELECT seq, stack, page, turn_id, page_external, text, voice, source
-            FROM blocks ORDER BY stack ASC, page ASC, seq ASC;
-            """
+        let sql = "SELECT seq, page, text FROM sentences ORDER BY seq ASC;"
         var stmt: OpaquePointer?
         guard sqlite3_prepare_v2(db, sql, -1, &stmt, nil) == SQLITE_OK else { return [] }
         defer { sqlite3_finalize(stmt) }
-        var pages: [StoredPage] = []
-        var index: [String: Int] = [:]
+        var result: [StoredSentence] = []
         while sqlite3_step(stmt) == SQLITE_ROW {
-            let seq = UInt(sqlite3_column_int64(stmt, 0))
-            let stack = Int(sqlite3_column_int64(stmt, 1))
-            let page = Int(sqlite3_column_int64(stmt, 2))
-            let turnID = optionalColumnText(stmt, 3)
-            let pageExternal = optionalColumnText(stmt, 4)
-            let block = StoredBlock(seq: seq, text: columnText(stmt, 5),
-                                    voiceID: columnText(stmt, 6), source: columnText(stmt, 7))
-            let key = "\(stack)#\(page)"
-            if let i = index[key] {
-                // 数组元素是值类型：改完必须写回原坐标
-                var updated = pages[i]
-                updated.blocks.append(block)
-                pages[i] = updated
-            } else {
-                index[key] = pages.count
-                pages.append(StoredPage(stack: stack, page: page, turnID: turnID,
-                                        pageExternal: pageExternal, blocks: [block]))
-            }
+            result.append(StoredSentence(
+                seq: UInt(sqlite3_column_int64(stmt, 0)),
+                page: Int(sqlite3_column_int64(stmt, 1)),
+                text: columnText(stmt, 2)))
         }
-        return pages
+        return result
     }
 
     /// 清空（恢复后重写时用）。
     public func clear() {
         lock.lock(); defer { lock.unlock() }
-        _ = execLocked("DELETE FROM blocks;")
+        _ = execLocked("DELETE FROM sentences;")
+        _ = execLocked("DELETE FROM pages;")
     }
 
     // MARK: - 底层
@@ -284,12 +259,6 @@ public final class PlaybackStore: @unchecked Sendable {
 
     private func columnText(_ stmt: OpaquePointer?, _ index: Int32) -> String {
         guard let c = sqlite3_column_text(stmt, index) else { return "" }
-        return String(cString: c)
-    }
-
-    private func optionalColumnText(_ stmt: OpaquePointer?, _ index: Int32) -> String? {
-        guard sqlite3_column_type(stmt, index) != SQLITE_NULL,
-              let c = sqlite3_column_text(stmt, index) else { return nil }
         return String(cString: c)
     }
 

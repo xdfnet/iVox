@@ -60,9 +60,6 @@ public struct MediaControlConfig: Codable, Sendable {
 }
 
 public struct PlaybackConfig: Codable, Sendable {
-    /// 空闲宽限期（秒）：声音停下后再等这么久没新内容，才判「说完了」并收字幕/还音量
-    public var idleGraceSeconds: Double?
-
     /// **播报总开关**：关掉之后进来的内容一律丢弃、正在念的立刻闭嘴，
     /// 但守护进程与其余能力（热键、划词翻译、微信、Web 控制台）照常在跑。
     public var enabled: Bool?
@@ -80,29 +77,16 @@ public struct PlaybackConfig: Codable, Sendable {
 
     /// 空闲宽限的默认值（秒），也是全仓唯一一处写着这个数的地方。
     ///
-    /// **为什么是 60 秒而不是 5 秒（2026-10-24 实测改）**：宽限是「端说完了没有」的**兜底**，
-    /// 常态的判据是端自己的收尾信号（Claude 的 Stop / pi 的 `{end}`）——它一到就立刻收，不等宽限。
-    /// 早先的 5 秒在实况里几乎每轮都会误判「说完了」：Claude 一轮里的多页之间本来就隔着
-    /// 工具调用（实测同轮内批间隔 20~130 秒），5 秒一到就把这一摞盖印、结算、收字幕、还音量，
-    /// 下一分钟又来一页 → **一轮被切成好几摞、汽水音量一升一降**（而「一摞 = 一次输入引发的
-    /// 全部回复」正是用户按 Ctrl+1 时心里的那一个）。
-    ///
-    /// 60 秒盖住「同一轮里两页之间的正常间隔」；再长的间隔（跑长测试、长时间想）仍会切一次，
-    /// 那是兜底的代价，认了。宽限只盖印不埋碑：内容后来再到来照样揭封续播。
-    public static let defaultIdleGraceSeconds: Double = 60
+    /// **2026-11-02 起作废**：队列里不再有「摞」，也不再等端发收尾信号——
+    /// 队列排空即收尾（字幕收起、汽水音量还回）。这个数连同它的配置键一起删掉了。
+    public static let `default` = PlaybackConfig(enabled: defaultEnabled)
 
-    public static let `default` = PlaybackConfig(idleGraceSeconds: defaultIdleGraceSeconds,
-                                                 enabled: defaultEnabled)
-
-    /// 未配置时的回退见 `defaultIdleGraceSeconds`
-    public var resolvedIdleGraceSeconds: Double { idleGraceSeconds ?? Self.defaultIdleGraceSeconds }
     /// 未配置时的回退见 `defaultEnabled`（没写就是开着播）
     public var resolvedEnabled: Bool { enabled ?? Self.defaultEnabled }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
 
     enum CodingKeys: String, CodingKey, CaseIterable {
-        case idleGraceSeconds
         case enabled
         case sourceVoices
         case voices

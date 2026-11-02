@@ -20,12 +20,12 @@ fi
 cleanup() {
   if [ -e "$GATE" ]; then
     command -v trash >/dev/null 2>&1 && trash "$GATE" || rm -f "$GATE"
-    echo "# 静音闸已撤（$GATE）"
+    echo "# 静音闸已撤（${GATE}）"
   fi
 }
 trap cleanup EXIT INT TERM
 
 touch "$GATE"
-echo "# 静音闸已落（$GATE）——自检期间真人对话不播报"
+echo "# 静音闸已落（${GATE}）——自检期间真人对话不播报"
 
 node "$DIR/tts-check.mjs" "$@"

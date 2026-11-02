@@ -35,9 +35,8 @@ openTerminalCodex = "opt+x"     # 开终端并跑 codex ｜ 默认 opt+x ｜ 任
 openTerminalPi = "opt+s"        # 开终端并跑 pi ｜ 默认 opt+s ｜ 任意组合键
 copyPath = "opt+c"              # 复制 Finder 选中路径 ｜ 默认 opt+c ｜ 任意组合键
 translate = "opt+z"             # 划词翻译（复制→翻译→浮窗+朗读）｜ 默认 opt+z ｜ 任意组合键
-skipPage = "ctrl+1"            # 读下一页（掐断+掀掉当前页剩余的块）｜ 默认 ctrl+1 ｜ 任意组合键
-skipBucket = "ctrl+2"           # 跳整摞（掐断+丢弃这一摞的全部内容）｜ 默认 ctrl+2 ｜ 任意组合键
-skipAll = "ctrl+3"              # 闭嘴（全掀）｜ 默认 ctrl+3 ｜ 任意组合键
+skipPage = "ctrl+1"            # 掀页（掐断+丢掉正在听的那一页剩下的内容）｜ 默认 ctrl+1 ｜ 任意组合键
+skipAll = "ctrl+2"              # 全掀（掐断+清空全部排队内容）｜ 默认 ctrl+2 ｜ 任意组合键
 voice = "rightcmd"              # 按住说话（长按）｜ 默认 rightcmd ｜ rightcmd/rightctrl/rightcmd+rightctrl/none
 
 # ── 语音输入 ───────────────────────────────────────────
@@ -65,9 +64,6 @@ proxyURL = "http://192.168.100.6:10808"   # 直连失败后的兜底代理 ｜ �
 #   播报总开关：关掉后进来的内容一律丢弃、正在念的立刻闭嘴，但守护进程与其余能力照常在跑。
 #   临时关可以用 `ivox playback off`（它会顺手改这里，重启后仍然关着）。
 enabled = true                  # 播报总开关 ｜ 默认 true ｜ true/false
-#   idleGraceSeconds 只是兜底——端说完了（Claude 的 Stop / pi 的 {end}）就立刻收，不等这个数。
-#   太小会误判：一轮回复里夹工具调用，页与页之间常隔二十秒以上（实测 20~130 秒）。
-idleGraceSeconds = 60           # 空闲宽限（秒）｜ 默认 60 ｜ 数字
 
 # ── 音色（属于播报：念出来的声音就是它挑的）────────────
 # 键名 = 接入方自报的名字；`default` 是默认音色（没有来源时用它）。

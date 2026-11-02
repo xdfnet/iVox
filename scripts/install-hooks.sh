@@ -23,18 +23,16 @@ fi
 # 用法：write_hook <config> <source> <timeout> [event] [action]
 #   event  = settings.json 里的事件键。**只认 Claude Code 认识的名字**——自造 End 之类
 #            不认的名字会把整条 hook 静默丢弃（2026-10-16 修的就是这个）。
-#   action = 命令选择：msgdisplay（送整页正文）| end（收尾暗号，不出声）
-# 认不得的 action 直接失败，不猜——猜出来的是一条没人要的 hook。
+# 认不得的 event 直接失败，不猜——猜出来的是一条没人要的 hook。
 write_hook() {
   local config_path="$1"
   local tool_name="$2"
   local timeout="$3"
   local event="${4:-MessageDisplay}"
-  local action="${5:-$event}"   # 缺省跟 event 走，保持省略后两个参数的调用点行为不变
   local cmd
-  case "$action" in
-    MessageDisplay)   cmd="bash $HOOK_SH msgdisplay $tool_name" ;;
-    end)              cmd="bash $HOOK_SH end $tool_name" ;;
+  # hook 只有一个动作（搬整页正文），**不带动作名**——`hook.sh <source>` 即可。
+  case "$event" in
+    MessageDisplay)   cmd="bash $HOOK_SH $tool_name" ;;
     *)                return 1 ;;
   esac
 
@@ -71,36 +69,20 @@ write_prompt_hook() {
 }
 
 # ── Claude ──
-# 播报走 MessageDisplay：assistant 行批增量，**按 `turn_id` 装进同一摞**（一摞 = 一次回复）。
-# 收尾判据是「新的 turn 来了就把上一个盖上」（服务端 `enqueueGrouped` 里做）；**另挂 Stop 只作收尾信号**
-# （`hook.sh end`，不出声）——用户说完一轮后不会有下一条 turn，光靠"盖上"只能等空闲宽限，Stop 一到就能
-# 立刻收尾（字幕立刻回来）。历史坑：去重那次（57179ae）摘的是**指向 `hook.sh speak` 的**那条 Stop
-# （连正文一起送 → 与 MessageDisplay 重复播两遍），不是"不许挂 Stop"；现在这条不发正文，不重复。
-# **本脚本只写不删**：遗留的旧 Stop（命令里是 `hook.sh speak claude`）请人工摘除，否则重复播报。
+# 播报走 MessageDisplay：一页（一条 assistant 消息）搬一次，**页与页先来先进**，
+# 不按 turn 分组。**本脚本只写不删**：遗留的旧 Stop（`hook.sh speak claude`）请人工摘除，
+# 否则重复播报。
 CLAUDE_JSON="$HOME/.claude/settings.json"
 if [[ -f "$CLAUDE_JSON" ]]; then
-  if grep -q 'hook.sh msgdisplay claude' "$CLAUDE_JSON" 2>/dev/null; then
+  if grep -q 'hook.sh claude' "$CLAUDE_JSON" 2>/dev/null; then
     echo "[i] Claude MessageDisplay hook 已存在"
   elif write_hook "$CLAUDE_JSON" "claude" 10 MessageDisplay; then
     echo "✓  Claude MessageDisplay hook"
   else
     echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"
   fi
-  # 收尾信号：Stop 事件 → `hook.sh end`，**只发"说完了"这个暗号、不带正文**。
-  # 有了它，回复一结束队列立刻收尾（字幕立刻回来），空闲宽限退化成纯兜底；
-  # 没有它也不会错——只是最后那 2 秒要等满（用户不按任何键时）。
-  # 与「历史坑」的区别：当年挂的是 `hook.sh speak`（连正文一起送 → 与 MessageDisplay 重复播两遍），
-  # 现在这条不出声，不构成重复。
-  # 坑点（2026-10-16）：此处原本传 `End`——那不是 Claude Code 认识的事件名，整条 hook 被静默
-  # 丢弃（只在启动告警里提一句），收尾信号从未生效，全靠 2 秒空闲宽限兜底。正解：键名 `Stop`
-  # + 第 5 参 `end`。
-  if grep -q 'hook.sh end claude' "$CLAUDE_JSON" 2>/dev/null; then
-    echo "[i] Claude Stop hook（收尾信号）已存在"
-  elif write_hook "$CLAUDE_JSON" "claude" 10 Stop end; then
-    echo "✓  Claude Stop hook（收尾信号，不出声）"
-  else
-    echo "⚠️  需要 jq 或 python3 写入 Claude 配置，请手动添加"
-  fi
+  # **不再挂 Stop 钩子**（2026-11-02）：队列里不再有「摞」，端也不再报告「这一轮说完了」——
+  # 队列排空即收尾。**本脚本只写不删**：存量那条 Stop 请人工摘除。
   write_prompt_hook "$CLAUDE_JSON" 10 claude
 fi
 
