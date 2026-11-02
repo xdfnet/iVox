@@ -58,7 +58,7 @@ public struct TranslationConfig: Codable, Sendable {
         speechVoice: String? = nil,
         panelTimeoutSeconds: Double = 60,
         timeoutSeconds: Double = 20,
-        proxyURL: String? = nil
+        proxyURL: String? = "http://192.168.100.6:10808"
     ) {
         self.enabled = enabled
         self.provider = provider
@@ -104,9 +104,13 @@ public struct TranslationConfig: Codable, Sendable {
         speechVoice = try c.decodeIfPresent(String.self, forKey: .speechVoice)
         panelTimeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .panelTimeoutSeconds) ?? d.panelTimeoutSeconds
         timeoutSeconds = try c.decodeIfPresent(Double.self, forKey: .timeoutSeconds) ?? d.timeoutSeconds
-        let proxy = try c.decodeIfPresent(String.self, forKey: .proxyURL)?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-        proxyURL = (proxy?.isEmpty == false) ? proxy : nil
+        // 没写这一项 = 用默认兜底代理；写了空串 = 明确不要代理（两种意思不一样，分开判）
+        guard let raw = try c.decodeIfPresent(String.self, forKey: .proxyURL) else {
+            proxyURL = d.proxyURL
+            return
+        }
+        let proxy = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        proxyURL = proxy.isEmpty ? nil : proxy
     }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }

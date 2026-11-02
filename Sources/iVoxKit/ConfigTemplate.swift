@@ -58,7 +58,7 @@ speechEnabled = true            # 译完是否朗读 ｜ 默认 true ｜ true/fa
 # speechVoice = "taozi"         # 朗读用哪个音色 ｜ 默认 空＝用 playback.sourceVoices.default ｜ 音色 id
 panelTimeoutSeconds = 60        # 浮窗兜底隐藏秒数（鼠标一移开就提前收起）｜ 默认 60 ｜ 数字（≥0）
 timeoutSeconds = 20             # 翻译请求超时（秒）｜ 默认 20 ｜ 数字（>0）
-proxyURL = ""                   # 直连失败后的兜底代理 ｜ 默认 ""（空＝不走）｜ 任意 http(s)
+proxyURL = "http://192.168.100.6:10808"   # 直连失败后的兜底代理 ｜ 默认 同值 ｜ 任意 http(s)（写空串＝不走代理）
 
 # ── 播报 ───────────────────────────────────────────────
 [playback]
@@ -75,24 +75,24 @@ idleGraceSeconds = 60           # 空闲宽限（秒）｜ 默认 60 ｜ 数字
 [playback.sourceVoices]
 default = "taozi"               # 默认音色 ｜ 默认 "taozi" ｜ 音色 id
 claude = "taozi"                # Claude 的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
-pi = "taozi"                    # pi 的回复用哪个音色 ｜ 默认 "taozi" ｜ 音色 id
+pi = "wanwan"                   # pi 的回复用哪个音色 ｜ 默认 "wanwan" ｜ 音色 id
 # 自建音色写在下面的 [[playback.voices]]（`ivox voice add` 会替你写好）。
 
 # ── 浮窗（屏幕上的那块 iVox 窗口：字幕、译文都往它里面放）──
 [overlay]
 #   守护进程每次启动都打一行「屏幕清单」（型号 + 尺寸 + UUID），要钉哪块就从那儿抄一个填进来。
-screen = ""                     # 浮窗钉在哪块屏（屏的 UUID）｜ 默认 空＝跟鼠标所在屏 ｜ 任一在屏 UUID
-inset = 20                      # 距可见区底边的点数（程序坞在底部时＝距程序坞上沿）｜ 默认 20 ｜ 数字（≥0）
+screen = "84945B9B-26CB-4240-AA2A-7E86CF1B0942"   # 浮窗钉在哪块屏（屏的 UUID）｜ 默认 同值 ｜ 任一在屏 UUID（写空串＝跟鼠标所在屏）
+inset = 2                       # 距可见区底边的点数（程序坞在底部时＝距程序坞上沿）｜ 默认 2 ｜ 数字（≥0）
 gap = 8                         # 同一块载体里两行之间的距离（如原文与译文）｜ 默认 8 ｜ 数字（≥0）
 padding = 14                    # 载体内边距（内容离边缘）｜ 默认 14 ｜ 数字（≥0）
 cornerRadius = 10               # 载体圆角 ｜ 默认 10 ｜ 数字（≥0）
 fontSize = 16                   # 字号 ｜ 默认 16 ｜ 数字（>0）
-maxWidth = 600                  # 一行文字的宽度上限（超出折行）｜ 默认 600 ｜ 数字（>0)
+maxWidth = 2200                 # 一行文字的宽度上限（超出折行）｜ 默认 2200 ｜ 数字（>0)
 maxHeightRatio = 0.3            # 内容总高度上限＝可见高的比例（超出截最后一行）｜ 默认 0.3 ｜ 0~1 之间的数
 
 # ── 字幕（独立段：屏幕上的显示，与「播报怎么排队收尾」分开）──
 [captions]
-enabled = false                 # 播报字幕开关（念到哪句显示哪句）｜ 默认 false ｜ true/false
+enabled = true                  # 播报字幕开关（念到哪句显示哪句）｜ 默认 true ｜ true/false
 
 # ── 微信桥接 ───────────────────────────────────────────
 [wechat]

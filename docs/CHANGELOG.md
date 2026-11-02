@@ -2,6 +2,19 @@
 
 ## 未发布 — 2026-10-29
 
+- **代码默认值改成当前外部配置文件的实际值** — 默认值以前是「出厂预设」，
+  和飞哥机器上 `~/.config/ivox/config.toml` 的实际值对不上（字幕默认关、浮窗宽 600、
+  距底 20、钉屏留空、pi 音色 taozi、翻译不走兜底代理）。现在两边一致：
+  模板、代码默认值、用户配置文件三处的注释与取值统一成实际在用的那一套。
+  - `overlay`：钉屏 UUID、距底 `inset` 2、宽度上限 2200（跟当前外部配置同值）
+  - `captions.enabled` 默认改 **true**（字幕默认开）
+  - `translation.proxyURL` 默认给 `http://192.168.100.6:10808`（直连失败自动走代理）；
+    **写空串**仍表示「不走代理」，「没写这一项」才吃默认值——两种意思分开判
+  - `playback.sourceVoices` 的 pi 默认音色改 **wanwan**；
+    新增 `Config.defaultSourceVoices`（代码内默认音色表）与 `voice(forSource:)`，
+    配置没写某个来源时按它兜底，不再一律落到默认音色
+  - 微信 token / 白名单 / 翻译 apiKey 属凭据，**不进代码默认值**，仍由配置文件提供
+
 - **全量文档核对：把「文档说的」和「代码做的」对齐** — 四路并行核对了
   README、`docs/architecture.md`、`docs/hook-chain.md`、`docs/socket-api.md`、
   `docs/playback/` 四层、`docs/native-bridge.md`、`CLAUDE.md`、`runtime-files.md`，

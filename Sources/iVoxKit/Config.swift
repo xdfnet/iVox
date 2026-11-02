@@ -147,9 +147,9 @@ public struct OverlayConfig: Codable, Sendable {
         self.maxHeightRatio = try c.decodeIfPresent(Double.self, forKey: .maxHeightRatio) ?? Self.default.maxHeightRatio
     }
 
-    public init(screen: String = "", inset: Double = 20, gap: Double = 8,
-                padding: Double = 14, cornerRadius: Double = 10,
-                fontSize: Double = 16, maxWidth: Double = 600, maxHeightRatio: Double = 0.3) {
+    public init(screen: String = "84945B9B-26CB-4240-AA2A-7E86CF1B0942", inset: Double = 2,
+                gap: Double = 8, padding: Double = 14, cornerRadius: Double = 10,
+                fontSize: Double = 16, maxWidth: Double = 2200, maxHeightRatio: Double = 0.3) {
         self.screen = screen
         self.inset = inset
         self.gap = gap
@@ -202,14 +202,14 @@ public struct CaptionsConfig: Codable, Sendable {
         self.enabled = try c.decodeIfPresent(Bool.self, forKey: .enabled) ?? Self.default.enabled
     }
 
-    public init(enabled: Bool = false) {
+    public init(enabled: Bool = true) {
         self.enabled = enabled
     }
 
-    /// 默认值真源（全仓只此一处）：字幕默认关、宽 600、字号 16。
+    /// 默认值真源（全仓只此一处）：字幕默认开、宽 2200、字号 16。
     public static let `default` = CaptionsConfig()
 
-    /// 字幕默认关：它会一直占着屏幕，只在你明确要看时才开
+    /// 字幕默认开：它是播报的「眼睛」，关了就像什么都没播
     public var resolvedEnabled: Bool { enabled }
     /// 键名清单（配置审计用）：由 CodingKeys 派生，不另抄一份——两份清单迟早会漂。
     public static var knownKeys: Set<String> { Set(CodingKeys.allCases.map(\.stringValue)) }
@@ -380,7 +380,16 @@ public struct Config: Codable, Sendable {
     ///
     /// 真源在 `[playback]` 段里（`[playback.sourceVoices]`）：音色只服务播报，
     /// 挂在顶层像是它自己是个功能（2026-10-29 挪进来的）。
+    ///
+    /// 配置里没写的来源走 `defaultSourceVoices`（代码内默认值），配置里写了同名来源以配置为准。
     public var sourceVoices: [String: String] { resolvedPlayback.sourceVoices ?? [:] }
+
+    /// 各来源的默认音色（代码内默认值，**唯一真源**）：外部配置没写某个来源时用它。
+    public static let defaultSourceVoices: [String: String] = [
+        VoiceSource.default: "taozi",
+        "claude": "taozi",
+        "pi": "wanwan",
+    ]
     /// **用户自建/覆盖的音色**（可选）。内置音色在代码里（`VoiceCatalog`），
     /// 不进外部配置；两者合并见 `resolvedVoices`。
     public var voices: [VoiceInfo]? { resolvedPlayback.voices }
@@ -392,10 +401,17 @@ public struct Config: Codable, Sendable {
     /// `"voice"` 是特例：值为 `"rightcmd"` / `"rightctrl"` / `"rightcmd+rightctrl"` / `"none"`。
     public var hotkeys: [String: String]? = nil
 
-    /// 默认音色：取 `sourceVoices["default"]`；没写就落到第一个内置音色。
+    /// 默认音色：取 `sourceVoices["default"]`；没写就落到代码内默认值，再不济落到第一个内置音色。
     /// 写进配置的方式：`[playback.sourceVoices]` 段里的 `default = "taozi"`。
     public var defaultVoice: String {
-        sourceVoices[VoiceSource.default] ?? VoiceCatalog.builtin.first?.id ?? ""
+        sourceVoices[VoiceSource.default]
+            ?? Self.defaultSourceVoices[VoiceSource.default]
+            ?? VoiceCatalog.builtin.first?.id ?? ""
+    }
+
+    /// 某个来源该用哪个音色：配置里写了就用配置的，没写走 `defaultSourceVoices`，再兜底到默认音色。
+    public func voice(forSource source: String) -> String {
+        sourceVoices[source] ?? Self.defaultSourceVoices[source] ?? defaultVoice
     }
 
     /// 生效的音色清单：内置（代码里）+ 用户自建/覆盖（配置里），同 id 用户优先。

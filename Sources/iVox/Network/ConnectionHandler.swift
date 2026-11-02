@@ -144,7 +144,7 @@ actor ConnectionHandler: SocketConnectionHandler {
         defer { Darwin.close(fd) }
         let meta = parseMetaKV(header)
         let source = meta["source"] ?? VoiceSource.default
-        let voiceID = meta["voice"] ?? config.sourceVoices[source] ?? config.defaultVoice
+        let voiceID = meta["voice"] ?? config.voice(forSource: source)
         guard let turn = meta["turn"], !turn.isEmpty else {
             Log.warn("stream 缺少 turn，丢弃连接")
             return
@@ -493,7 +493,7 @@ actor ConnectionHandler: SocketConnectionHandler {
     private nonisolated func handleTTSPCM(fd: Int32, header: String, body: Data) {
         let meta = parseMetaKV(header)
         let sourceID = meta["source"] ?? VoiceSource.default
-        let voiceID = meta["voice"] ?? config.sourceVoices[sourceID] ?? config.defaultVoice
+        let voiceID = meta["voice"] ?? config.voice(forSource: sourceID)
 
         let text = String(data: body, encoding: .utf8)?
             .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
@@ -557,7 +557,7 @@ actor ConnectionHandler: SocketConnectionHandler {
             default: break
             }
         }
-        let voiceID = explicitVoice ?? config.sourceVoices[sourceID] ?? config.defaultVoice
+        let voiceID = explicitVoice ?? config.voice(forSource: sourceID)
         let content = String(text[text.index(after: end)...])
         return (sourceID, voiceID, content, group, isFinal, page, isNow)
     }
