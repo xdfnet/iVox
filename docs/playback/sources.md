@@ -80,8 +80,13 @@ Claude 那边由 hook 攒（见下），pi 那边由扩展攒（`message_end` �
 > （查不到音色就不带 `--voice`，服务端走默认音色）。
 > 服务端只管照单念。**不要新开协议、不要新开 socket 协议分支**——
 > 曾经有第二条入口（流式连接），两条入口意味着两套语义，各自在漂。
-> 已经有别的端这么干了：Samantha 这类要出声的端，**自己走 `ivox speak`**，
-> 不靠 Claude Code 那个 hook（那个 hook 只服务 MessageDisplay）。
+> 已经有别的端这么干了：Samantha 这类要出声的端，**自己拼参数**（`source:samantha` +
+> 自己的音色），不靠 Claude Code 那个 hook（那个 hook 只服务 MessageDisplay）。
+>
+> **音色各端各管各的**（2026-11-02 裁决）：iVox 的 `[playback.sourceVoices]` 只管**走 iVox 自己
+> 的客户端**（hook.sh 与 pi 扩展）——它们读那张表。**端自带配置的（像 Samantha 读自己的
+> `Configuration.ivox.ttsVoice`）不归那张表管**，也不必改：音色是端自己的事，
+> 服务端只管照单念。
 
 必须回答三问，答不出就在实现里退化成「只能全掀」那一行（不是不接，是打断粒度退化）：
 
