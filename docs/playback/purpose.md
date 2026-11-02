@@ -82,8 +82,11 @@
   已确认真静音的路径连正在响的最后一句也一起清。
 - **裁决过（2026-10-19）**：「MLX 崩了是 iVox 的 bug，所以修 iVox」——**修不了就隔离**。
   Metal 命令编码器析构时重复释放 GPU 命令队列直接 SIGTRAP，上游（mlx-audio-swift /
-  mlx-swift）本地即最新、无新提交，encoder 又由 `generateStream` 内部创建、Swift 侧拿不到引用，
-  **无从拦截**。同一个病根此前已经露过两次脸（取消时 commit 未收口、copy_gpu SIGSEGV），
+  mlx-swift）**本地已升到最新**（2026-11-02：mlx-swift 0.33.0 + mlx-audio-swift main@0dda61b，
+  比之前前进 78 个提交），但**翻遍那些提交、0.33.0 的发布说明与上游 issue，没有一条命中这个崩溃**
+  （mlx C++ v0.32.3/v0.32.4 只有一条 `leak global CommandEncoder`，那是防退出时 cuda 同步的泄漏，
+  不是重复释放）。encoder 又由 `generateStream` 内部创建、Swift 侧拿不到引用，**无从拦截**。
+  → **升级不治它，隔离的裁决不变**。同一个病根此前已经露过两次脸（取消时 commit 未收口、copy_gpu SIGSEGV），
   每次都打了个补丁在**特定路径**上苟住，第三次照旧炸——说明「在会炸的东西上打补丁」这条路本身
   就不成立。所以把 MLX 整个搬进子进程（誊清员），主进程不碰它、也不因它崩。
   **判据：一个依赖崩了且修不动，不等于本项目要跟着它一起崩；把它圈出去，比给它加判据更划算。
