@@ -496,14 +496,23 @@ actor PlaybackQueue {
                     // 而同一循环里成功/取消/作废三条路径都带 [来源-批次号]。
                     Log.error("TTS 合成失败 [\(job.source)-\(batchID)] seq=\(job.seq) voice=\(job.voiceID) chars=\(job.text.count): \(error)")
                 }
-                // 游标前移：无论合成成功、失败、被取消，这一句都过去了——不前移就是死循环。
-                await session.commit(cursor)
                 let elapsed = String(format: "%.1f", -startedAt.timeIntervalSinceNow)
                 if pipelineSeq != seq {
                     // MLX 不响应中途取消：打断后被掐的这句仍跑完，但已作废。别让它显示成
                     // 普通「完成」（打断后紧邻的完成会被人误读成「没掐住」）。
+                    //
+                    // ⚠️ **被掐断的这句不算「过去了」——游标不前移**（2026-11-02 实测撞到）：
+                    // 它根本没出声，前移等于把它吃掉。掀页时在跑的那句**常常是下一页的预取**
+                    // （预取领先播放一句），吃掉它 → 「掀页」变成「掀光队列」，
+                    // 需求里的「从下一页接着念」落空。不前移 → 它留在容器里，
+                    // 新管道重新合成它 → 下一页照播。
+                    // （全掀不受影响：容器已清空，这句不会被重播。）
                     Log.info("TTS 合成作废（MLX 不响应中途取消，这句跑完才停）[\(job.source)-\(batchID)]（打断来源=\(interruptOriginText(for: seq))） \(elapsed)s")
-                } else if claimed {
+                    continue
+                }
+                // 游标前移：合成成功或失败，这一句都过去了——不前移就是死循环。
+                await session.commit(cursor)
+                if claimed {
                     Log.info("TTS 合成完成 [\(job.source)-\(batchID)] seq=\(job.seq) \(elapsed)s")
                 }
             }

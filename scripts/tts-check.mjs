@@ -724,25 +724,49 @@ const cases = [
     name: "P1-skip-page-then-next",
     async run(ctx) {
       const srcB = ctx.ids().source;
-      await ctx.speakPage(ctx.source, "第一页的第一句。还要有第二句。第三句也在这一页里。");
-      await ctx.speakPage(srcB, "第二页要说的话，长度够触发一次合成就好。");
-      const started = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(ctx.source)}-`),
-        { sinceTs: ctx.t0, timeout: 20000 });
-      ctx.check(!!started, "第一页未开始合成");
-      await sleep(500);
+      // 两页**都要长**：长到「第一页还在响的时候，第二页的预取合成已经在跑」。
+      // 这一步是刻意的——掀页的 bug 只在「在飞的那句属于下一页」时才现形：
+      // 合成领先播放一句（预取），掀页掐断的是**下一页**的预取，
+      // 旧实现把游标推前 → 那一页被吃掉 → 掀页变成掀光队列。
+      // 页短的话预取赶不上，bug 就撞不出来，用例会假绿。
+      await ctx.speakPage(ctx.source, "第一页的内容，要足够长才能持续播上好几秒不被念完。");
+      await ctx.speakPage(srcB, "第二页同样要长一些，确保预取合成能在第一页还在播的时候发生。");
+      // 等到「第二页的合成已经在飞」：producer 串行 → 开始数 ≥2 且完成数 =1 ⇒ 第 2 句在飞。
+      const deadline = nowMs() + 40000;
+      let starts = 0, completes = 0;
+      while (nowMs() < deadline) {
+        await ctx.log.poll(ctx.t0);
+        starts = ctx.log.grep(/TTS 合成开始 \[/, ctx.t0).length;
+        completes = ctx.log.grep(/TTS 合成完成/, ctx.t0).length;
+        if (starts >= 2 && completes >= 1) break;
+        await sleep(150);
+      }
+      ctx.check(starts >= 2 && completes >= 1, "第二页的合成没在飞（这条用例打不到预取，验不出掀页的坑）");
+      // 掀的靶心 = **正在听的那一页**（daemon 用发声点定，/health 的 audiblePage 就是它）。
+      // ⚠️ 别拿「本 case 第一个 speak 的那页」当基准：两次 speak 是**两条独立连接**，
+      // daemon 各自接一条 → 入队顺序可能与调用顺序相反（2026-11-02 实测撞到，
+      // 一度被误判成「daemon 掀错页」）。
+      const h = await ctx.health();
+      const audible = h?.audiblePage;
+      ctx.check(!!audible && audible > 0, "问不到正在听的页（/health 的 audiblePage）");
       await ctx.skip("page");
       const dropped = await ctx.log.waitFor(/这页不要了，听下一页/, { sinceTs: ctx.t0, timeout: 8000 });
       ctx.check(!!dropped, "缺掀页日志");
-      // 掀的必须是**正在听的那一页**（第一页），不是队列里的别页
-      const first = ctx.pages(ctx.source)[0];
-      if (first && dropped) {
-        ctx.check(dropped.msg.includes(`第${first.pageNo}页`),
-          `掀错页了：正在听的是第${first.pageNo}页，日志说 ${dropped.msg}`);
+      if (dropped && audible) {
+        ctx.check(dropped.msg.includes(`第${audible}页`),
+          `掀错页了：正在听的是第${audible}页，日志说 ${dropped.msg}`);
       }
-      // 关键断言：第二页仍然被合成——掀掉一页不等于掀掉整个队列
-      const bStart = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(srcB)}-`),
-        { sinceTs: dropped ? dropped.ts : ctx.t0, timeout: 30000 });
-      ctx.check(!!bStart, "掀页后下一页没有被合成（掀一页等于掀光队列）");
+      // 关键断言：**另一页**仍然被合成——掀掉一页不等于掀掉整个队列。
+      // 哪一页是「另一页」按被掀掉的那页反推（入队顺序不可假定）。
+      const removed = /已掀 第(\d+)页/.exec(dropped?.msg ?? "")?.[1];
+      const removedPage = ctx.pages().find((p) => String(p.pageNo) === removed);
+      const survivor = ctx.pages().find((p) => p.source !== removedPage?.source);
+      ctx.check(!!survivor, "找不出被掀后应当接着播的那一页");
+      const survStart = survivor
+        ? await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(survivor.source)}-`),
+          { sinceTs: dropped ? dropped.ts : ctx.t0, timeout: 30000 })
+        : null;
+      ctx.check(!!survStart, "掀页后下一页没有被合成（掀一页等于掀光队列）");
       const settled = await ctx.settled(45000);
       ctx.check(!!settled, "未收尾");
       ctx.noBad();
@@ -808,17 +832,22 @@ const cases = [
       await ctx.skipAll();
       const skipLine = await ctx.log.waitFor(/作废全部排队内容/, { sinceTs: ctx.t0, timeout: 8000 });
       ctx.check(!!skipLine, "缺全掀日志");
-      // 第二页还在排队、还没开始合成 → 全掀必须把它一起清掉
-      const bStart = ctx.synthStarts(srcB);
-      ctx.check(bStart.length === 0, `全掀后第二页仍被合成 ${bStart.length} 次（全掀没清干净）`);
+      // **判据是「合成完成」而不是「合成开始」**（2026-11-02 改）：第二页可能在全掀到达**之前**
+      // 就已经开合成了（队列里排着、管道正轮到它）——那一句是**在播**，全掀把它掐了：
+      // 日志记「合成作废」而**不记「合成完成」**，因为它没产出可播的音频。
+      // 所以「全掀没清干净」的判据是：**全掀之后不得再有第二页的合成完成**。
+      // （原先用「开始」计数，在合成变快后必然假红：第二页早一步开合成，产品行为其实是对的。）
+      const since = skipLine ? skipLine.ts : ctx.t0;
+      const bDone = ctx.synthDones(srcB, since);
+      ctx.check(bDone.length === 0, `全掀后第二页仍合成完成 ${bDone.length} 次（全掀没清干净）`);
       const h = await ctx.health();
       ctx.check(h && h.queued === 0, `全掀后队列非空: ${JSON.stringify(h)}`);
       const settled = await ctx.settled(45000);
       ctx.check(!!settled, "未收尾");
-      // 收尾后再数一遍：全掀要是没清干净，B 那页会在这之后才开合成——
+      // 收尾后再数一遍：全掀要是没清干净，B 那页会在这之后才合成完成——
       // 只在掀完的瞬间数一次会漏掉它（假绿）。
-      const bLater = ctx.synthStarts(srcB);
-      ctx.check(bLater.length === 0, `全掀后第二页仍被合成 ${bLater.length} 次（全掀没清干净）`);
+      const bLater = ctx.synthDones(srcB, since);
+      ctx.check(bLater.length === 0, `全掀后第二页仍合成完成 ${bLater.length} 次（全掀没清干净）`);
       ctx.noBad();
     },
   },
