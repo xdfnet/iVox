@@ -45,7 +45,12 @@
     钩子 → `hook.sh` 读 `wechat` 的映射（配置里已显式写上 `wechat = "taozi"`）→
     `ivox speak --source wechat --voice taozi` → 守护进程再按 `[wechat] speak` 裁决念不念。
   - **翻译不受影响**：`ivox translate` 只翻译不播报；Opt+Z 划词译文走 daemon **内部**路径
-    （`speakUserInitiated`），不经过 socket，本来就带着 source 与音色。
+    （`speakUserInitiated`，与 `ivox speak --now` 同一个方法），不经过 socket，
+    本来就带着 source 与音色。
+  - **两条裁决**（2026-11-02）：① pi 的 Esc 中断**不再撤页**，已送出的页照念完
+    （要马上闭嘴用 `ivox skip --all`）——不为此再加一条协议；② **音色各端各管各的**：
+    iVox 的 `[playback.sourceVoices]` 只管走 iVox 客户端的那些端（hook.sh、pi 扩展），
+    端自带配置的（如 Samantha 读自己的 `Configuration.ivox.ttsVoice`）不归它管，也不必改。
   - 真机验过：CLI 缺参数 → 命令行报错不发请求；裸请求缺 voice → 日志拒收；带全 → 照播；
     hook 走 claude / wechat 两个来源 → 音色都从配置里取到；pi 的流式首帧带 `voice:wanwan` → 认。
   - **自检全量重跑：20 pass / 0 fail / 0 skip / 0 advisory**（协议变了必须重跑——旧断言在
