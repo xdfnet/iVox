@@ -23,15 +23,16 @@ final class SpeechInputService: @unchecked Sendable {
     }
     private var state: State = .idle
     private let stateQueue = DispatchQueue(label: "com.user.ivox.speechinput.state")
-    private let overlay = OverlayPanel()
+    private let overlay: OverlayPanel
     private var levelTask: Task<Void, Never>?
 
-    init(config: SpeechInputConfig, mediaController: MediaController, playbackQueue: PlaybackQueue, asrEngine: ASREngine, keyTap: GlobalKeyTap) {
+    init(config: SpeechInputConfig, mediaController: MediaController, playbackQueue: PlaybackQueue, asrEngine: ASREngine, keyTap: GlobalKeyTap, overlayScreen: String? = nil) {
         self.config = config
         self.media = mediaController
         self.queue = playbackQueue
         self.asrEngine = asrEngine
         self.keyTap = keyTap
+        self.overlay = OverlayPanel(pinnedScreen: overlayScreen)
         self.recordDir = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent(".config/ivox/recordings")
     }
@@ -127,6 +128,11 @@ final class SpeechInputService: @unchecked Sendable {
                 do { try await asrEngine.ensureLoaded(language: config.language) }
                 catch { Log.error("语音输入: ASR 模型加载失败 \(error)") }
             }
+            // 「可以说了」**先上屏**：它是这一路唯一的即时反馈（眼睛不一定在屏上）。
+            // 早先它排在两个 await 之后——而按下那侧的录音准备是同步 IO（建目录 + 建录音器），
+            // 可能比「点一下就松」的收尾还慢：浮层先被收掉、随后它才冒出来，就没人再收它了
+            // （浮层停在屏上不消失）。
+            showOverlay(.listening)
             // **暂停播报，不是打断**：用户说话要麦克风干净（正在播的声音会串进去、识别就乱），
             // 但用户没说「别说了」——飞哥的原话是「手动 = 你别说了，我说话 = 你停一下」。
             // 所以这里只让设备停渲染，**已排队的音频与队列里的内容一条不删**，说完接着播。
@@ -137,8 +143,7 @@ final class SpeechInputService: @unchecked Sendable {
             //（音乐会串进麦克风、干扰识别），播报那条链路已完全不碰音乐。
             await queue.pausePlayback()
             await media.pause()
-            showOverlay(.listening)
-            // 「可以说了」——**录音确实起来、播报也让完路之后**才响（此刻说才录得到）。
+            // 那声提示音——**录音确实起来、播报也让完路之后**才响（此刻说才录得到）。
             // 取舍：它会紧接着被麦克风拾到一点点，但 Tink 极短、ASR 不会把音效转成文字；
             // 反过来"先等音效响完再开录"会丢掉你开头的字，不划算。
             playCue("Tink")
@@ -298,8 +303,16 @@ final class SpeechInputService: @unchecked Sendable {
         }
     }
 
+    /// 收起浮层：**晚一点点再收**。
+    ///
+    /// 在途的「可以说了」可能比它更晚到——按下那侧的录音准备是同步 IO（建目录 + 建录音器），
+    /// 用户「点一下就松」时收尾比显示更快。不等它的话，浮层会在被收掉之后又冒出来，
+    /// 而后面再没人收它 → 浮层停在屏上不消失。
     private func dismissOverlay() {
-        Task { @MainActor in overlay.dismiss() }
+        Task { @MainActor in
+            try? await Task.sleep(for: .milliseconds(800))
+            overlay.dismiss()
+        }
     }
 
     /// 录音开始的提示音（"可以说了"）——用系统音效，不自带资源。

@@ -36,35 +36,23 @@ final class OverlayService {
         /// nil = 整行一个颜色（按 `style`）。
         let highlight: Range<Int>?
 
-        /// **分界线**：不是文字，是一条细线（换页时提示「这是一条新的」）。
-        /// 为 true 时 `text` 忽略。
-        let isRule: Bool
-
-        init(text: String, style: Style = .normal, highlight: Range<Int>? = nil,
-             isRule: Bool = false) {
+        init(text: String, style: Style = .normal, highlight: Range<Int>? = nil) {
             self.text = text
             self.style = style
             self.highlight = highlight
-            self.isRule = isRule
         }
     }
 
     /// 屏上只有这两个颜色（翻译那双色）：主色 = 正文白，次色 = 半透明白。
-    /// **字幕的卡拉OK高亮、分界线也用它们**——不另立一套颜色。
+    /// **字幕的卡拉OK高亮也用它们**——不另立一套颜色。
     private static let primaryColor = NSColor.white
     private static let secondaryColor = NSColor.white.withAlphaComponent(0.55)
-    /// 分界线：细横线，粗细 1 点（Retina 上是 2 像素）
-    private static let ruleHeight: CGFloat = 1
-    /// 分界线的颜色：仍是那两色里的次色（不另立颜色）
-    fileprivate static let ruleColor = NSColor.white.withAlphaComponent(0.35)
 
     private var channels: [Channel: [Line]] = [:]
     private var panel: NSPanel?
     /// 整窗锚定的那块屏：显示期间不换屏（跟着鼠标走会让浮窗在人动鼠标时来回跳）。
     /// nil = 还没显示。
     private var anchorScreen: NSScreen?
-    /// 认不到钉的屏时只告警一次，别刷屏。
-    private var didWarnMissingScreen = false
     /// 浮层在不在屏上——**音乐让路的唯一判据**
     private var isWindowVisible = false
     /// 上一轮画出来的行（键 + 视图）：卡拉OK式字幕每 100ms 推进一步高亮，
@@ -157,8 +145,6 @@ final class OverlayService {
 
         var result: [Line] = translation
         for line in caption {
-            // 分界线没有文字，不参与去重（否则会被当成空内容丢掉）
-            if line.isRule { result.append(line); continue }
             let text = normalize(line.text)
             guard !text.isEmpty else { continue }
             let isEcho = translatedText.contains { other in
@@ -184,6 +170,10 @@ final class OverlayService {
             panel?.orderOut(nil)
             anchorScreen = nil
             isWindowVisible = false
+            // 缓存也一起清：**不清的话，下一次同样的文字会走「只换颜色」的早退分支**，
+            // 而那条路不 orderFront → 同样的内容再也弹不出来（浮层不出现）。
+            renderedKeys = []
+            renderedViews = []
             updateMusic()
             return
         }
@@ -191,7 +181,7 @@ final class OverlayService {
 
         // **文字没变就只改颜色**：卡拉OK式字幕的高亮每 100ms 推进一步，
         // 整块重建视图会闪（连着闪十几下）。只换颜色不动尺寸 → 视觉上只有字在变亮。
-        let keys = lines.map { ($0.isRule ? "R" : "T") + $0.text }
+        let keys = lines.map { "T" + $0.text }
         if keys == renderedKeys, renderedViews.count == lines.count {
             for (view, line) in zip(renderedViews, lines) {
                 if let label = view as? NSTextField { apply(line, to: label) }
@@ -208,12 +198,6 @@ final class OverlayService {
         var views: [NSView] = []
         var labels: [NSTextField] = []
         for line in lines {
-            if line.isRule {
-                // 分界线：一条细横线，宽度稍后按内容宽定，垂直居中于它的行位
-                let rule = RuleView(frame: NSRect(x: 0, y: 0, width: 0, height: Self.ruleHeight))
-                views.append(rule)
-                continue
-            }
             let label = makeLabel(line.text, style: line.style)
             apply(line, to: label)
             Self.measure(label, limit: widthLimit)
@@ -237,13 +221,6 @@ final class OverlayService {
         }
 
         let contentWidth = labels.map { $0.frame.width }.max() ?? 0
-        // 分界线的宽度：内容宽的一小段，居中
-        let ruleWidth = max(30, contentWidth * 0.28)
-        for view in views {
-            if let rule = view as? RuleView {
-                rule.frame = NSRect(x: 0, y: 0, width: ruleWidth, height: Self.ruleHeight)
-            }
-        }
         let carrierSize = NSSize(width: contentWidth + padding * 2,
                                  height: totalHeight + padding * 2)
 
@@ -264,13 +241,8 @@ final class OverlayService {
             let rowHeight = view.frame.height
             y -= rowHeight
             carrier.addSubview(view)
-            if let rule = view as? RuleView {
-                // 线在它的行位里居中（上下各留一点空隙）
-                rule.setFrameOrigin(NSPoint(x: (contentWidth - rule.frame.width) / 2,
-                                           y: y + (rowHeight - rule.frame.height) / 2))
-            } else {
-                view.setFrameOrigin(NSPoint(x: (carrierSize.width - view.frame.width) / 2, y: y))
-            }
+            // 每行在载体里横向居中（载体的左右各留 padding，内容区中心 = 载体中心）
+            view.setFrameOrigin(NSPoint(x: (carrierSize.width - view.frame.width) / 2, y: y))
             y -= gap
         }
 
@@ -367,26 +339,9 @@ final class OverlayService {
         NSPoint(x: visible.midX - size.width / 2, y: visible.minY + inset)
     }
 
-    /// 落在哪块屏：钉了 UUID 就钉那块（认不到就落回跟鼠标，并告警一次）；没钉就跟鼠标。
-    ///
-    /// 鼠标位置用 `NSEvent.mouseLocation`（AppKit 全局坐标，左下原点）——
-    /// **不能**用热键回调里的 `CGEvent.location`：那是屏幕坐标、**左上原点**，混着算会选错屏幕（踩过）。
+    /// 落在哪块屏：与录音胶囊共用一条规则（`OverlayScreen`）。
     private func pickScreen() -> NSScreen? {
-        if let pinned = config.resolvedScreen {
-            let want = ScreenIdentity.normalize(pinned)
-            if let hit = NSScreen.screens.first(where: { screen in
-                guard let id = ScreenIdentity.uuid(for: screen) else { return false }
-                return ScreenIdentity.normalize(id) == want
-            }) {
-                return hit
-            }
-            if !didWarnMissingScreen {
-                didWarnMissingScreen = true
-                Log.warn("浮窗: 找不到 uuid=\(pinned) 的屏（没接上？），暂跟鼠标所在屏")
-            }
-        }
-        let mouse = NSEvent.mouseLocation
-        return NSScreen.screens.first(where: { $0.frame.contains(mouse) }) ?? NSScreen.screens.first
+        OverlayScreen.pick(pinned: config.resolvedScreen)
     }
 
     private func ensurePanel() -> NSPanel {
@@ -407,15 +362,4 @@ final class OverlayService {
         self.panel = panel
         return panel
     }
-}
-
-/// 分界线视图：一条细横线（宽度是内容宽的一小段，垂直居中于它的行位）。
-private final class RuleView: NSView {
-    override init(frame frameRect: NSRect) {
-        super.init(frame: frameRect)
-        wantsLayer = true
-        layer?.backgroundColor = OverlayService.ruleColor.cgColor
-    }
-
-    required init?(coder: NSCoder) { fatalError("init(coder:) 未实现") }
 }

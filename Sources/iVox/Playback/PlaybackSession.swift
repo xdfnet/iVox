@@ -171,10 +171,10 @@ actor PlaybackSession {
     ///
     /// 按句号找它所在的那一页（句 = 一句）。页里已经念过的句仍在（只有掀页才整页删），
     /// 所以这一页的句子就是「歌词的上下文」。
-    func captionContext(forSeq seq: UInt) -> (lines: [String], index: Int, page: Int)? {
+    func captionContext(forSeq seq: UInt) -> (lines: [String], index: Int)? {
         for page in pages {
             if let i = page.sentences.firstIndex(where: { $0.seq == seq }) {
-                return (page.sentences.map(\.text), i, page.localID)
+                return (page.sentences.map(\.text), i)
             }
         }
         return nil

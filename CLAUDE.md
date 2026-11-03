@@ -48,6 +48,7 @@ Sources/iVox/          — 主程序 target
 
   ── 基础设施（跨能力域）──
   Overlay/             — 屏幕上那块 iVox 浮窗：**OverlayService 是公共服务**——一块载体（不是上下两个框）、排版、落点、选屏、去重（同一句话只显示一遍）、消失、以及背景音乐让路全归它；使用方只说「显示哪几行字」（行里还能带一段**高亮区间**：卡拉OK式）。`[overlay]` 段管钉屏与间距
+                       — **屏上其实有两块浮层**：字幕+译文共用 OverlayService 这一块载体；**录音胶囊是另一块**（`SpeechInput/OverlayPanel`，SwiftUI 胶囊，未并入）。两块**共用选屏规则**（`Overlay/OverlayScreen`：钉了 UUID 就钉那块，没钉跟鼠标），且胶囊**贴顶**、字幕**贴底**——同一块屏上两块浮层不打架
   HotKey/              — 键盘事件层：GlobalKeyTap（**收**键：独占 tap，按归属路由给上面几家）+ HidInjector（**发**键：往常驻 ESP32-S3 注入器发真硬件事件，串行队列）
   Network/             — SocketServer（Unix domain socket IPC）+ ConnectionHandler（帧解析与分派）
   Daemon/Daemon.swift  — actor-based daemon: init → run → cleanup loop；装配与热键分派
@@ -190,8 +191,6 @@ pi 扩展(scripts/pi, 每页一次 speak)  ├→ Unix Socket → Daemon ─┬�
   **释放的是内存不是能力**：之后真有合成请求（别的入口直连 `{type:tts}`）会按需加载回来。
   问状态**不会把模型请回来**——那就把刚还回去的显存又占上了（引擎内部一个 `wanted` 标志管这事）。
   `TTSProviding` 上的 `releaseModel()` / `resumeModel()` 是这条规则的唯一接口
-- **换页的分界**：换一页时字幕顶部亮一条细线（1.5 秒后撤）。「换了一页」按**助理自编的页号**判
-  （`CaptionFrame.page`），外部 turn_id 不参与。译文走独立播放节点，压根不进队列，所以它与这条无关
 - **ESP32 注入器的 token 路径**：仓改名过（esp32-hid-lab → esp32-lab），
   路径写死会让「压音量」全程静默失效。`HidInjector` 按**候选列表**找 token，
   `HID_TOKEN_FILE` 可覆盖，失败时报错**列出找过的路径**（别再只写死一个）

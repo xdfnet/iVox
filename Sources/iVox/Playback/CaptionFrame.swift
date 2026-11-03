@@ -7,11 +7,9 @@ import Foundation
 /// **为什么不是「一句」**：像音乐播放软件的歌词那样，屏上留着**一段**文字，
 /// 正在念到的那句亮着（卡拉OK式逐字推进），其余暗着。
 /// 所以字幕这一路要的不是「当前这句」，而是「这一页的句子 + 念到第几句」。
-struct CaptionFrame: Sendable {
+struct CaptionFrame: Sendable, Equatable {
     /// 当前页的句子（按念的顺序）
     let lines: [String]
     /// 正在念的是第几句（`lines` 的下标）
     let index: Int
-    /// 属于哪一页（助理自编的页号）：**变了就是换了一条消息**，字幕据此画分界线
-    let page: Int
 }

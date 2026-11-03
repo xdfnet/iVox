@@ -62,7 +62,8 @@ actor Daemon {
             mediaController: mediaController,
             playbackQueue: queue,
             asrEngine: asrEngine,
-            keyTap: keyTap
+            keyTap: keyTap,
+            overlayScreen: config.resolvedOverlay.resolvedScreen
         )
 
         if let wc = config.wechat, wc.enabled {

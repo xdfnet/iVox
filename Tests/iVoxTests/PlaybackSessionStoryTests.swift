@@ -255,7 +255,6 @@ final class PlaybackSessionStoryTests: XCTestCase {
         let ctx = await s.captionContext(forSeq: first.seq)
         XCTAssertEqual(ctx?.lines, ["A1", "A2", "A3"], "字幕给的是这一页的所有句子")
         XCTAssertEqual(ctx?.index, 0, "刚开口：念到第 1 句")
-        XCTAssertEqual(ctx?.page, 1, "页号也得给")
     }
 
     /// 念到这一页中间那句时，字幕的「念到第几句」跟着走。

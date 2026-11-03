@@ -20,10 +20,19 @@ enum OverlayState: Sendable {
 // MainActor；调用点已统一走 `Task { @MainActor in overlay.show(...) }`。
 final class OverlayPanel: @unchecked Sendable {
     private static let panelSize = NSSize(width: 248, height: 66)
+    /// 距屏顶的点数
+    private static let topInset: CGFloat = 12
 
     private var panel: NSPanel?
     private let presentation = OverlayPresentation()
+    /// 钉在哪块屏（空 = 跟鼠标）：与字幕/译文浮窗**同一条规则**（`OverlayScreen`）。
+    private let pinnedScreen: String?
 
+    init(pinnedScreen: String? = nil) {
+        self.pinnedScreen = pinnedScreen
+    }
+
+    @MainActor
     func show(state: OverlayState) {
         if panel == nil {
             createPanel()
@@ -35,16 +44,20 @@ final class OverlayPanel: @unchecked Sendable {
         panel?.orderFrontRegardless()
     }
 
+    @MainActor
     func updateAudioLevel(_ level: Float) {
         presentation.updateAudioLevel(level)
     }
 
+    @MainActor
     func dismiss() {
         presentation.isVisible = false
         presentation.resetAudioLevel()
         panel?.orderOut(nil)
     }
 
+    /// 建面板：**必须在主线程**（NSWindow 不能在别的线程上建）。
+    @MainActor
     private func createPanel() {
         let panel = NSPanel(
             contentRect: NSRect(origin: .zero, size: Self.panelSize),
@@ -76,11 +89,18 @@ final class OverlayPanel: @unchecked Sendable {
         self.panel = panel
     }
 
+    /// 落点：水平居中、**贴顶**。
+    ///
+    /// 贴顶不贴底：底部那块地盘是字幕浮窗的（同一块屏上两块浮层不能打架——
+    /// 说话时播报是暂停的，字幕还冻在屏上，胶囊压上去就看不见了）。
+    ///
+    /// 选屏走 `OverlayScreen`：与字幕/译文浮窗同一块屏（配置里钉的那块）。
+    @MainActor
     private func positionPanel() {
-        guard let panel, let screen = NSScreen.main ?? NSScreen.screens.first else { return }
+        guard let panel, let screen = OverlayScreen.pick(pinned: pinnedScreen) else { return }
         let visibleFrame = screen.visibleFrame
         let x = visibleFrame.midX - panel.frame.width / 2
-        let y = visibleFrame.minY + 24
+        let y = visibleFrame.maxY - Self.panelSize.height - Self.topInset
         panel.setFrameOrigin(NSPoint(x: x, y: y))
     }
 }

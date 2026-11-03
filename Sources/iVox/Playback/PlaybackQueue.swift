@@ -177,7 +177,7 @@ actor PlaybackQueue {
     /// 音频侧报「这句开始响」（带着句号）→ 问身份层要「这一页的句子 + 第几句」→ 给字幕。
     private func emitCaption(_ seq: UInt) async {
         guard let ctx = await session.captionContext(forSeq: seq) else { return }
-        let frame = CaptionFrame(lines: ctx.lines, index: ctx.index, page: ctx.page)
+        let frame = CaptionFrame(lines: ctx.lines, index: ctx.index)
         lastCaptionFrame = frame
         onCaption?(frame)
     }
@@ -318,7 +318,10 @@ actor PlaybackQueue {
         }
         player.stopInterruption()
         player.resumeOutput()   // 从暂停处接着播
-        if let frame = resumeFrame { onCaption?(frame) }   // 字幕接回原来那一页
+        // 字幕接回原来那一页——**但只在它没被收走、也没被新的一页顶掉时**：
+        // 念译文这段时间主队列可能正好播完、已经收尾（hideCaption 把字幕收了），
+        // 这时再把旧帧塞回去 = 字幕复活，而且后面再没人收 → 字幕永远留在屏上。
+        if let frame = resumeFrame, lastCaptionFrame == frame { onCaption?(frame) }
     }
 
     // MARK: - 内部
