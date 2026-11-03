@@ -95,6 +95,30 @@ final class OverlayServiceTests: XCTestCase {
                        "字幕那句已被译文包含 → 不该再显示一遍")
     }
 
+    // MARK: - 状态对齐（系统会在锁屏解锁时把窗口改回去）
+
+    /// 内容空了 → 收掉，**不管系统把窗口改成什么样**（锁屏解锁后系统会把浮窗放回屏上）。
+    func testAlignHidesWhenNoContent() {
+        XCTAssertEqual(OverlayService.alignAction(hasContent: false, panelVisible: true, sizeMatches: true),
+                       .hide, "没有内容就该收")
+        XCTAssertEqual(OverlayService.alignAction(hasContent: false, panelVisible: false, sizeMatches: false),
+                       .hide, "没有内容就该收")
+    }
+
+    /// 内容还在、窗口被系统改过尺寸 → 重画（否则内容被旧的窗口宽度切掉一半）。
+    func testAlignRedrawsWhenSizeWasChanged() {
+        XCTAssertEqual(OverlayService.alignAction(hasContent: true, panelVisible: true, sizeMatches: false),
+                       .redraw, "尺寸对不上 → 重画")
+        XCTAssertEqual(OverlayService.alignAction(hasContent: true, panelVisible: false, sizeMatches: true),
+                       .redraw, "窗口不在屏上 → 重画")
+    }
+
+    /// 一切正常 → 什么都不动（别为了对齐而重建视图，那会闪）。
+    func testAlignDoesNothingWhenEverythingIsFine() {
+        XCTAssertEqual(OverlayService.alignAction(hasContent: true, panelVisible: true, sizeMatches: true),
+                       .none)
+    }
+
     /// 原文那行（dim）不参与比对：它是用户随手选的英文短词，
     /// 拿它比会把不相干的字幕误判成回声。
     func testDimOriginalDoesNotHideUnrelatedCaption() {

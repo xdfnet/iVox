@@ -27,15 +27,35 @@ final class OverlayPanel: @unchecked Sendable {
     private let presentation = OverlayPresentation()
     /// 钉在哪块屏（空 = 跟鼠标）：与字幕/译文浮窗**同一条规则**（`OverlayScreen`）。
     private let pinnedScreen: String?
+    /// 状态对齐的触发器（系统会在锁屏解锁时把窗口改回去，见 `OverlayWatchdog`）
+    private var watchdog: OverlayWatchdog?
 
     init(pinnedScreen: String? = nil) {
         self.pinnedScreen = pinnedScreen
+    }
+
+    /// 把胶囊的状态**对齐回真源**（`presentation.isVisible`）。
+    ///
+    /// 系统会在锁屏解锁、切 Space 时把窗口的可见与位置改回去（不经过我们）——
+    /// 那时这块已经收掉的胶囊会自己冒出来，收不掉（2026-11-04 实测）。
+    @MainActor
+    private func reconcile() {
+        guard let panel else { return }
+        guard presentation.isVisible else {
+            panel.orderOut(nil)
+            return
+        }
+        positionPanel()
     }
 
     @MainActor
     func show(state: OverlayState) {
         if panel == nil {
             createPanel()
+        }
+        // 对齐的触发器：**第一次显示时才建**（它的构造要在主线程）
+        if watchdog == nil {
+            watchdog = OverlayWatchdog { [weak self] in self?.reconcile() }
         }
 
         presentation.setState(state)

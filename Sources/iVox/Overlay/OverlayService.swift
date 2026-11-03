@@ -61,12 +61,17 @@ final class OverlayService {
     private var renderedViews: [NSView] = []
     /// 音乐已经让过路了吗（降了但还没升回来）
     private var musicDucked = false
+    /// 上一轮画出来的载体尺寸：系统改过窗口尺寸时靠它认出来（要对齐）
+    private var renderedSize: NSSize = .zero
     private let ducker: SodaVolumeDucker
     private let config: OverlayConfig
+    /// 状态对齐的触发器（系统会在锁屏解锁时把窗口改回去，见 `OverlayWatchdog`）
+    private var watchdog: OverlayWatchdog?
 
     init(config: OverlayConfig, ducker: SodaVolumeDucker = SodaVolumeDucker()) {
         self.config = config
         self.ducker = ducker
+        self.watchdog = OverlayWatchdog { [weak self] in self?.reconcile() }
     }
 
     /// 显示（或替换）某个来源的内容。`lines` 为空 = 收起这个来源。
@@ -95,6 +100,50 @@ final class OverlayService {
     /// 「字幕收不干净、恢复太慢」正是这么来的。空了就收，干净。
     private func relayout() {
         render(visibleLines())
+    }
+
+    /// 把浮窗的状态**对齐回真源**（各来源的内容）。
+    ///
+    /// **什么时候需要**：系统会在**锁屏解锁、切 Space** 时把窗口的「可见 / 位置」改回去，
+    /// 而且不经过我们。2026-11-04 实测：锁屏期间字幕被收走，解锁后系统按**锁屏时的样子**
+    /// 把浮窗放回屏上（连当时的窗口宽度一起）→ 字幕收不掉，内容还被旧宽度切掉一半。
+    ///
+    /// 对齐什么：**内容空了就收**（该收没收的收掉）；**内容还在就摆正**
+    /// （尺寸对不上就重画，窗口不在屏上就叫回来）。
+    func reconcile() {
+        let visible = panel?.isVisible ?? false
+        let sizeMatches = (panel?.frame.size ?? .zero) == renderedSize
+        switch Self.alignAction(hasContent: !channels.isEmpty,
+                                panelVisible: visible,
+                                sizeMatches: sizeMatches) {
+        case .hide:
+            panel?.orderOut(nil)
+            isWindowVisible = false
+            updateMusic()
+        case .redraw:
+            renderedKeys = []
+            renderedViews = []
+            relayout()
+        case .none:
+            break
+        }
+    }
+
+    /// 对齐时该做什么。**纯逻辑，便于单测**。
+    enum Align: Equatable {
+        /// 收掉：内容空了（不管系统把窗口改成什么样）
+        case hide
+        /// 重画：内容还在，但窗口被系统改过（不在屏上 / 尺寸对不上）
+        case redraw
+        /// 什么都不用动
+        case none
+    }
+
+    /// 对齐的判据：**真源是内容**（内容空了就是该收）；
+    /// 系统改过窗口的痕迹是「不在屏上」或「尺寸对不上」。
+    static func alignAction(hasContent: Bool, panelVisible: Bool, sizeMatches: Bool) -> Align {
+        if !hasContent { return .hide }
+        return (panelVisible && sizeMatches) ? .none : .redraw
     }
 
     /// 背景音乐让路：**只跟浮层走**——浮层在屏上就降 5 格，浮层一消失就升回来。
@@ -174,6 +223,7 @@ final class OverlayService {
             // 而那条路不 orderFront → 同样的内容再也弹不出来（浮层不出现）。
             renderedKeys = []
             renderedViews = []
+            renderedSize = .zero
             updateMusic()
             return
         }
@@ -258,6 +308,7 @@ final class OverlayService {
                                          size: carrierSize))
         renderedKeys = keys
         renderedViews = views
+        renderedSize = carrierSize
 
         panel.orderFrontRegardless()
         isWindowVisible = true
