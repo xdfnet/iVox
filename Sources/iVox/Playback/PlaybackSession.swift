@@ -200,11 +200,15 @@ actor PlaybackSession {
         return pages.firstIndex { $0.sentences.contains { $0.seq == seq } }
     }
 
-    /// 队首第一个**还有未播句**的页下标；没有则 nil。
+    /// 队首第一个**还有没出声的句**的页下标；没有则 nil。
     ///
-    /// **判据是「还有没有未播的」**——纯结构事实，不需要时间信息。
+    /// **判据是「还有没有没出声的」**——纯结构事实，不需要时间信息。
+    ///
+    /// **判据用发声点（`audibleSeq`），不用游标（`cursorSeq`）**：游标是**合成进度**，
+    /// 合成快于播放时它能领先真实发声好几页（2026-11-03 实测领先了 7 页）。
+    /// 用它挑「用户即将听到的那一页」，会把还没出声的中间页整片跳过。
     private func firstPendingPageIndex() -> Int? {
-        pages.firstIndex { $0.sentences.contains { $0.seq > cursorSeq } }
+        pages.firstIndex { $0.sentences.contains { $0.seq > audibleSeq } }
     }
 
     /// **用户此刻正在听的页号**（诊断用，只读）。
@@ -267,15 +271,64 @@ actor PlaybackSession {
     /// 连按也天然正确——第二次按压时队首已经是下一页。
     ///
     /// **不立墓碑**：迟到的内容照播（内容生死只由用户当下这一按决定）。
-    /// - Returns: (被掀掉的页号，丢掉的句数)。`nil` = 当时没有内容在播。
+    ///
+    /// - Returns: (被掀掉的页号，丢掉的句数，**被掀页之后第一句的句号**)。
+    ///   `nil` = 当时没有内容在播。第三项给「掀完之后该接着念哪一句」用——
+    ///   它是掀页的**续播起点**，跟合成进度无关（合成进度可能已越过好几页）。
     @discardableResult
-    func takeHeadPage() -> (pageNo: Int, dropped: Int)? {
+    func takeHeadPage() -> (pageNo: Int, dropped: Int, nextSeq: UInt?)? {
         guard let head = headPageTarget() else { return nil }
         let page = pages[head.index]
-        let dropped = page.sentences.filter { $0.seq > cursorSeq }.count
+        // 丢的是「这一页里还没出声的那几句」——已经念过的部分不算丢。
+        let dropped = page.sentences.filter { $0.seq > audibleSeq }.count
+        // 被掀页之后的**第一句**：掀完之后该从这里接着念。
+        let nextSeq = pages.indices.contains(head.index + 1)
+            ? pages[head.index + 1].sentences.first?.seq
+            : nil
         pages.remove(at: head.index)
         store?.deletePage(page.localID)
-        return (page.localID, dropped)
+        return (page.localID, dropped, nextSeq)
+    }
+
+    /// **把合成进度退回到 `seq` 之前**：让 `seq` 成为下一句该合成的。
+    ///
+    /// 管道被掐断时，**已经合成好但还没出声**的那些句子随管道一起没了
+    /// （音频作废、容器里的句子却已被游标标成「过去了」→ 永远不会再被合成 →
+    /// 内容凭空消失，表现为「跳页」）。退回去等于让它们回到「还没合成」，
+    /// 重新排队、重新合成、照播。
+    ///
+    /// 2026-11-03 实测：合成跑在播放前面 7 页（合成比播放快 2.1 倍），
+    /// Ctrl+1 掀掉正在听的那页时，第 11~17 页已经合成好却还没出声 ——
+    /// 掐管道的瞬间音频全作废，而游标已越过它们 → 那 7 页再也没被念过。
+    ///
+    /// **只退不前**：游标本该单调（句号全局单调），这里开一个**朝回走**的口子，
+    /// 只为掀页这一处用；别的路径谁都不许动它。
+    /// `seq` 必须是**续播起点**（被掀页之后第一句的句号）——
+    /// 它之前的内容要么已经念过、要么随那一页一起被掀掉，都不该回来。
+    ///
+    /// - Returns: 重新排队的句数（诊断用）。
+    @discardableResult
+    func resumeSynthesis(from seq: UInt) -> Int {
+        guard seq > 0 else { return 0 }
+        let newCursor = seq - 1
+        guard newCursor < cursorSeq else { return 0 }
+        cursorSeq = newCursor
+        // 落盘：这些句子在 commit 时被删过（按合成进度删的），
+        // 现在它们又要重播 → 重新写回队列库，daemon 中途挂了也不丢。
+        var requeued = 0
+        for page in pages {
+            let pending = page.sentences.filter { $0.seq > newCursor }
+            guard !pending.isEmpty else { continue }
+            store?.savePage(StoredPage(page: page.localID, source: page.source,
+                                       voiceID: page.sentences.first?.voiceID ?? "",
+                                       text: page.text))
+            for sentence in pending {
+                store?.insertSentence(StoredSentence(seq: sentence.seq, page: page.localID,
+                                                     text: sentence.text))
+                requeued += 1
+            }
+        }
+        return requeued
     }
 
     /// 全掀（Ctrl+2）：清空容器。

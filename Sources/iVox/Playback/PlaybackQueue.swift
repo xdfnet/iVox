@@ -268,9 +268,14 @@ actor PlaybackQueue {
         await preemptCurrent(origin)
         hideCaption()   // 被跳掉的内容立刻从字幕撤下；下一页开始响时会重新报
         await awaitCurrentPipelineFinished()   // 线性化：旧管道退净再起，避免两个 consumer 抢 player
+        // **合成进度退回续播点**：掐管道时已经把「排好队但还没出声」的音频作废了，
+        // 而游标已经越过它们 → 那些页再也不会被合成、再也听不到（2026-11-03 实测：
+        // 合成跑在播放前 7 页，掀掉正在听的那页后，第 11~17 页整片消失）。
+        // 退回去等于让它们回到「还没合成」，重新排队、重新出声。
+        let requeued = await session.resumeSynthesis(from: taken?.nextSeq ?? 0)
         // 起点与丢了多少都要落日志：掀页与"没翻动"在外部看起来一样（都是没声音），
         // 只有这两行能区分「当时没东西可掀」和「确实翻过去了、翻的是哪一页」。
-        Log.info("这页不要了，听下一页（来源=\(origin)）：已掀 第\(taken?.pageNo.description ?? "-")页 句=\(taken?.dropped ?? 0)")
+        Log.info("这页不要了，听下一页（来源=\(origin)）：已掀 第\(taken?.pageNo.description ?? "-")页 句=\(taken?.dropped ?? 0) 重新排队=\(requeued)句")
         await pumpOrSettle()   // 还有内容则接着播；没有则收尾
     }
 

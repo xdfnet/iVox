@@ -818,6 +818,95 @@ const cases = [
     },
   },
 
+  // ───────── P4：深队列掀页 —— 被掀页之后的页必须照样出声 ─────────
+  // 背景（2026-11-03 实测）：合成比播放快约 1.5 倍，队列一深，
+  // 合成进度会跑到播放前面好几页。那时按 Ctrl+1 掀掉正在听的那页：
+  // 后面那几页**已经合成好、还没出声**——掐管道的瞬间它们的音频连同管道一起作废，
+  // 而合成游标已经越过它们 → 那几页再也不会被合成、再也听不到（用户听到的是「跳页」）。
+  //
+  // 修法：掀页后把合成进度退回续播点（被掀页之后第一句），那些页重新排队、重新出声。
+  //
+  // 黑盒判据（不依赖时序，只看事实）：
+  //  ① **重新合成**：掀页之后，被掀页之后那些页的句子必须**再合成一遍**（同 seq、新批次）。
+  //     修好前它们一次都不会再合成 → 判据直接变红。
+  //  ② **不回头**：被掀的那一页自己的句子，掀页之后不许再合成（掀掉就是掀掉）。
+  //  ③ **顺序不乱**：重新合成的 seq 必须递增。
+  {
+    name: "P4-skip-page-deep-queue-keeps-later-pages",
+    async run(ctx) {
+      const s1 = ctx.source, s2 = ctx.ids().source, s3 = ctx.ids().source;
+      // 第一页**很长**：播放要拖住好几十秒，合成才能跑到播放前面去（队列深）。
+      // 后两页短：它们必须早就合成完、还等着出声 —— 这才是「已合成未出声」那批货。
+      const long1 = ("这一页故意写得很长很长，用来把播放拖住，好让后面的页面在还没轮到出声的时候就已经被合成完了。"
+        + "队列一深，合成进度就会跑到播放前面好几页去，这时候掀页就会把后面那些页弄丢。"
+        + "所以这一页得足够长，长到播放还没走完它，合成就已经把后面两页都做完了。").repeat(2);
+      const short = "这一页很短，但是必须被听到。";
+      // 逐页入队并逐页等它的「资料室收下」——保证入队顺序 = 调用顺序（页号才可预期）。
+      for (const [src, text] of [[s1, long1], [s2, short], [s3, short]]) {
+        await ctx.speakPage(src, text);
+        const got = await ctx.log.waitFor(
+          new RegExp(`资料室收下：第\\d+页 来源=${escapeRe(src)} `), { sinceTs: ctx.t0, timeout: 15000 });
+        ctx.check(!!got, `页没收下（来源=${src}）`);
+      }
+      // 等第三页**开始合成** → producer 是串行的 ⇒ 前两页此刻早已合成完（游标已越过它们），
+      // 而它们还没出声（第一页还在播）→ 「已合成未出声」那批货到位了。
+      const third = await ctx.log.waitFor(new RegExp(`TTS 合成开始 \\[${escapeRe(s3)}-`),
+        { sinceTs: ctx.t0, timeout: 60000 });
+      ctx.check(!!third, "第三页没开始合成（这条用例打不到深队列，验不出跳页）");
+      if (!third) return;
+      // 掀的靶心 = 正在听的那一页（daemon 按发声点定）。
+      const h = await ctx.health();
+      const audible = h?.audiblePage;
+      ctx.check(!!audible && audible > 0, "问不到正在听的页（/health 的 audiblePage）");
+      await ctx.skip("page");
+      const dropped = await ctx.log.waitFor(/这页不要了，听下一页/, { sinceTs: ctx.t0, timeout: 8000 });
+      ctx.check(!!dropped, "缺掀页日志");
+      if (!dropped) return;
+      const removed = /已掀 第(\d+)页/.exec(dropped.msg)?.[1];
+      // 只认本用例自己的三页——窗口里可能有别的 agent 送来的页，混进来会误判。
+      const mine = [s1, s2, s3].flatMap((src) => ctx.pages(src));
+      const removedPage = mine.find((p) => String(p.pageNo) === removed);
+      ctx.check(!!removedPage, "日志里说的被掀页在页表里找不到");
+      // 掀页之前已经合成完的页（= 随时会被作废的那批货）：按页号排在被掀页之后才算「后面的页」。
+      const committedBefore = new Set(mine.filter((p) =>
+        ctx.synthDones(p.source, ctx.t0).some((d) => d.ts < dropped.ts)).map((p) => p.pageNo));
+      const atRisk = mine.filter((p) =>
+        p.pageNo > Number(removed) && committedBefore.has(p.pageNo));
+      ctx.check(atRisk.length > 0,
+        "被掀页之后没有「已合成未出声」的页（这条用例没打中跳页的现场，验不出问题）");
+      // ① 重新合成：那些页的句子在掀页之后必须**再合成一遍**。
+      for (const p of atRisk) {
+        const again = ctx.synthStarts(p.source, dropped.ts);
+        ctx.check(again.length > 0,
+          `第${p.pageNo}页在掀页之后没有再合成（它已合成完但还没出声，掐管道时被一起作废了 → 这页再也听不到）`);
+      }
+      // ② 不回头：被掀的那一页，掀页之后不许再合成。
+      if (removedPage) {
+        ctx.check(ctx.synthStarts(removedPage.source, dropped.ts).length === 0,
+          `被掀的第${removedPage.pageNo}页在掀页之后又合成了一遍（掀掉就该彻底掀掉）`);
+      }
+      // ③ 顺序不乱：重新合成的内容必须接着被掀页之后接着念（seq 递增，且都在被掀页之后）。
+      const removedSeqs = removedPage
+        ? ctx.log.grep(new RegExp(`TTS 合成开始 \\[${escapeRe(removedPage.source)}-`), ctx.t0)
+          .map((l) => Number(/seq=(\d+)/.exec(l.msg)?.[1]))
+        : [];
+      const lastRemoved = Math.max(0, ...removedSeqs);
+      const seqs = [s1, s2, s3].flatMap((src) =>
+        ctx.log.grep(new RegExp(`TTS 合成开始 \\[${escapeRe(src)}-`), dropped.ts)
+          .map((l) => Number(/seq=(\d+)/.exec(l.msg)?.[1])))
+        .filter((n) => Number.isFinite(n));
+      // 同一句被掐断后重试会重复出现同一个 seq → 去重后再看顺序
+      const uniq = [...new Set(seqs)];
+      ctx.check(uniq.every((n, i) => i === 0 || n > uniq[i - 1]),
+        `掀页之后重新合成的 seq 乱序了: ${uniq.join(",")}`);
+      ctx.check(uniq.every((n) => n > lastRemoved),
+        `掀页之后又合成了被掀页自己的内容（seq ${lastRemoved}）: ${uniq.join(",")}`);
+      const settled = await ctx.settled(90000);
+      ctx.check(!!settled, "未收尾");
+      ctx.noBad();
+    },
+  },
+
   // ───────── S1：全掀清空全部排队内容（多页全丢）─────────
   {
     name: "S1-skip-all-drops-everything",

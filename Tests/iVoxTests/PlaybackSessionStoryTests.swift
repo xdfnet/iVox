@@ -180,6 +180,56 @@ final class PlaybackSessionStoryTests: XCTestCase {
         XCTAssertNil(d, "全掀完了不该还有靶心")
     }
 
+    /// **深队列下掀页：被掀的那页之后，后面的页必须照样出声。**
+    ///
+    /// 2026-11-03 实测：合成比播放快 2.1 倍，队列深时合成能跑到播放前面好几页。
+    /// 那时按 Ctrl+1 掀掉正在听的那页 —— 后面那几页**已经合成好但还没出声**，
+    /// 掐管道的瞬间音频全作废，而游标已越过它们 → 那几页再也没被念过（用户听到的是「跳页」）。
+    ///
+    /// 这里把「合成跑到队尾」和「设备还在第一页」同时造出来，验掀完之后它们还在。
+    func testSkipPageKeepsLaterPagesWhenSynthesisRanAhead() async {
+        let s = PlaybackSession()
+        _ = await page(s, ["A1", "A2"])
+        _ = await page(s, ["B1"])
+        _ = await page(s, ["C1"])
+        await advanceAll(s)          // 合成一路跑到队尾（合成领先播放好几页）
+        await s.noteConsumed(1)      // 设备仍在播第 1 页
+
+        let taken = await s.takeHeadPage()
+        XCTAssertEqual(taken?.pageNo, 1, "掀的是正在听的那一页")
+        XCTAssertEqual(taken?.nextSeq, 3, "续播起点 = 被掀那页之后的第一句")
+
+        // 掐管道：合成进度退回续播点 → 已合成未出声的内容重新排队
+        await s.resumeSynthesis(from: taken?.nextSeq ?? 0)
+
+        let spoken = await spokenOrder(s)
+        XCTAssertEqual(spoken, ["B1", "C1"], "被掀那页之后的页必须照样出声（顺序不变）")
+    }
+
+    /// **退回的内容要回到落盘库** —— daemon 中途挂了也不丢。
+    ///
+    /// 游标前移时（commit）句子已从库里删掉；退回合成进度等于让它们重新排队，
+    /// 不写回库的话，daemon 这一重启就凭空少了几页。
+    func testRewoundSentencesComeBackToTheStore() async {
+        let path = NSTemporaryDirectory() + "ivox-story-\(UUID().uuidString).db"
+        defer { try? FileManager.default.removeItem(atPath: path) }
+
+        let s = PlaybackSession(store: try? PlaybackStore(path: path))
+        await s.restoreIfNeeded()
+        _ = await page(s, ["A1"])
+        _ = await page(s, ["B1"])
+        await advanceAll(s)          // 都念过了 → 库里删干净了
+        await s.noteConsumed(1)
+
+        let taken = await s.takeHeadPage()
+        await s.resumeSynthesis(from: taken?.nextSeq ?? 0)
+
+        let reborn = PlaybackSession(store: try? PlaybackStore(path: path))
+        await reborn.restoreIfNeeded()
+        let spoken = await spokenOrder(reborn)
+        XCTAssertEqual(spoken, ["B1"], "退回合成进度的句子必须回到库里（daemon 重启也不丢）")
+    }
+
     // MARK: - 全掀（Ctrl+2）：清空全部内容
 
     /// **全掀清空全部内容**——不分来源、不分页，一句不剩。
