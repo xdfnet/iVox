@@ -11,7 +11,17 @@ import Foundation
 
 protocol TTSProviding: Sendable {
     /// 模型好了没。主进程自己不加载模型，问的就是对面那个进程。
+    ///
+    /// **这是「真问一次」**：远程实现要开一条 socket 连接去问对面的进程。
+    /// 问一次是一次，故别在高频路径上问——高频路径用 `cachedState`。
     var state: TTSLoadState { get async }
+
+    /// 最近一次已知的引擎状态（**不开连接**）。给 /health 这类高频快照用。
+    ///
+    /// 为什么要另开一个：问一次 `state` 就是一条连接，问得勤 = 连接成堆
+    /// （实测一句合成要开 5 条、/health 一次 2 条）。缓存由引擎自己在
+    /// 真正问过的时候更新，故它只比现场慢一拍，不会凭空说谎。
+    var cachedState: TTSLoadState { get async }
 
     /// 启动期握手：等到能干活（或失败）为止
     func loadModel() async throws
@@ -44,8 +54,7 @@ protocol TTSProviding: Sendable {
 }
 
 /// 引擎就绪状态。进程内与远程共用同一个类型：`Daemon` 的 statusProvider 与
-/// `PlaybackQueue.waitUntilEngineReady()` 两处都对它做 switch，引擎换成走 IPC 的实现后
-/// 仍不必改这两处。
+/// 健康快照两处都对它做 switch，引擎换成走 IPC 的实现后仍不必改这两处。
 enum TTSLoadState: Sendable, Equatable {
     case notStarted
     case loading

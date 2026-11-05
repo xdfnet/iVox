@@ -468,7 +468,9 @@ actor PlaybackQueue {
                 let startedAt = Date()
                 var claimed = false
                 do {
-                    try await waitUntilEngineReady()
+                    // **不问引擎状态**：引擎自己在 `synthesizeStream` 入口问那一次
+                    // （问不到就等、报 failed 就当场作废这一句）——队列再问一遍是
+                    // 同一件事的两份，每句白搭两条 socket 连接（2026-11-05）。
                     try Task.checkCancellation()
 
                     // 预取门控：已排队音频足够多就先别开下一句，等设备消费到低水位。
@@ -566,19 +568,4 @@ actor PlaybackQueue {
         //（漏播根因，实测 17:14 claude 317字 5块入队后躺在队列零合成）。
         await pumpOrSettle()
     }
-
-    private func waitUntilEngineReady() async throws {
-        try Task.checkCancellation()
-        switch await engine.state {
-        case .ready: return
-        case .failed(let msg): throw PlaybackError.ttsUnavailable(msg)
-        case .notStarted, .loading:
-            Log.debug("TTS 模型尚未就绪，等待通知")
-            await engine.waitUntilReady()
-        }
-    }
-}
-
-enum PlaybackError: Error {
-    case ttsUnavailable(String)
 }

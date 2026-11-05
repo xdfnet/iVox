@@ -74,7 +74,11 @@ actor SocketServer {
             throw SocketError.bindFailed(String(cString: strerror(errno)))
         }
         chmod(path, 0o600)
-        guard Darwin.listen(socketFD, 5) == 0 else {
+        // backlog 128 = macOS 的 `kern.ipc.somaxconn` 上限。
+        // 原来写 5：并发一上来就有人被拒（实测 20 个并发连接里 7 个 ECONNREFUSED，
+        // 40 个里 24 个被拒）——而 hook.sh 是 `ivox speak … &` 后台起、错误吞掉的，
+        // 被拒的那一页就**静默丢了**，用户只看到「这段没念」（2026-11-05）。
+        guard Darwin.listen(socketFD, 128) == 0 else {
             Darwin.close(socketFD); unlink(path)
             throw SocketError.listenFailed(String(cString: strerror(errno)))
         }

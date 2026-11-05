@@ -153,7 +153,7 @@ Daemon (actor)
 
 | 实现 | 落点 | 谁在用 |
 |---|---|---|
-| `TSPRemote` | `Playback/TTS/TSPRemote.swift` | **默认**。Unix socket + `StreamFrame` 长度帧，兼**监督者**：先问 socket 再问 child，断了重拉 |
+| `TSPRemote` | `Playback/TTS/TSPRemote.swift` | **默认**。Unix socket + `StreamFrame` 长度帧，兼**监督者**：问状态的那次连接**兼作探活**，问不到才重拉 |
 | `TTSEngine` | `Playback/TTS/TTSEngine.swift` | `IVOX_TTS=local` 时退回进程内，仅供调试对照 |
 
 装点在 `Daemon.init`；`Daemon.cleanup` 显式 `stopChild()`，不留孤儿。子进程入口是

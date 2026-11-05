@@ -181,7 +181,8 @@ AST 提取文本后，按固定顺序做 token 清理。顺序不可调换：**U
 - 模型：Qwen3-TTS-12Hz-1.7B-Base-8bit，**纯本地推理，不上传任何数据**
 - **默认是另一个 iVox 进程**（Unix socket + `StreamFrame` 长度帧）——因为 MLX 崩了修不动，
   把会炸的那一层圈出去；`IVOX_TTS=local` 可退回进程内 `TTSEngine`，仅供调试对照
-- `TSPRemote` 兼监督者：先问 socket 再问 child，断了自动重拉；崩溃验收见
+- `TSPRemote` 兼监督者：问状态的那次连接**兼作探活**（不另开一条探活连接），
+  问不到才重拉；崩溃验收见
   [`docs/playback/queue.md`](playback/queue.md)
 - 流式生成 PCM chunk；间隔与输出采样率是**代码内配置**（`TTSConfig.default`：间隔 0.15 秒、输出 48 kHz），外部配置里没有 `tts` 段
 - **句号 `seq` 是跨进程归因的主键**——两侧日志都打它，`~/.config/ivox/tts.log` 与

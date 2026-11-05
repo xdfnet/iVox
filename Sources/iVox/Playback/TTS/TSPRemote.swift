@@ -45,6 +45,9 @@ actor TSPRemote: TTSProviding {
     /// 打断纪元：cancelActiveSynthesis 递增，进行中的合成比对不上就停止 yield。
     /// 独立于 actor 锁，因为读取方（阻塞读循环）跑在全局队列上。
     private let cancelToken = CancelToken()
+    /// 最近一次已知的引擎状态（缓存，给 /health 用，**不开连接**）。
+    /// 只由「真问过」的那几处更新，故至多比现场慢一拍。
+    private var lastKnownState: TTSLoadState = .notStarted
 
     init(socketPath: String = AppPaths.ttsSocketPath,
          executablePath: String? = nil,
@@ -60,17 +63,48 @@ actor TSPRemote: TTSProviding {
     // MARK: - 与本地引擎同名的接口
 
     /// 主进程自己不加载模型，模型在誊清员那边。问它好了没。
+    ///
+    /// **一次连接兼两件事**：问状态 + 顺便探活。问得到就说明对面活着且能答，
+    /// 不必再单独探一次——原来「探活 + 问状态」各开一条连接，句句两倍（2026-11-05）。
     var state: TTSLoadState {
         get async {
             // 模型不该驻留：不碰子进程、不拉起它（问一次状态就把几 G 显存请回来，等于白释放）。
-            if !wanted { return .notStarted }
-            guard await ensureChildRunning() else { return .failed("誊清员拉起失败") }
-            guard let s = await Self.queryState(socketPath: socketPath) else {
-                return .failed("誊清员无响应")
+            if !wanted {
+                lastKnownState = .notStarted
+                return .notStarted
             }
-            return s
+            switch await Self.queryState(socketPath: socketPath) {
+            case .answered(let s):
+                lastKnownState = s
+                return s
+            case .mute:
+                // 对面在、只是不应答：重拉没用（换的也是同一个模型），
+                // 直接判失败，让监督者按「状态 failed」那条路换实例。
+                lastKnownState = .failed("誊清员无响应")
+                return .failed("誊清员无响应")
+            case .unreachable:
+                // 对面压根没在听：走监督者那条路（拉起/重拉），拉起来再问一次。
+                guard await ensureChildRunning() else {
+                    lastKnownState = .failed("誊清员拉起失败")
+                    return .failed("誊清员拉起失败")
+                }
+                switch await Self.queryState(socketPath: socketPath) {
+                case .answered(let s):
+                    lastKnownState = s
+                    return s
+                case .mute, .unreachable:
+                    lastKnownState = .failed("誊清员无响应")
+                    return .failed("誊清员无响应")
+                }
+            }
         }
     }
+
+    /// 最近一次已知的引擎状态（**不开连接**）：给 /health 这类高频快照用。
+    ///
+    /// 缓存由「真问过」的那几处更新（`state` 问到的结果、释放/恢复模型），
+    /// 故它至多比现场慢一拍，不会凭空说谎——问过就是问过，没问过就是上一次问到的。
+    var cachedState: TTSLoadState { lastKnownState }
 
     func loadModel() async throws {
         wanted = true
@@ -186,6 +220,7 @@ actor TSPRemote: TTSProviding {
     /// 否则下一次要合成时会被上次留下的退避窗口挡住（那一下会判 failed、那一块白丢）。
     func releaseModel() async {
         wanted = false
+        lastKnownState = .notStarted
         guard child != nil else { return }
         Log.info("释放合成资源：收掉誊清员（模型显存随之归还）")
         stopChild()
@@ -197,6 +232,7 @@ actor TSPRemote: TTSProviding {
     /// 那要好几秒，不能挡着开关返回），加载在后台做。
     func resumeModel() async {
         wanted = true
+        lastKnownState = .loading
         Task { [weak self] in
             do {
                 try await self?.loadModel()
@@ -248,6 +284,9 @@ actor TSPRemote: TTSProviding {
         nextLaunchAllowedAt = now.addingTimeInterval(next)
         Log.info("拉起誊清员（原因：\(reason)）")
         startChild()
+        // 新实例先绑 socket 再后台加载模型 → 这一段是「加载中」，不是「就绪」。
+        // 缓存跟着走，免得 /health 还报上一个实例的 ready。
+        lastKnownState = .loading
         if await waitForSocket(seconds: 90, child: child) {
             // socket 通了只说明「有进程在监听」，**不等于模型好了**——子进程是先绑 socket
             // 再后台加载模型的。此处不必清零退避：真正判断健康的是 state，
@@ -270,6 +309,7 @@ actor TSPRemote: TTSProviding {
             Log.error("誊清员未就绪，将换一个重试：\(msg)")
             lastUnavailableNote = msg
         }
+        lastKnownState = .failed(msg)
         await replaceChild(reason: "状态 failed：\(msg)")
     }
 
@@ -414,12 +454,24 @@ actor TSPRemote: TTSProviding {
         func mark() { lock.withLock { count += 1 } }
     }
 
-    /// 问一句「好了没」，读一行回复就走
-    private static func queryState(socketPath: String) async -> TTSLoadState? {
-        await withCheckedContinuation { (cont: CheckedContinuation<TTSLoadState?, Never>) in
+    /// 问一句「好了没」，读一行回复就走。
+    ///
+    /// **答不出时要说清是哪种答不出**：连不上（对面没在听 → 该重拉）
+    /// 与连上了却不吭声（对面在、只是不应答 → 重拉没用，判失败即可）。
+    /// 分不开的话，哑掉的誊清员会被反复重拉，每次还白搭两个 10 秒超时（2026-11-05）。
+    private enum StateQuery {
+        case answered(TTSLoadState)
+        /// 连不上：socket 上没人听
+        case unreachable
+        /// 连上了但没给出可解析的回复
+        case mute
+    }
+
+    private static func queryState(socketPath: String) async -> StateQuery {
+        await withCheckedContinuation { (cont: CheckedContinuation<StateQuery, Never>) in
             DispatchQueue.global().async {
                 guard let fd = try? SocketClient.connect(to: socketPath) else {
-                    cont.resume(returning: nil); return
+                    cont.resume(returning: .unreachable); return
                 }
                 defer { Darwin.close(fd) }
                 let req = Data("{type:status}\n".utf8)
@@ -427,9 +479,9 @@ actor TSPRemote: TTSProviding {
                 Darwin.shutdown(fd, 1)
                 var buf = [UInt8](repeating: 0, count: 512)
                 let n = Darwin.read(fd, &buf, buf.count)
-                guard n > 0 else { cont.resume(returning: nil); return }
+                guard n > 0 else { cont.resume(returning: .mute); return }
                 let text = String(decoding: buf[0..<n], as: UTF8.self)
-                cont.resume(returning: Self.parseState(text))
+                cont.resume(returning: Self.parseState(text).map(StateQuery.answered) ?? .mute)
             }
         }
     }

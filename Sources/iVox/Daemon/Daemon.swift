@@ -293,12 +293,16 @@ actor Daemon {
     }
 
     /// /health 运行态快照：TTS 引擎状态 + 模型名 + 播放队列
+    ///
+    /// **引擎状态答缓存，不开连接**：`/health` 是高频探针（自检脚本每秒问一次），
+    /// 每次真问引擎就是一条到誊清员的连接——问得勤，连接就成堆。
+    /// 缓存由真正合成/加载时的那几次询问更新，故它至多比现场慢一拍（2026-11-05）。
     func makeHealthSnapshot() async -> HealthSnapshot {
         let ttsPath = ModelPaths.tts
         let expanded = (ttsPath as NSString).expandingTildeInPath
         let modelName = expanded.split(separator: "/").last.map { String($0) } ?? ttsPath
         let engineState: String
-        switch await engine.state {
+        switch await engine.cachedState {
         case .notStarted: engineState = "notStarted"
         case .loading: engineState = "loading"
         case .ready: engineState = "ready"

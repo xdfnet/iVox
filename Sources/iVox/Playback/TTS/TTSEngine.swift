@@ -67,6 +67,9 @@ actor TTSEngine: TTSProviding {
         return loadState
     }
 
+    /// 进程内引擎的状态就在自己身上，**不花钱**：与 `state` 同源。
+    var cachedState: TTSLoadState { state }
+
     func loadModel() async throws {
         if model != nil {
             if case .ready = loadState { resumeAllWaiters() }
