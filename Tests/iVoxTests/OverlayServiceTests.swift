@@ -131,4 +131,30 @@ final class OverlayServiceTests: XCTestCase {
         XCTAssertTrue(lines.contains { $0.text == "the test passed" },
                       "字幕跟译文正文不重叠 → 该留着")
     }
+
+    // MARK: - 停摆（锁屏）
+
+    /// 锁屏时**内容还在也收掉**：屏上没人看，浮层不该占着。
+    /// 这是本次改动的核心契约——判据抽成纯函数，便于单测。
+    func testSuspendedHidesEvenWithContent() {
+        XCTAssertEqual(OverlayService.alignAction(hasContent: true, panelVisible: true, sizeMatches: true,
+                                                 suspended: true),
+                       .hide, "锁屏 → 收，不管内容还在不在")
+        XCTAssertEqual(OverlayService.alignAction(hasContent: true, panelVisible: false, sizeMatches: false,
+                                                 suspended: true),
+                       .hide, "锁屏 → 收")
+    }
+
+    /// 没锁屏时判据照旧（停摆不改变原有行为）。
+    func testNotSuspendedKeepsOriginalAlignRules() {
+        XCTAssertEqual(OverlayService.alignAction(hasContent: false, panelVisible: true, sizeMatches: true,
+                                                 suspended: false),
+                       .hide, "没内容 → 收")
+        XCTAssertEqual(OverlayService.alignAction(hasContent: true, panelVisible: true, sizeMatches: false,
+                                                 suspended: false),
+                       .redraw, "尺寸对不上 → 重画")
+        XCTAssertEqual(OverlayService.alignAction(hasContent: true, panelVisible: true, sizeMatches: true,
+                                                 suspended: false),
+                       .none, "一切正常 → 什么都不动")
+    }
 }

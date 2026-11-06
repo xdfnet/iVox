@@ -249,8 +249,12 @@ actor MediaController {
 
     // MARK: - 锁屏检测
 
+    /// 屏幕锁着吗。
+    ///
+    /// 判据在 `ScreenLock`（唯一真源）：早先这里自己判「前台 App 是不是 loginwindow」，
+    /// 2026-11-06 实测那次判不出来（锁屏后前台一直是 VSCode）——所以指回去。
     static func isScreenLocked() -> Bool {
-        NSWorkspace.shared.frontmostApplication?.bundleIdentifier == "com.apple.loginwindow"
+        ScreenLock.isLocked()
     }
 
     // MARK: - 设备控制权限

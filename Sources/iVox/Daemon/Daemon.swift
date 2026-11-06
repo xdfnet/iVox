@@ -21,6 +21,8 @@ actor Daemon {
     private var captionPanel: CaptionPanel?
     /// 屏幕上的那块 iVox 浮窗（公共���务）：字幕、译文都把要显示的文字交给它
     private var overlay: OverlayService?
+    /// 屏幕锁监视器（锁屏 → 浮层停摆，解锁 → 还原）
+    private var lockMonitor: ScreenLockMonitor?
     private let mediaController: MediaController
     private var wechat: WeChatPlatform?
     private var claudeAsk: ClaudeAskService?
@@ -120,6 +122,17 @@ actor Daemon {
         startModelLoading()
         let overlay = await MainActor.run { OverlayService(config: config.resolvedOverlay) }
         self.overlay = overlay
+        // 屏幕锁 → 浮层停摆：锁屏时那块屏没人看，浮层不该占着；解锁后还原。
+        let lockMonitor = await MainActor.run { ScreenLockMonitor() }
+        self.lockMonitor = lockMonitor
+        await MainActor.run {
+            lockMonitor.onChange = { [weak overlay] locked in
+                overlay?.setSuspended(locked)
+            }
+            // 订阅时的**当前值**也得用上：daemon 可能一启动屏幕就锁着，
+            // 那时没有「变化」可通知，浮层会一直显示。
+            overlay.setSuspended(lockMonitor.locked)
+        }
         // 屏幕清单打出来：以后想改钉哪块屏，从这里抄 UUID（配置 overlay.screen）
         let screens = await MainActor.run { ScreenIdentity.inventory() }
         Log.info("屏幕清单: \(screens)")

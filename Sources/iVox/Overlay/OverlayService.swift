@@ -67,11 +67,35 @@ final class OverlayService {
     private let config: OverlayConfig
     /// 状态对齐的触发器（系统会在锁屏解锁时把窗口改回去，见 `OverlayWatchdog`）
     private var watchdog: OverlayWatchdog?
+    /// 屏幕锁着 → 浮层停摆（不显示，但内容照记，解锁后原样摆回来）
+    private var suspended = false
 
     init(config: OverlayConfig, ducker: SodaVolumeDucker = SodaVolumeDucker()) {
         self.config = config
         self.ducker = ducker
         self.watchdog = OverlayWatchdog { [weak self] in self?.reconcile() }
+    }
+
+    /// 停摆（锁屏）或还原（解锁）。
+    ///
+    /// **停摆时内容照记**：字幕每 100ms 推进一步高亮、译文也可能随时来，
+    /// 都不往屏上摆，但 `channels` 里留着最新内容——解锁后一次重画就回到当下的样子。
+    ///
+    /// **还原时必须清渲染缓存**：`render()` 里有一条早退分支（文字没变就只换颜色），
+    /// 那条路**不 `orderFront`** → 不清缓存的话浮层再也弹不出来（这坑踩过）。
+    func setSuspended(_ value: Bool) {
+        guard value != suspended else { return }
+        suspended = value
+        if value {
+            hideWindow()
+            Log.info("浮层: 屏幕已锁，停摆")
+        } else {
+            renderedKeys = []
+            renderedViews = []
+            renderedSize = .zero
+            relayout()
+            Log.info("浮层: 屏幕已解锁，还原")
+        }
     }
 
     /// 显示（或替换）某个来源的内容。`lines` 为空 = 收起这个来源。
@@ -98,8 +122,31 @@ final class OverlayService {
     /// 想着让背景音乐别在两句之间抖——实际是**把上一个问题的形状搬了个地方**：
     /// 用户按了 Ctrl+2 掀桌，字幕还挂着最后那句 3 秒、音乐也压着 3 秒不回来，
     /// 「字幕收不干净、恢复太慢」正是这么来的。空了就收，干净。
+    ///
+    /// **停摆时（锁屏）只收不画**：内容已经记在 `channels` 里了，解锁后一次重画就回来。
+    ///
+    /// 停摆期间字幕每 100ms 推进一步高亮（`CaptionPanel` 的 ticker），每次都走到这里——
+    /// 收窗的动作不重做（`hideWindow` 自己判「已经不可见就跳过」），省掉的是重排的活。
     private func relayout() {
+        guard !suspended else {
+            hideWindow()
+            return
+        }
         render(visibleLines())
+    }
+
+    /// 把浮窗收掉（音乐让路也一并放回来——让路只跟浮层走）。
+    ///
+    /// **两个「可见」都要看**：系统自己也会动这个窗口（锁屏时把字幕收走），
+    /// 只信自己那份会漏收（2026-11-04 那次浮窗就因此收不掉），
+    /// 只信系统那份会漏掉「音乐还压着」——所以任一份说它可见就收一次。
+    /// 收的动作多做一次没有副作用，但字幕高亮每 100ms 推进一步，
+    /// 每次都 orderOut 也白费 → 两份都说不可见就直接跳过。
+    private func hideWindow() {
+        guard isWindowVisible || panel?.isVisible == true else { return }
+        panel?.orderOut(nil)
+        isWindowVisible = false
+        updateMusic()
     }
 
     /// 把浮窗的状态**对齐回真源**（各来源的内容）。
@@ -110,16 +157,19 @@ final class OverlayService {
     ///
     /// 对齐什么：**内容空了就收**（该收没收的收掉）；**内容还在就摆正**
     /// （尺寸对不上就重画，窗口不在屏上就叫回来）。
+    ///
+    /// **停摆时（锁屏）一律收**：系统在锁屏期间会把窗口改回可见（2026-11-04 实测），
+    /// 那时「内容还在」是常态、按常理该摆正——但屏上没人看，摆正就是浮在锁屏界面上。
+    /// 所以停摆优先于一切判据。
     func reconcile() {
         let visible = panel?.isVisible ?? false
         let sizeMatches = (panel?.frame.size ?? .zero) == renderedSize
         switch Self.alignAction(hasContent: !channels.isEmpty,
                                 panelVisible: visible,
-                                sizeMatches: sizeMatches) {
+                                sizeMatches: sizeMatches,
+                                suspended: suspended) {
         case .hide:
-            panel?.orderOut(nil)
-            isWindowVisible = false
-            updateMusic()
+            hideWindow()
         case .redraw:
             renderedKeys = []
             renderedViews = []
@@ -141,7 +191,12 @@ final class OverlayService {
 
     /// 对齐的判据：**真源是内容**（内容空了就是该收）；
     /// 系统改过窗口的痕迹是「不在屏上」或「尺寸对不上」。
-    static func alignAction(hasContent: Bool, panelVisible: Bool, sizeMatches: Bool) -> Align {
+    ///
+    /// **停摆（锁屏）优先于一切**：屏上没人看，浮层不该占着——
+    /// 不管内容还在不在、窗口被系统改成什么样，都收。
+    static func alignAction(hasContent: Bool, panelVisible: Bool, sizeMatches: Bool,
+                            suspended: Bool = false) -> Align {
+        if suspended { return .hide }
         if !hasContent { return .hide }
         return (panelVisible && sizeMatches) ? .none : .redraw
     }

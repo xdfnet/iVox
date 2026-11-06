@@ -44,10 +44,11 @@ Sources/iVox/          — 主程序 target
   QuickActions/        — 快速操作：Finder/终端快捷（Opt+Q/A/X/S/C）
   WeChat/              — 微信桥接：ilink HTTP 客户端 + 长轮询平台
   MediaControl/        — 媒体控制：Web 控制台（MediaHTTPServer + Web UI + HTTPResponseHandler）+ MediaController + AudioAppRegistry + HealthSnapshot + SodaVolumeDucker（iVox 占用注意力时给汽水音乐压音量）
-  Screen/              — 屏幕锁：ScreenControl（ivox lock / ivox unlock + Web 滑块，走 HID 真键）
+  Screen/              — 屏幕锁：ScreenControl（ivox lock / ivox unlock + Web 滑块，走 HID 真键）+ ScreenLock（**锁屏判据**：会话字典里的 `CGSSessionScreenIsLocked`，配轮询监视器）
 
   ── 基础设施（跨能力域）──
   Overlay/             — 屏幕上那块 iVox 浮窗：**OverlayService 是公共服务**——一块载体（不是上下两个框）、排版、落点、选屏、去重（同一句话只显示一遍）、消失、以及背景音乐让路全归它；使用方只说「显示哪几行字」（行里还能带一段**高亮区间**：卡拉OK式）。`[overlay]` 段管钉屏与间距
+                       — **锁屏时浮层停摆**（`Screen/ScreenLock` 是判据唯一真源，轮询 1 秒一次——系统在这件事上**不发任何通知**，实测 2026-11-06）：停摆期间内容照记、只是不摆上屏，解锁后一次重画还原。停摆优先于一切对齐判据（系统在锁屏期间会把窗口改回可见，那时「内容还在」是常态，按常理该摆正——但屏上没人看，摆正就是浮在锁屏界面上）
                        — **屏上其实有两块浮层**：字幕+译文共用 OverlayService 这一块载体；**录音胶囊是另一块**（`SpeechInput/OverlayPanel`，SwiftUI 胶囊，未并入）。两块**共用选屏规则**（`Overlay/OverlayScreen`：钉了 UUID 就钉那块，没钉跟鼠标），且胶囊**贴顶**、字幕**贴底**——同一块屏上两块浮层不打架
   HotKey/              — 键盘事件层：GlobalKeyTap（**收**键：独占 tap，按归属路由给上面几家）+ HidInjector（**发**键：往常驻 ESP32-S3 注入器发真硬件事件，串行队列）
   Network/             — SocketServer（Unix domain socket IPC）+ ConnectionHandler（帧解析与分派）
