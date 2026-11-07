@@ -55,7 +55,11 @@ export default function (pi: ExtensionAPI) {
     const args = ["speak", "--source", "pi"];
     if (voice) args.push("--voice", voice);
     args.push("--", page);
-    const child = spawn(IVO, args, { stdio: "ignore", detached: true });
+    const child = spawn(IVOX, args, { stdio: "ignore", detached: true });
+    // stdio 忽略掉了子进程的报错，spawn 失败会静默无声——播报不出声时毫无线索，
+    // 故把失败原因交回 pi（stderr 会进 pi 的输出）。曾因变量名笔误（IVO vs IVOX）在这里抛错，
+    // 导致整条 pi 播报链路无声地失效了半个多月。
+    child.on("error", (e) => console.error(`[ivox] 派发播报失败: ${String(e)}`));
     child.unref(); // 不等它结束：扩展不该被播报拖住
   }
 
